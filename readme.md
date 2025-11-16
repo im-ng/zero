@@ -98,18 +98,18 @@ APP_NAME=basic-app
 APP_VERSION=1.0.0
 LOG_LEVEL=debug
 
-DB_HOST=localhost
-DB_USER=user1
-DB_PASSWORD=password1
-DB_NAME=demo
-DB_PORT=5432
-DB_DIALECT=postgres
+# DB_HOST=localhost
+# DB_USER=user1
+# DB_PASSWORD=password1
+# DB_NAME=demo
+# DB_PORT=5432
+# DB_DIALECT=postgres
 
-REDIS_HOST=127.0.0.1
-REDIS_PORT=6379
-REDIS_USER=redis
-REDIS_PASSWORD=password
-REDIS_DB=0
+# REDIS_HOST=127.0.0.1
+# REDIS_PORT=6379
+# REDIS_USER=redis
+# REDIS_PASSWORD=password
+# REDIS_DB=0
 ```
 
 2. Start writing your first zero web-app to serve requests
@@ -137,14 +137,14 @@ pub fn main() !void {
     try app.get("/json", jsonResponse);
 
     // register route to handle db queries
-    try app.get("/user", dbResponse);
+    // try app.get("/user", dbResponse);
 
     // register route to handle redis queries
-    try app.get("/redis", redisResponse);
+    // try app.get("/redis", redisResponse);
 
-    try app.addHttpService("auth-service", "http://external-service:8081");
+    // try app.addHttpService("auth-service", "http://external-service:8081");
 
-    try app.get("/status", serviceStatus);
+    // try app.get("/status", serviceStatus);
 
     // start the server by invoking run
     try app.run();
@@ -162,17 +162,12 @@ pub fn dbResponse(ctx: *Context) !void {
 
     var row = try ctx.SQL.row(ctx.allocator, "select id, name from users limit 1", .{}) orelse unreachable;
     defer row.deinit() catch {};
-    
+
     const user = try row.to(User, .{});
     try ctx.json(user);
 }
 
 pub fn redisResponse(ctx: *Context) !void {
-    const Data = struct {
-        msg: []const u8,
-    };
-
-    // const FixBuf = redis.types.FixBuf;
     const reply = try ctx.Cache.sendAlloc([]u8, ctx.allocator, .{ "GET", "msg" });
     defer ctx.allocator.free(reply);
 
