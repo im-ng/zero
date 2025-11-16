@@ -1,0 +1,77 @@
+# Feature Parity
+
+`zero` framework comes with the following features out-of-box for quick development. 
+
+Instead of developing and integrating with these boilerplates, an app developer can immediately focus on the business logic.
+
+-  ✅ 12 factor app methodology
+    - ✅ Load default `.env` for app startup
+    - ✅ Override them per environment
+-  ✅ REST Standard
+    - ✅ Build CRUD endpoints
+-  ✅ Health and Service check
+    - ✅ Live
+    - ✅ Status
+-  ✅ Serve static files
+    - ✅ Serve static files from registered directory
+    - ✅ Serve swagger and openapi spec
+-  ✅ Metrics tracking
+    -  ✅ Default metrics
+        -  ✅ App Status
+        -  ✅ Http Status
+        -  ✅ SQL Status
+        -  ✅ KV Status
+    - ⬜ Register custom metrics
+    - ✅ Process stats
+    - ✅ Memory stats
+-  ✅ Traceability
+    - ✅ Basic
+    - ⬜ Open Telemetry
+-  ✅ Well structured logging mechanism
+    - ✅ UTC Timezone
+    - ⬜ Custom Timezone
+-  ✅ Middleware
+    -  ✅ CORS
+    -  ✅ TraceID
+    -  ✅ Logging
+    -  ✅ Auth
+        -  ✅ Basic crdentials
+            - ✅ Config Mode
+            - ⬜ KV mode
+        -  ✅ API Key
+            - ✅ Config Mode
+            - ⬜ KV mode
+        - ✅ OAuth Key
+          - ✅ Register OAuth Provider
+          - ✅ Refresh Public Keys
+          - ✅ Validate claims
+-  ✅ Panic recovery
+-  ✅ Handle Error response
+    -  ✅ Custom Errors
+-  ✅ Database support
+    -  ✅ `postgres`
+        - ⬜ TLS Support
+    -  ✅ `redis`
+        - ✅ Authentication enabled
+    - ✅ `mqtt`
+    - ⬜ `kafka`
+        - In progress
+-  ✅ Database Migrations
+-  ✅ Seed data on App startup
+-  ✅ HTTP Client
+    -  ✅ Register one or more external http/https client
+    -  ✅ Handle redirection
+    -  ✅ Handle CRUD operations
+    -  ✅ Handle on-fly response transformation
+    -  ⬜ Circuit Breaker
+    -  ⬜ Enable Authorization (Basic, APIKey and OAuth 2.0 modes)
+-  ✅ Cron Jobs
+    - ✅ `* * * * *` format support
+    - ✅ Enable second-level executions `* * * * * *`
+    - ✅ `*/2` split support
+    - ✅ `1-31` ranges support (day/hour/minute)
+    - ✅ Support for multiple task executions
+- ✅ Websocket
+- ⬜ TLS 
+- ⬜ CLI Application
+- ⬜ Memory leaks

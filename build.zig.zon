@@ -1,0 +1,63 @@
+.{
+    .name = .zero,
+    .version = "0.0.0",
+    .fingerprint = 0xabdef192c03b44cb,
+    .minimum_zig_version = "0.15.1",
+    .dependencies = .{
+        // .dotenv = .{ .path = "../dotenv" },
+        // .httpz = .{ .path = "../http.zig" },
+        // .metrics = .{ .path = "../metrics.zig" },
+        // .pg = .{ .path = "../pg.zig" },
+        // .zul = .{ .path = "../zul" },
+        // .okredis = .{ .path = "../okredis" },
+        // .zdt = .{ .path = "../zdt" },
+        // .mqttz = .{ .path = "../mqttz" },
+        // .regexp = .{ .path = "../zig-regex" },
+        // .jwt = .{ .path = "../zig-jwt" },
+        .jwt = .{
+            .url = "git+https://github.com/im-ng/zig-jwt.git#0c0fd114a9f3a4f4901fc0eac28821feebfb29f9",
+            .hash = "zig_jwt-1.3.3-w3q9SOY0BAAfF6i8vq9S4JJR_rw3QSSm8gFQ_RYx3vRQ",
+        },
+        .regexp = .{
+            .url = "git+https://github.com/im-ng/zig-regex.git#ee759955e59ae292f4074d62308f953feeecac61",
+            .hash = "regex-0.1.3-axC352raAQCBo-WcgB_nFMFmO2d3QLBLpE8-ebizdeX_",
+        },
+        .mqttz = .{
+            .url = "git+https://github.com/im-ng/mqttz.git#bba199c808200cf51ae9bea86577c646bed627bc",
+            .hash = "mqttz-0.0.0-ywFE_5QMAwAWoMQe29cn9PMnPf6BYSSiJC-BZPCvw70c",
+        },
+        .pg = .{
+            .url = "git+https://github.com/im-ng/pg.zig.git#c187af6760d4a923ff4c4020db76aae3c8b8a273",
+            .hash = "pg-0.0.0-Wp_7geUtBgC21DUn8zhRP3jDdWwXk3DjUyjFv7301VtI",
+        },
+        .okredis = .{
+            .url = "git+https://github.com/im-ng/zig-okredis.git#f53ad9f03a57d41d89b3ee779aaca608e1e4767f",
+            .hash = "okredis-0.1.0-Cg726vcEBAAjrhwgBJ2cjL4qN3ircjBsX6iTd7wEFiEC",
+        },
+        .zul = .{
+            .url = "git+https://github.com/im-ng/zul.git#e770047f208cf4538fcd9fc64550c84fd5492fc4",
+            .hash = "zul-0.0.0-1oDot9yRBwDA_ovd6GC1M_ViW3LarywMaGrH6vcuEjqv",
+        },
+        .httpz = .{
+            .url = "git+https://github.com/im-ng/http.zig.git#d21498e2343a4eeab61a57e913f67a3862623d78",
+            .hash = "httpz-0.0.0-PNVzrEnhBgBwAemUFsKHu7IrGXnIEPAo8oI6HtIaoTan",
+        },
+        .dotenv = .{
+            .url = "git+https://github.com/im-ng/dotenv#82a53e32b25371ab255f150aee089e5f8ffba8c1",
+            .hash = "dotenv-0.2.2-ikMfwBB3AAC89NhL0EVbn6mRYA5z4fec8PcNKJ-P8m16",
+        },
+        .zdt = .{
+            .url = "git+https://codeberg.org/imng/zdt.git#fa55f4080752ce1c48f2bb392e9513f87b59d8cb",
+            .hash = "zdt-0.8.1-xr0_vABUDwDExZVsT91Qid0tOc_48sI47Xhg6nbFsqqC",
+        },
+        .metriks = .{
+            .url = "git+https://github.com/im-ng/metrics.zig.git#2011171f3542f213b4742f96ed0934f56218b8a7",
+            .hash = "metriks-0.0.0-sq540f2_AQCTNA7_ZQWKehRfXynKHT_0baiw5RFDv_3W",
+        },
+    },
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "src",
+    },
+}

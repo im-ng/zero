@@ -1,0 +1,23 @@
+zig-cache/
+zig-out/
+/release/
+/debug/
+/build/
+/build-*/
+/docgen_tmp/
+
+# Ignore the generated documentation befor it is published
+# /docs
+.zig-cache
+zig-out
+
+# custom
+/tmp
+
+.vscode/
+.DS_Store
+
+keys/
+benchmark.md
+config.md
+introduction.md

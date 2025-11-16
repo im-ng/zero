@@ -1,0 +1,15 @@
+.{
+    .name = .zeropubsub,
+    .version = "0.0.1",
+    .fingerprint = 0x8be215153b2ae7f1,
+    .minimum_zig_version = "0.15.1",
+    .dependencies = .{
+        .zero = .{ .path = "../../." },
+    },
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "src",
+    },
+    .use_llvm = true,
+}

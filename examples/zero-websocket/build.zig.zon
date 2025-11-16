@@ -1,0 +1,14 @@
+.{
+    .name = .websocket,
+    .version = "0.0.1",
+    .fingerprint = 0x42ce80b977d7d790,
+    .minimum_zig_version = "0.15.1",
+    .dependencies = .{
+        .zero = .{ .path = "../../." },
+    },
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "src",
+    },
+}

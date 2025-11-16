@@ -1,0 +1,14 @@
+.{
+    .name = .stream,
+    .version = "0.0.1",
+    .fingerprint = 0xf0e9be1c512e7027,
+    .minimum_zig_version = "0.15.1",
+    .dependencies = .{
+        .zero = .{ .path = "../../." },
+    },
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "src",
+    },
+}

@@ -1,0 +1,14 @@
+.{
+    .name = .serviceclient,
+    .version = "0.0.1",
+    .fingerprint = 0xe40e052ef8f4f884,
+    .minimum_zig_version = "0.15.1",
+    .dependencies = .{
+        .zero = .{ .path = "../../." },
+    },
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "src",
+    },
+}
