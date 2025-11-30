@@ -41,7 +41,6 @@ pub fn run(self: *Self) anyerror!void {
         self.request,
         self.response,
     );
-    defer context.deinit();
     const ctx = &context;
 
     // check and create migration table

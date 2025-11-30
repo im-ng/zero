@@ -22,11 +22,7 @@ fn panic(_: []const u8, _: ?*std.builtin.StackTrace, _: ?usize) noreturn {
 }
 
 pub fn main() !void {
-    // var arean = std.heap.ArenaAllocator.init(std.heap.page_allocator);
-    // defer arean.deinit();
-    // const allocator = arean.allocator();
-
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa: std.heap.GeneralPurposeAllocator(.{}) = .init;
     const allocator = gpa.allocator();
 
     const app = try App.new(allocator);

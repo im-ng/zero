@@ -17,15 +17,11 @@ pub const std_options: std.Options = .{
 };
 
 pub fn main() !void {
-    // var arean = std.heap.ArenaAllocator.init(std.heap.page_allocator);
-    // defer arean.deinit();
-    // const allocator = arean.allocator();
-
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     const allocator = gpa.allocator();
     defer _ = gpa.detectLeaks();
 
-    const app = try App.new(allocator);
+    const app: *App = try App.new(allocator);
 
     connections = std.hash_map.StringHashMap(?*zero.WSClient).init(allocator);
 
@@ -150,9 +146,6 @@ pub fn host(ctx: *Context) !void {
 
 pub fn cpu(ctx: *Context) !void {
     const c = try CPU.info(ctx);
-    ctx.any(c);
-    ctx.any(CPU.usage());
-
     try ctx.json(c);
 }
 

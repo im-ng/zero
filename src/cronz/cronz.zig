@@ -1,13 +1,13 @@
 const std = @import("std");
 const root = @import("../zero.zig");
 const time = std.time;
-
+const arena: type = std.heap.ArenaAllocator;
 const Thread = std.Thread;
 const Atomic = std.atomic.Value;
 
 const Cronz = @This();
 const Self = @This();
-const job = root.cronJob;
+const job = root.cronJob.Job;
 const dateTime = root.zdt.Datetime;
 const Error = root.Error;
 const utils = root.utils;
@@ -32,7 +32,7 @@ const _res: *httpz.Response = undefined;
 ticker: time.Timer = undefined,
 thread: std.Thread = undefined,
 container: *root.container = undefined,
-jobs: std.array_list.Managed(*job) = undefined,
+jobs: std.array_list.Managed(job) = undefined,
 mu: std.Thread.Mutex = undefined,
 running: Atomic(bool) = undefined,
 request: *httpz.Request = undefined,
@@ -46,7 +46,7 @@ pub fn create(container: *root.container) !*Cronz {
     c.running = Atomic(bool).init(true);
     c.container = container;
     c.ticker = try time.Timer.start();
-    c.jobs = std.array_list.Managed(*job).init(container.allocator);
+    c.jobs = std.array_list.Managed(job).init(container.allocator);
     c.thread = try Thread.spawn(.{}, Cronz.runSchedules, .{ c, std.time.nanoTimestamp() });
 
     return c;
@@ -57,20 +57,47 @@ pub fn destroy(self: *Self) void {
     self.thread.join();
 }
 
+fn prepareChildAllocator(self: *Self) !*arena {
+    const ca: *arena = try self.container.allocator.create(arena);
+    errdefer self.container.allocator.destroy(ca);
+
+    ca.* = arena.init(self.container.allocator);
+    errdefer ca.deinit();
+
+    return ca;
+}
+
+fn destroryChildAllocator(self: *Self, ca: *arena) void {
+    const caPtr: *arena = @ptrCast(@alignCast(ca.allocator().ptr));
+    caPtr.deinit();
+
+    self.container.allocator.destroy(caPtr);
+}
+
 pub fn runSchedules(self: *Self, _: i128) void {
     while (self.running.load(.monotonic)) {
         std.Thread.sleep(std.time.ns_per_s);
         const now = dateTime.nowUTC();
         for (self.jobs.items) |j| {
             if (j.compare(now)) {
+                const ca = self.prepareChildAllocator() catch |err| {
+                    self.container.log.any(err);
+                    continue;
+                };
+                defer self.destroryChildAllocator(ca);
+
                 var ctx = try Context.init(
-                    self.container.allocator,
+                    ca.allocator(),
                     self.container,
                     self.request,
                     self.response,
                 );
 
-                const thread = Thread.spawn(.{}, job.run, .{ j, &ctx }) catch |err| {
+                const thread = Thread.spawn(
+                    .{},
+                    job.run,
+                    .{ j, &ctx },
+                ) catch |err| {
                     self.container.log.any(err);
                     return;
                 };
@@ -187,7 +214,7 @@ fn expandOccurances(self: *Self, value: []const u8, map: *std.AutoHashMap(u8, bo
     return self.expandRanges(value, map, max, min, 1);
 }
 
-fn parseSchedule(self: *Self, schedule: []const u8) !*job {
+fn parseSchedule(self: *Self, schedule: []const u8) !job {
     var seconds: []const u8 = "";
     var minutes: []const u8 = "";
     var hours: []const u8 = "";
@@ -220,7 +247,7 @@ fn parseSchedule(self: *Self, schedule: []const u8) !*job {
     }
 
     // create job for execution
-    const j = try job.create(self.container.allocator);
+    var j = try job.create(self.container.allocator);
 
     var index: u8 = 0;
     switch (scheduleLength) {
@@ -248,7 +275,7 @@ fn parseSchedule(self: *Self, schedule: []const u8) !*job {
 }
 
 pub fn addCron(self: *Self, schedule: []const u8, name: []const u8, hook: *const fn (*root.Context) anyerror!void) !void {
-    const j = self.parseSchedule(schedule) catch |err| {
+    var j = self.parseSchedule(schedule) catch |err| {
         self.container.log.any(err);
         return;
     };
@@ -260,7 +287,11 @@ pub fn addCron(self: *Self, schedule: []const u8, name: []const u8, hook: *const
     try self.jobs.append(j);
     self.mu.unlock();
 
-    const msg = utils.combine(self.container.allocator, "{s} {s} cron job added for execution", .{ j.name, schedule }) catch |err| {
+    const msg = utils.combine(
+        self.container.allocator,
+        "{s} {s} cron job added for execution",
+        .{ j.name.?, schedule },
+    ) catch |err| {
         self.container.log.any(err);
         return;
     };

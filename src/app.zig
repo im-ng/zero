@@ -201,7 +201,7 @@ fn shutdown(_: c_int) callconv(.c) void {
     }
 
     std.Thread.sleep(1_000_000_000);
-    hServer.Shutdown();
+    hServer.shutdown();
 }
 
 fn startMetricsServer(self: Self) !void {
@@ -216,7 +216,11 @@ fn startHttpServer(self: Self) !void {
     buffer = try std.fmt.bufPrint(buffer, "Starting server on port: {d}", .{self.httpServer.port});
     self.container.log.info(buffer);
 
-    const thread = try self.httpServer.Run();
+    const thread = self.httpServer.run() catch |err| {
+        buffer = try std.fmt.bufPrint(buffer, "Server starting failed: {any}. check configs.", .{error.AddressInUse});
+        self.container.log.any(err);
+        return;
+    };
     thread.join();
 }
 
@@ -417,7 +421,7 @@ pub fn addMigration(self: *Self, key: []const u8, m: *const migrate) !void {
 }
 
 pub fn runMigrations(self: *Self) !void {
-    self.migrations.Run() catch |err| switch (err) {
+    self.migrations.run() catch |err| switch (err) {
         error.InvalidCharacter => {
             std.debug.print("{any}", .{err});
         },

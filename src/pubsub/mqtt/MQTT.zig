@@ -10,6 +10,7 @@ const mqSubscriber = root.mqSubscriber;
 const time = std.time;
 const Thread = std.Thread;
 const Atomic = std.atomic.Value;
+const arena: type = std.heap.ArenaAllocator;
 
 const job = root.cronJob;
 const Error = root.Error;
@@ -96,6 +97,23 @@ pub fn Publish(self: *Self, topic: []const u8, payload: []const u8) !?u16 {
     });
 }
 
+fn prepareChildAllocator(self: *Self) !*arena {
+    const ca: *arena = try self.container.allocator.create(arena);
+    errdefer self.container.allocator.destroy(ca);
+
+    ca.* = arena.init(self.container.allocator);
+    errdefer ca.deinit();
+
+    return ca;
+}
+
+fn destroryChildAllocator(self: *Self, ca: *arena) void {
+    const caPtr: *arena = @ptrCast(@alignCast(ca.allocator().ptr));
+    caPtr.deinit();
+
+    self.container.allocator.destroy(caPtr);
+}
+
 pub fn readPackets(self: *Self, subscriber: mqSubscriber) !void {
     while (self.signal.load(.monotonic)) {
         std.Thread.sleep(std.time.ns_per_s);
@@ -104,7 +122,18 @@ pub fn readPackets(self: *Self, subscriber: mqSubscriber) !void {
         };
         switch (packet) {
             .publish => |*publish| {
-                var ctx = Context.init(self.container.allocator, self.container, _req, _res) catch |err| {
+                const ca = self.prepareChildAllocator() catch |err| {
+                    self.container.log.any(err);
+                    continue;
+                };
+                defer self.destroryChildAllocator(ca);
+
+                var ctx = Context.init(
+                    ca.allocator(),
+                    self.container,
+                    _req,
+                    _res,
+                ) catch |err| {
                     self.container.log.any(err);
                     return;
                 };
@@ -184,7 +213,11 @@ pub fn addSubscriber(self: *Self, topic: []const u8, hook: *const fn (*root.Cont
     try self.subscriber.append(s);
     self.mu.unlock();
 
-    const msg = utils.combine(self.container.allocator, "topic:{s} pubsub subscriber added", .{s.topic}) catch |err| {
+    const msg = utils.combine(
+        self.container.allocator,
+        "topic:{s} pubsub subscriber added",
+        .{s.topic},
+    ) catch |err| {
         self.container.log.any(err);
         return;
     };
