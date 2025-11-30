@@ -96,11 +96,11 @@ pub fn create(allocator: std.mem.Allocator, container: *root.container) !*server
     return hzs;
 }
 
-pub fn Run(self: *Self) !Thread {
+pub fn run(self: *Self) !Thread {
     return try self.http.listenInNewThread();
 }
 
-pub fn Shutdown(self: *Self) void {
+pub fn shutdown(self: *Self) void {
     self.container.log.info("server shutting down");
     // recursively deallocate all resources
     // self.refresherThread.join();
