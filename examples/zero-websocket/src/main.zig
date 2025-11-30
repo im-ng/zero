@@ -18,11 +18,6 @@ fn panic(_: []const u8, _: ?*std.builtin.StackTrace, _: ?usize) noreturn {
 }
 
 pub fn main() !void {
-    // var arean = std.heap.ArenaAllocator.init(std.heap.page_allocator);
-    // defer arean.deinit();
-
-    // const allocator = arean.allocator();
-
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     const allocator = gpa.allocator();
     defer _ = gpa.detectLeaks();

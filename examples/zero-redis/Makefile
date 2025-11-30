@@ -1,8 +1,5 @@
-ps:
-	ps -p $(pgrep -d',' basic) -o %cpu,%mem
+release: 
+	zig build --release=fast --summary all
 
-trace:
-	strace -c zig build basic > /dev/null
-
-top:
-	top -pid $(pgrep -d',' basic)
+release-safe:
+	zig build -Doptimize=ReleaseSafe --summary all

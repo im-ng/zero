@@ -25,13 +25,9 @@ pub const std_options: std.Options = .{
 };
 
 pub fn main() !void {
-    var arean = std.heap.ArenaAllocator.init(std.heap.page_allocator);
-    defer arean.deinit();
-    const allocator = arean.allocator();
-
-    // var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    // const allocator = gpa.allocator();
-    // defer _ = gpa.detectLeaks();
+    var gpa: std.heap.GeneralPurposeAllocator(.{}) = .init;
+    const allocator = gpa.allocator();
+    _ = gpa.detectLeaks();
 
     const app: *App = try App.new(allocator);
 

@@ -10,12 +10,9 @@ pub const std_options: std.Options = .{
 };
 
 pub fn main() !void {
-    // var arena_instance = std.heap.ArenaAllocator.init(std.heap.page_allocator);
-    // defer arena_instance.deinit();
-    // const allocator = arena_instance.allocator();
-
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa: std.heap.GeneralPurposeAllocator(.{}) = .init;
     const allocator = gpa.allocator();
+    _ = gpa.detectLeaks();
 
     const app = try App.new(allocator);
 

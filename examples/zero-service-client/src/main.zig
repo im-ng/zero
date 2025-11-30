@@ -24,12 +24,11 @@ pub const publicKeys = struct {
 };
 
 pub fn main() !void {
-    var arean = std.heap.ArenaAllocator.init(std.heap.page_allocator);
-    defer arean.deinit();
+    var gpa: std.heap.GeneralPurposeAllocator(.{}) = .init;
+    const allocator = gpa.allocator();
+    _ = gpa.detectLeaks();
 
-    const allocator = arean.allocator();
-
-    const app = try App.new(allocator);
+    const app: *App = try App.new(allocator);
 
     try app.addHttpService("auth-service", app.config.get("SERVICE_URL"));
 
@@ -42,7 +41,7 @@ fn serviceStatus(ctx: *Context) !void {
     const service = ctx.getService("auth-service");
 
     if (service) |basicSvc| {
-        const response = try basicSvc.Get(ctx, publicKeys, "/keys", null, null);
+        const response = try basicSvc.get(ctx, publicKeys, "/keys", null, null);
         try ctx.json(response);
     }
 }

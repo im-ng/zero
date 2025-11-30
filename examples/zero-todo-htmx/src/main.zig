@@ -17,14 +17,11 @@ pub const std_options: std.Options = .{
 };
 
 pub fn main() !void {
-    var arean = std.heap.ArenaAllocator.init(
-        std.heap.page_allocator,
-    );
-    defer arean.deinit();
+    var gpa: std.heap.GeneralPurposeAllocator(.{}) = .init;
+    const allocator = gpa.allocator();
+    _ = gpa.detectLeaks();
 
-    const allocator = arean.allocator();
-
-    const app = try App.new(allocator);
+    const app: *App = try App.new(allocator);
 
     try migrations.all(app);
 

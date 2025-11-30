@@ -12,12 +12,9 @@ pub const std_options: std.Options = .{
 const pubSubTopic = "zero";
 
 pub fn main() !void {
-    var arena_instance = std.heap.ArenaAllocator.init(
-        std.heap.page_allocator,
-    );
-    defer arena_instance.deinit();
-
-    const allocator = arena_instance.allocator();
+    var gpa: std.heap.GeneralPurposeAllocator(.{}) = .init;
+    const allocator = gpa.allocator();
+    _ = gpa.detectLeaks();
 
     const app: *App = try App.new(allocator);
 
@@ -48,7 +45,6 @@ fn subscribeTask(ctx: *Context) !void {
         var buffer: []u8 = undefined;
         buffer = try ctx.allocator.alloc(u8, 1024);
         buffer = try std.fmt.bufPrint(buffer, "Received on [{s}] {s}", .{ m.topic, m.msg });
-        defer ctx.allocator.free(buffer);
 
         ctx.info(timestamp);
         ctx.info(buffer);
