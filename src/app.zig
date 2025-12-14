@@ -466,7 +466,9 @@ pub fn addKafkaSubscription(self: *Self, topic: []const u8, hook: fn (*root.Cont
         self.container.log.err("pubsub is disabled, topic subscription is not available.");
         return;
     }
-    try self.container.Kakfa.?.addSubscriber(topic, hook);
+
+    const topics = [_][]const u8{topic};
+    try self.container.Kakfa.?.addSubscriber(&topics, hook);
 }
 
 pub fn addOAuthKeyRefresher(self: *Self) anyerror!void {

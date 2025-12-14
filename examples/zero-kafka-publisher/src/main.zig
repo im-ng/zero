@@ -33,7 +33,7 @@ fn publishTask1(ctx: *Context) !void {
 
     const p: payload = payload{
         .timestamp = timestamp,
-        .message = "test message!",
+        .message = "publisher message!",
     };
 
     const jp = try helper.transform(ctx, &p);

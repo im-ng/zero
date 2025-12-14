@@ -129,7 +129,7 @@ fn loadKafkaPubSub(self: *Self) !void {
         return;
     }
 
-    const consumerID = self.config.get("CONSUMDER_ID");
+    const consumerID = self.config.get("CONSUMER_ID");
     const batchBytes = self.config.getOrDefault("KAFKA_BATCH_BYTES", "1048576");
     const batchTimeout = self.config.getOrDefault("KAFKA_BATCH_TIMEOUT", "1000");
     const batchSize = self.config.getOrDefault("KAFKA_BATCH_SIZE", "100");
@@ -316,6 +316,18 @@ fn loadKafkaPubSub(self: *Self) !void {
     buffer = try self.allocator.alloc(u8, 256);
     buffer = try std.fmt.bufPrint(buffer, "connected to kafka at '{s}'", .{servers});
     self.log.info(buffer);
+
+    switch (mode) {
+        rdkafka.RD_KAFKA_PRODUCER => {
+            self.log.info("kafka publisher mode enabled");
+        },
+        rdkafka.RD_KAFKA_CONSUMER => {
+            self.log.info("kafka subscriber mode enabled");
+        },
+        else => {
+            //do nothing
+        },
+    }
 }
 
 fn loadMqttPubSub(self: *Self) !void {

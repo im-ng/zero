@@ -33,7 +33,7 @@ signal: Atomic(bool) = undefined,
 config: ?*kafkaConfig,
 topic: ?*kafkaTopic,
 client: ?*kafkaClient,
-subscriber: std.array_list.Managed(?*kafkaSubscriber) = undefined,
+subscriber: std.array_list.Managed(kafkaSubscriber) = undefined,
 isPubSubSet: bool = false,
 kafkaMode: c_uint = 0,
 err_message: [4096]u8 = undefined,
@@ -50,10 +50,10 @@ pub fn create(
     c.mu = .{};
     c.signal = Atomic(bool).init(true);
     c.container = container;
-    c.subscriber = std.array_list.Managed(?*kafkaSubscriber).init(container.allocator);
+    c.subscriber = std.array_list.Managed(kafkaSubscriber).init(container.allocator);
 
     const client: ?*kafkaClient = rdkafka.rd_kafka_new(
-        rdkafka.RD_KAFKA_PRODUCER,
+        mode,
         config,
         &c.err_message,
         c.err_message.len,
@@ -193,11 +193,14 @@ fn destroryChildAllocator(self: *Self, ca: *arena) void {
     self.container.allocator.destroy(caPtr);
 }
 
-pub fn readPackets(self: *Self, subscriber: *kafkaSubscriber) !void {
+pub fn readPackets(self: *Self, subscriber: kafkaSubscriber) !void {
     while (self.signal.load(.monotonic)) {
         const message_or_null = rdkafka.rd_kafka_consumer_poll(self.client, 1000);
         if (message_or_null) |message| {
             var msg = kafkaMessage.init(message);
+            msg.payload = msg.getPayload();
+            msg.topic = msg.getKey();
+
             defer msg.deinit();
 
             const ca = self.prepareChildAllocator() catch |err| {
@@ -238,44 +241,19 @@ pub fn readPackets(self: *Self, subscriber: *kafkaSubscriber) !void {
 fn subscriptions(self: *Self) !void {
     for (self.subscriber.items) |s| {
         std.Thread.sleep(std.time.ns_per_ms * 100);
-        const c = s.?;
-
-        const topics = [_][]const u8{c.topic};
-        c.topics = rdkafka.rd_kafka_topic_partition_list_new(@intCast(topics.len));
-
-        if (c.topics == null) {
-            const msg = utils.combine(
-                self.container.allocator,
-                "failed to create topic list",
-                .{},
-            ) catch |err| {
-                self.container.log.any(err);
-                return;
-            };
-            self.container.log.info(msg);
-        }
-
-        for (topics) |topic_name| {
-            _ = rdkafka.rd_kafka_topic_partition_list_add(
-                c.topics,
-                topic_name.ptr,
-                rdkafka.RD_KAFKA_PARTITION_UA,
-            );
-        }
-
-        const err_code: c_int = rdkafka.rd_kafka_subscribe(self.client, c.topics);
+        const err_code: c_int = rdkafka.rd_kafka_subscribe(self.client, s.topics);
         if (err_code != rdkafka.RD_KAFKA_RESP_ERR_NO_ERROR) {
             const msg = try utils.combine(
                 self.container.allocator,
                 "failed to kafka subscriber: {s}",
                 .{rdkafka.rd_kafka_err2str(err_code)},
             );
-
             self.container.log.err(msg);
+            return;
         }
-        self.container.log.info("kafka consumer subscribed");
 
-        const thread = Thread.spawn(.{}, Self.readPackets, .{ self, c }) catch |err| {
+        self.container.log.info("kafka consumer subscribed");
+        const thread = Thread.spawn(.{}, Self.readPackets, .{ self, s }) catch |err| {
             self.container.log.any(err);
             return;
         };
@@ -321,15 +299,29 @@ pub fn startSubscription(self: *Self) !void {
     };
 }
 
-pub fn addSubscriber(self: *Self, topic: []const u8, hook: *const fn (*root.Context) anyerror!void) !void {
-    var s = kafkaSubscriber{
-        .topic = topic,
-        .name = topic,
+pub fn addSubscriber(self: *Self, topic: []const []const u8, hook: *const fn (*root.Context) anyerror!void) !void {
+    const _topics = rdkafka.rd_kafka_topic_partition_list_new(@intCast(topic.len));
+    if (_topics == null) {
+        const msg = utils.combine(self.container.allocator, "failed to create topic list", .{}) catch |err| {
+            self.container.log.any(err);
+            return;
+        };
+        self.container.log.info(msg);
+    }
+
+    for (topic) |topic_name| {
+        _ = rdkafka.rd_kafka_topic_partition_list_add(_topics, @constCast(topic_name.ptr), rdkafka.RD_KAFKA_PARTITION_UA);
+    }
+
+    const s = kafkaSubscriber{
+        .topics = _topics,
+        .topic = topic[0],
+        .name = topic[0],
         .exec = hook,
     };
 
     self.mu.lock();
-    try self.subscriber.append(&s);
+    try self.subscriber.append(s);
     self.mu.unlock();
 
     const msg = utils.combine(
