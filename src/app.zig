@@ -176,6 +176,14 @@ fn startPubSubSubscriptions(self: Self) !void {
         self.container.log.info("starting subscriptions");
         try pubsub.startSubscription();
     }
+
+    if (self.container.Kakfa) |k| {
+        if (k.kafkaMode != root.rdkafka.RD_KAFKA_CONSUMER) {
+            return;
+        }
+        self.container.log.info("starting subscriptions");
+        try k.startSubscription();
+    }
 }
 
 fn startShutdownHandler(_: Self) !void {
@@ -451,6 +459,14 @@ pub fn addSubscription(self: *Self, topic: []const u8, hook: fn (*root.Context) 
         return;
     }
     try self.container.pubsub.?.addSubscriber(topic, hook);
+}
+
+pub fn addKafkaSubscription(self: *Self, topic: []const u8, hook: fn (*root.Context) anyerror!void) !void {
+    if (self.container.Kakfa == null) {
+        self.container.log.err("pubsub is disabled, topic subscription is not available.");
+        return;
+    }
+    try self.container.Kakfa.?.addSubscriber(topic, hook);
 }
 
 pub fn addOAuthKeyRefresher(self: *Self) anyerror!void {

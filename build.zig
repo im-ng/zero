@@ -40,6 +40,8 @@ pub fn build(b: *std.Build) void {
     const jwt = b.dependency("jwt", .{});
     module.addImport("jwt", jwt.module("zig-jwt"));
 
+    module.linkSystemLibrary("rdkafka", .{ .weak = true });
+
     const test_module = b.createModule(.{
         .root_source_file = b.path("src/zero.zig"),
         .target = target,

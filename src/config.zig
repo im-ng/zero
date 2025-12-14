@@ -8,8 +8,8 @@ const config = @This();
 const Self = @This();
 
 const defaultPath = "./configs";
-const defaultFile = "./configs/.env";
-// const defaultFile = "/media/ng/home/zig-self-learning/zero/examples/zero-todo-htmx/configs/.env";
+// const defaultFile = "./configs/.env";
+const defaultFile = "/media/ng/home/zig-self-learning/zero/examples/zero-kafka-publisher/configs/.env";
 
 allocator: std.mem.Allocator,
 log: *root.logger,

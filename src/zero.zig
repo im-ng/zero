@@ -13,6 +13,8 @@ pub const regexp = @import("regexp");
 pub const mqttz = @import("mqttz");
 pub const jwt = @import("jwt");
 
+pub const rdkafka = @import("cimport.zig").librdkafka;
+
 // zero internals
 pub const logger = @import("logger.zig");
 pub const config = @import("config.zig");
@@ -47,6 +49,10 @@ pub const mqConfig = @import("pubsub/mqtt/config.zig");
 pub const mqSubscriber = @import("pubsub/mqtt/subscriber.zig");
 pub const mqMessage = @import("pubsub/mqtt/message.zig");
 pub const MQTT = @import("pubsub/mqtt/MQTT.zig");
+
+pub const kafka = @import("pubsub/kafka/kafka.zig");
+pub const kafkaSubscriber = @import("pubsub/kafka/subscriber.zig");
+pub const kafkaMessage = @import("pubsub/kafka/message.zig").Message;
 
 pub const WSHandler = @import("websocket.zig");
 pub const WSMiddleware = @import("mw/ws.zig");
