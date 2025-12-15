@@ -1,3 +1,4 @@
+const std = @import("std");
 const root = @import("../../zero.zig");
 const rdkafka = root.rdkafka;
 
@@ -61,5 +62,10 @@ pub const Message = struct {
     pub inline fn getTimestamp(self: Self) i64 {
         var set_by: c_uint = undefined; // 0 -> no timestamp is available; 1 -> set by producer; 2 -> set by kafka broker
         return rdkafka.rd_kafka_message_timestamp(self._message, &set_by);
+    }
+
+    pub inline fn getTopic(self: Self) []const u8 {
+        const topic: []const u8 = std.mem.span(rdkafka.rd_kafka_topic_name(self._message.rkt));
+        return topic;
     }
 };

@@ -137,7 +137,7 @@ pub fn destroy(self: *Self) void {
     self.thread.join();
 }
 
-pub fn Publish(_: *Self, ctx: *Context, topic: *kafkaTopic, key: []const u8, payload: []const u8) !void {
+pub fn Publish(self: *Self, ctx: *Context, topic: *kafkaTopic, key: []const u8, payload: []const u8) !void {
     const message_ptr: ?*anyopaque = @constCast(payload.ptr);
     const key_ptr: ?*anyopaque = @constCast(key.ptr);
 
@@ -159,6 +159,8 @@ pub fn Publish(_: *Self, ctx: *Context, topic: *kafkaTopic, key: []const u8, pay
         );
 
         ctx.info(msg);
+
+        self.container.metricz.publisherSuccess(.{ .topic = self.getTopicName(topic) }) catch unreachable;
     } else {
         const msg = try utils.combine(
             ctx.allocator,
@@ -168,6 +170,8 @@ pub fn Publish(_: *Self, ctx: *Context, topic: *kafkaTopic, key: []const u8, pay
 
         ctx.err(msg);
     }
+
+    self.container.metricz.publisherTotal(.{ .topic = self.getTopicName(topic) }) catch unreachable;
 }
 
 pub inline fn wait(self: Self, comptime timeout_ms: u16) void {
@@ -193,13 +197,13 @@ fn destroryChildAllocator(self: *Self, ca: *arena) void {
     self.container.allocator.destroy(caPtr);
 }
 
-pub fn readPackets(self: *Self, subscriber: kafkaSubscriber) !void {
+pub fn readPayload(self: *Self, subscriber: kafkaSubscriber) !void {
     while (self.signal.load(.monotonic)) {
         const message_or_null = rdkafka.rd_kafka_consumer_poll(self.client, 1000);
         if (message_or_null) |message| {
             var msg = kafkaMessage.init(message);
             msg.payload = msg.getPayload();
-            msg.topic = msg.getKey();
+            msg.topic = msg.getTopic();
 
             defer msg.deinit();
 
@@ -225,15 +229,9 @@ pub fn readPackets(self: *Self, subscriber: kafkaSubscriber) !void {
 
             try subscriber.exec(context);
 
-            std.log.info("offset: {d}", .{msg.getOffset()});
-            std.log.info("partition: {d}", .{msg.getPartition()});
-            std.log.info("message length: {d}", .{msg.getPayloadLen()});
-            std.log.info("key: {s}", .{msg.getKey()});
-            std.log.info("key length: {d}", .{msg.getKeyLen()});
-            std.log.info("error code: {d}", .{msg.getErrCode()});
-            std.log.info("timestamp: {d}", .{msg.getTimestamp()});
+            self.commitOffset(context, msg);
 
-            self.commitOffset(context, msg); // or kafka_consumer.commitOffset(message) to commit on every message.
+            self.container.metricz.subscriberTotal(.{ .topic = msg.getTopic(), .consumer = "zero-consumer" }) catch unreachable;
         }
     }
 }
@@ -253,7 +251,7 @@ fn subscriptions(self: *Self) !void {
         }
 
         self.container.log.info("kafka consumer subscribed");
-        const thread = Thread.spawn(.{}, Self.readPackets, .{ self, s }) catch |err| {
+        const thread = Thread.spawn(.{}, Self.readPayload, .{ self, s }) catch |err| {
             self.container.log.any(err);
             return;
         };
@@ -265,31 +263,31 @@ pub fn commitOffset(self: *Self, ctx: *Context, message: kafkaMessage) void {
     const err_code: c_int = rdkafka.rd_kafka_commit_message(self.client, message._message, 1);
     if (err_code != rdkafka.RD_KAFKA_RESP_ERR_NO_ERROR) {
         const msg = utils.combine(ctx.allocator, "failed to commit offset {s}", .{rdkafka.rd_kafka_err2str(err_code)}) catch unreachable;
-        self.container.log.err(msg);
+        ctx.err(msg);
         return;
     }
     const msg = utils.combine(ctx.allocator, "Offset {d} commited", .{message.getOffset()}) catch unreachable;
-    self.container.log.info(msg);
+    ctx.info(msg);
 }
 
 pub inline fn unsubscribe(self: *Self, ctx: *Context) void {
-    const err_code: c_int = rdkafka.rd_kafka_unsubscribe(self._consumer);
+    const err_code: c_int = rdkafka.rd_kafka_unsubscribe(self.client);
     if (err_code != rdkafka.RD_KAFKA_RESP_ERR_NO_ERROR) {
         const msg = utils.combine(ctx.allocator, "failed to unsubsribe {s}", .{rdkafka.rd_kafka_err2str(err_code)}) catch unreachable;
-        self.container.log.err(msg);
+        ctx.err(msg);
         return;
     }
-    self.container.log.info("consumer unsubscribed successfully.");
+    ctx.info("consumer unsubscribed successfully.");
 }
 
 pub inline fn close(self: *Self, ctx: *Context) void {
     const err_code: c_int = rdkafka.rd_kafka_consumer_close(self._consumer);
     if (err_code != rdkafka.RD_KAFKA_RESP_ERR_NO_ERROR) {
         const msg = utils.combine(ctx.allocator, "failed to close {s}", .{rdkafka.rd_kafka_err2str(err_code)}) catch unreachable;
-        self.container.log.err(msg);
+        ctx.err(msg);
         return;
     }
-    self.container.log.info("Consumer closed successfully.");
+    ctx.info("Consumer closed successfully.");
 }
 
 pub fn startSubscription(self: *Self) !void {
@@ -299,8 +297,10 @@ pub fn startSubscription(self: *Self) !void {
     };
 }
 
-pub fn addSubscriber(self: *Self, topic: []const []const u8, hook: *const fn (*root.Context) anyerror!void) !void {
-    const _topics = rdkafka.rd_kafka_topic_partition_list_new(@intCast(topic.len));
+pub fn addSubscriber(self: *Self, topic: []const u8, hook: *const fn (*root.Context) anyerror!void) !void {
+    const topics = [_][]const u8{topic};
+
+    const _topics = rdkafka.rd_kafka_topic_partition_list_new(@intCast(topics.len));
     if (_topics == null) {
         const msg = utils.combine(self.container.allocator, "failed to create topic list", .{}) catch |err| {
             self.container.log.any(err);
@@ -309,14 +309,14 @@ pub fn addSubscriber(self: *Self, topic: []const []const u8, hook: *const fn (*r
         self.container.log.info(msg);
     }
 
-    for (topic) |topic_name| {
+    for (topics) |topic_name| {
         _ = rdkafka.rd_kafka_topic_partition_list_add(_topics, @constCast(topic_name.ptr), rdkafka.RD_KAFKA_PARTITION_UA);
     }
 
     const s = kafkaSubscriber{
         .topics = _topics,
-        .topic = topic[0],
-        .name = topic[0],
+        .topic = topics[0],
+        .name = topics[0],
         .exec = hook,
     };
 
@@ -334,4 +334,9 @@ pub fn addSubscriber(self: *Self, topic: []const []const u8, hook: *const fn (*r
     };
 
     self.container.log.info(msg);
+}
+
+pub inline fn getTopicName(_: *Self, topic: *kafkaTopic) []const u8 {
+    const name: []const u8 = std.mem.span(rdkafka.rd_kafka_topic_name(topic));
+    return name;
 }

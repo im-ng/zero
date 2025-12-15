@@ -6,7 +6,7 @@ const App = zero.App;
 const Context = zero.Context;
 const utils = zero.utils;
 const helper = @import("helper.zig");
-const payload = helper.payload;
+const payload = helper.Payload;
 
 pub const std_options: std.Options = .{
     .logFn = zero.logger.custom,
@@ -29,19 +29,19 @@ pub fn main() !void {
 fn publishTask1(ctx: *Context) !void {
     const timestamp = try utils.sqlTimestampz(ctx.allocator);
 
-    const msgId = "publisher-1";
+    const messageKey = "publisher-1";
 
-    const p: payload = payload{
+    const pl: payload = payload{
         .timestamp = timestamp,
         .message = "publisher message!",
     };
 
-    const jp = try helper.transform(ctx, &p);
+    const jp = try helper.transform(ctx, &pl);
     ctx.info(jp);
 
     const topic = try ctx.KF.getTopicHandler(ctx, pubSubTopic);
 
-    ctx.KF.Publish(ctx, topic, msgId, jp) catch |err| {
+    ctx.KF.Publish(ctx, topic, messageKey, jp) catch |err| {
         var buffer: []u8 = undefined;
         buffer = try ctx.allocator.alloc(u8, 100);
         buffer = try std.fmt.bufPrint(buffer, "Message published failed {}", .{err});

@@ -173,7 +173,7 @@ pub fn run(self: *Self) !void {
 
 fn startPubSubSubscriptions(self: Self) !void {
     if (self.container.pubsub) |pubsub| {
-        self.container.log.info("starting subscriptions");
+        self.container.log.info("starting mqtt subscriptions");
         try pubsub.startSubscription();
     }
 
@@ -181,7 +181,7 @@ fn startPubSubSubscriptions(self: Self) !void {
         if (k.kafkaMode != root.rdkafka.RD_KAFKA_CONSUMER) {
             return;
         }
-        self.container.log.info("starting subscriptions");
+        self.container.log.info("starting kafka subscriptions");
         try k.startSubscription();
     }
 }
@@ -467,8 +467,7 @@ pub fn addKafkaSubscription(self: *Self, topic: []const u8, hook: fn (*root.Cont
         return;
     }
 
-    const topics = [_][]const u8{topic};
-    try self.container.Kakfa.?.addSubscriber(&topics, hook);
+    try self.container.Kakfa.?.addSubscriber(topic, hook);
 }
 
 pub fn addOAuthKeyRefresher(self: *Self) anyerror!void {

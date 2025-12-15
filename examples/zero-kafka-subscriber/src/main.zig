@@ -30,17 +30,11 @@ const customMessage = struct {
 
 fn subscribeTask(ctx: *Context) !void {
     const timestamp = try utils.sqlTimestampz(ctx.allocator);
-    var m: customMessage = undefined;
-
     //transform ctx.message to custom type in packet read itself
     if (ctx.message2) |message| {
-        m = customMessage{};
-        m.msg = message.payload.?;
-        m.topic = message.topic;
-
         var buffer: []u8 = undefined;
         buffer = try ctx.allocator.alloc(u8, 1024);
-        buffer = try std.fmt.bufPrint(buffer, "Received on [{s}] {s}", .{ m.topic, m.msg });
+        buffer = try std.fmt.bufPrint(buffer, "Received on [{s}] {s}", .{ message.topic, message.payload.? });
 
         ctx.info(timestamp);
         ctx.info(buffer);

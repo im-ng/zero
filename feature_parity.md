@@ -54,8 +54,10 @@ Instead of developing and integrating with these boilerplates, an app developer 
     -  ✅ `redis`
         - ✅ Authentication enabled
     - ✅ `mqtt`
-    - ⬜ `kafka`
-        - In progress
+    - ✅ `kafka`
+        - ✅ `rdkafka` driver integrated
+        - ⬜ Support for multiple topics subscription
+        - ⬜ Support for metrics
 -  ✅ Database Migrations
 -  ✅ Seed data on App startup
 -  ✅ HTTP Client
@@ -74,4 +76,10 @@ Instead of developing and integrating with these boilerplates, an app developer 
 - ✅ Websocket
 - ⬜ TLS 
 - ⬜ CLI Application
-- ⬜ Memory leaks
+- ✅ Memory leaks
+- ⬜ Interface 
+    - ⬜ Pubsub
+    - ⬜ SQL
+    - ⬜ Cache
+- ⬜ Protobuf support
+    - ⬜ Over HTTP
