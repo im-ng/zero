@@ -137,7 +137,7 @@ pub fn destroy(self: *Self) void {
     self.thread.join();
 }
 
-pub fn Publish(self: *Self, ctx: *Context, topic: *kafkaTopic, key: []const u8, payload: []const u8) !void {
+pub fn publish(self: *Self, ctx: *Context, topic: *kafkaTopic, key: []const u8, payload: []const u8) !void {
     const message_ptr: ?*anyopaque = @constCast(payload.ptr);
     const key_ptr: ?*anyopaque = @constCast(key.ptr);
 
@@ -154,7 +154,7 @@ pub fn Publish(self: *Self, ctx: *Context, topic: *kafkaTopic, key: []const u8, 
     if (err_code == rdkafka.RD_KAFKA_RESP_ERR_NO_ERROR) {
         const msg = try utils.combine(
             ctx.allocator,
-            "Message produced successfully!",
+            "Message published successfully!",
             .{},
         );
 
@@ -164,7 +164,7 @@ pub fn Publish(self: *Self, ctx: *Context, topic: *kafkaTopic, key: []const u8, 
     } else {
         const msg = try utils.combine(
             ctx.allocator,
-            "Failed to produce message: {s}",
+            "Failed to publish message: {s}",
             .{rdkafka.rd_kafka_err2str(err_code)},
         );
 
@@ -336,7 +336,7 @@ pub fn addSubscriber(self: *Self, topic: []const u8, hook: *const fn (*root.Cont
     self.container.log.info(msg);
 }
 
-pub inline fn getTopicName(_: *Self, topic: *kafkaTopic) []const u8 {
+inline fn getTopicName(_: *Self, topic: *kafkaTopic) []const u8 {
     const name: []const u8 = std.mem.span(rdkafka.rd_kafka_topic_name(topic));
     return name;
 }

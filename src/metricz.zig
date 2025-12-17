@@ -231,13 +231,13 @@ pub fn initialize(allocator: Allocator, comptime _: metrics.RegistryOpts) !*metr
         .init(allocator, "app_pubsub_publish_total_count", .{ .help = "Total pubsub publisher counter per topic" });
 
     m.PubSubPublisherSuccess = try metrics.CounterVec(u64, PubSubPublisherSuccessLabel).Impl
-        .init(allocator, "app_http_response_hits", .{ .help = "Successful pubsub publisher counter per topic" });
+        .init(allocator, "app_pubsub_publish_success_count", .{ .help = "Successful pubsub publisher counter per topic" });
 
     m.PubSubSubscriberTotal = try metrics.CounterVec(u64, PubSubSubscriberTotalLabel).Impl
-        .init(allocator, "app_http_response_hits", .{ .help = "Total pubsub subscriber counter per topic per consumer group" });
+        .init(allocator, "app_pubsub_subscriber_total_count", .{ .help = "Total pubsub subscriber counter per topic per consumer group" });
 
     m.PubSubSubscriberSuccess = try metrics.CounterVec(u64, PubSubSubscriberSuccessLabel).Impl
-        .init(allocator, "app_http_response_hits", .{ .help = "Successful pubsub subscriber counter per topic per consumer group" });
+        .init(allocator, "app_pubsub_subscriber_success_count", .{ .help = "Successful pubsub subscriber counter per topic per consumer group" });
     return m;
 }
 

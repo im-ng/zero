@@ -5,14 +5,17 @@ const Allocator = std.mem.Allocator;
 const App = zero.App;
 const Context = zero.Context;
 const utils = zero.utils;
-const helper = @import("helper.zig");
-const payload = helper.Payload;
 
 pub const std_options: std.Options = .{
     .logFn = zero.logger.custom,
 };
 
-const pubSubTopic = "zero-topic";
+const topicName = "zero-topic";
+
+const Payload = struct {
+    timestamp: []const u8,
+    message: []const u8,
+};
 
 pub fn main() !void {
     var gpa: std.heap.GeneralPurposeAllocator(.{}) = .init;
@@ -31,27 +34,26 @@ fn publishTask1(ctx: *Context) !void {
 
     const messageKey = "publisher-1";
 
-    const pl: payload = payload{
+    const pl: Payload = .{
         .timestamp = timestamp,
         .message = "publisher message!",
     };
 
-    const jp = try helper.transform(ctx, &pl);
+    const jp = try transform(ctx, &pl);
     ctx.info(jp);
 
-    const topic = try ctx.KF.getTopicHandler(ctx, pubSubTopic);
+    const topic = try ctx.KF.getTopicHandler(ctx, topicName);
 
-    ctx.KF.Publish(ctx, topic, messageKey, jp) catch |err| {
+    ctx.KF.publish(ctx, topic, messageKey, jp) catch |err| {
         var buffer: []u8 = undefined;
         buffer = try ctx.allocator.alloc(u8, 100);
         buffer = try std.fmt.bufPrint(buffer, "Message published failed {}", .{err});
         return;
     };
+}
 
-    ctx.info(timestamp);
-
-    var buffer: []u8 = undefined;
-    buffer = try ctx.allocator.alloc(u8, 100);
-    buffer = try std.fmt.bufPrint(buffer, "Message published successfully", .{});
-    ctx.info(buffer);
+fn transform(ctx: *Context, p: *const Payload) ![]const u8 {
+    var out = std.Io.Writer.Allocating.init(ctx.allocator);
+    try std.json.Stringify.value(p, .{}, &out.writer);
+    return out.written();
 }

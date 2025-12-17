@@ -180,35 +180,41 @@ fn loadKafkaPubSub(self: *Self) !void {
         }
     }
 
-    if (rdkafka.rd_kafka_conf_set(
-        config,
-        "batch.num.messages",
-        @constCast(batchSize.ptr),
-        &error_message,
-        error_message.len,
-    ) != rdkafka.RD_KAFKA_CONF_OK) {
+    if (mode == rdkafka.RD_KAFKA_PRODUCER and
+        rdkafka.rd_kafka_conf_set(
+            config,
+            "batch.num.messages",
+            @constCast(batchSize.ptr),
+            &error_message,
+            error_message.len,
+        ) != rdkafka.RD_KAFKA_CONF_OK)
+    {
         buffer = try std.fmt.bufPrint(buffer, "connection to kafka failed: error occurred {s}", .{error_message});
         self.log.err(buffer);
     }
 
-    if (rdkafka.rd_kafka_conf_set(
-        config,
-        "request.timeout.ms",
-        @constCast(batchTimeout.ptr),
-        &error_message,
-        error_message.len,
-    ) != rdkafka.RD_KAFKA_CONF_OK) {
+    if (mode == rdkafka.RD_KAFKA_PRODUCER and
+        rdkafka.rd_kafka_conf_set(
+            config,
+            "request.timeout.ms",
+            @constCast(batchTimeout.ptr),
+            &error_message,
+            error_message.len,
+        ) != rdkafka.RD_KAFKA_CONF_OK)
+    {
         buffer = try std.fmt.bufPrint(buffer, "connection to kafka failed: error occurred {s}", .{error_message});
         self.log.err(buffer);
     }
 
-    if (rdkafka.rd_kafka_conf_set(
-        config,
-        "batch.size",
-        @constCast(batchBytes.ptr),
-        &error_message,
-        error_message.len,
-    ) != rdkafka.RD_KAFKA_CONF_OK) {
+    if (mode == rdkafka.RD_KAFKA_PRODUCER and
+        rdkafka.rd_kafka_conf_set(
+            config,
+            "batch.size",
+            @constCast(batchBytes.ptr),
+            &error_message,
+            error_message.len,
+        ) != rdkafka.RD_KAFKA_CONF_OK)
+    {
         buffer = try std.fmt.bufPrint(buffer, "connection to kafka failed: error occurred {s}", .{error_message});
         self.log.err(buffer);
     }
