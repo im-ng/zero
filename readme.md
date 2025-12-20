@@ -1,10 +1,10 @@
 ![zero](./static/zero-fmk.png)
 
-`zero` is a strongly opinionated `Zig` web framework built on top of `http.zig` that aims for zero allocations and created to make development easier while keeping performance and observability in mind.
+Zero is a strongly opinionated web framework written in Zig, built on top of http.zig that aims for zero allocations and created to make development easier while keeping performance and observability in mind.
 
-`zero` framework is completely configurable, you may isolate and attach best-in-class `built-in` solutions as you see fit using the 12 Factor App methodology.
+Zero framework is completely configurable, you may isolate and attach best-in-class built-in solutions as you see fit using the 12 Factor App methodology.
 
-`zero` framework has useful features like drop-in support for numerous `databases`, `queuing systems`, and external services, as well as `REST`, `authentication`, `logging`, `metrics`, `observability`, and `scheduling`.
+zero framework has useful features like drop-in support for numerous `databases`, `queuing systems`, and external services, as well as `REST`, `authentication`, `logging`, `metrics`, `observability`, and `scheduling`.
 
 ### Zero mascot
 
@@ -218,7 +218,7 @@ fn serviceStatus(ctx: *Context) !void {
 
 ### Simple Benchmark
 
-Running the [zero-basic](./examples/zero-basic/) example with none as `log_level` to preview the framework baseline, but typically we don't use `none` in development environment :)
+Running the [zero-basic](./examples/zero-basic/) example with none as log_level to preview the framework baseline, but typically we don't use `none` in development environment :)
 
 ```bash
  go-wrk -c 100 -d 100 http://localhost:8080/json
@@ -249,4 +249,8 @@ Refer to [Attribution](./attribution.md) file more details.
 
 ### 📄 License
 
-This project is licensed under the Apache License - see the LICENSE file for details.
+[Apache](./LICENSE)
+
+This project is licensed under the Apache License 
+
+Please refer the LICENSE file for details.
