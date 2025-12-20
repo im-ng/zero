@@ -89,3 +89,5 @@ fn panic(_: []const u8, _: ?*std.builtin.StackTrace, _: ?usize) noreturn {
         std.log.err("#{d:0>2}: 0x{X:0>16}", .{ ix, frame });
     }
 }
+
+pub fn main() !void {}

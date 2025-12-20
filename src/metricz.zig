@@ -259,9 +259,11 @@ pub fn write(self: *Self, ctx: *Context) !void {
     }
     try self.ResponseBucketHits.write(ctx.response.writer());
     try self.ResponseBucket.write(ctx.response.writer());
-    try self.SQLBucket.write(ctx.response.writer());
-    try pgz.writeMetrics(ctx.response.writer());
     try self.ServiceResponseBucket.write(ctx.response.writer());
+
+    try self.SQLBucket.write(ctx.response.writer());
+    //rewrite pg metrics labelling to match with default
+    try pgz.writeMetrics(ctx.response.writer());
 
     try self.PubSubPublisherTotal.write(ctx.response.writer());
     try self.PubSubPublisherSuccess.write(ctx.response.writer());

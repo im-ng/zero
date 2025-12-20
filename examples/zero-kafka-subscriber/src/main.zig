@@ -9,7 +9,7 @@ pub const std_options: std.Options = .{
     .logFn = zero.logger.custom,
 };
 
-const pubSubTopic = "zero-topic";
+const topicName = "zero-topic";
 
 pub fn main() !void {
     var gpa: std.heap.GeneralPurposeAllocator(.{}) = .init;
@@ -18,7 +18,7 @@ pub fn main() !void {
 
     const app: *App = try App.new(allocator);
 
-    try app.addKafkaSubscription(pubSubTopic, subscribeTask);
+    try app.addKafkaSubscription(topicName, subscribeTask);
 
     try app.run();
 }
