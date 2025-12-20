@@ -14,6 +14,9 @@ const rdzDatasource = root.rdz;
 const zeroClient = root.client;
 const MQTT = root.MQTT;
 const mqConfig = root.mqConfig;
+const rdkafka = root.rdkafka;
+const kafka = root.kafka;
+const utils = root.utils;
 
 appName: []const u8 = undefined,
 appVersion: []const u8 = undefined,
@@ -29,6 +32,7 @@ rdz: ?*root.rdz = undefined,
 SQL: ?*root.SQL = undefined,
 services: ?std.StringHashMap(*zeroClient) = undefined,
 pubsub: ?*root.MQTT = null,
+Kakfa: ?*root.kafka = null,
 
 pub fn create(self: Self) anyerror!*container {
     const c = try self.allocator.create(container);
@@ -91,6 +95,248 @@ pub fn destroy(self: *Self) void {
 }
 
 fn loadPubSub(self: *Self) !void {
+    var buffer: []u8 = undefined;
+    buffer = try self.allocator.alloc(u8, 512);
+
+    const pubsub = self.config.get("PUBSUB_BACKEND");
+    if (std.mem.eql(u8, pubsub, "") == true) {
+        buffer = try std.fmt.bufPrint(buffer, "pubsub is disabled, as pubsub mode is not provided.", .{});
+        self.log.debug(buffer);
+        return;
+    }
+
+    if (std.mem.eql(u8, "KAFKA", pubsub)) {
+        try self.loadKafkaPubSub();
+    } else if (std.mem.eql(u8, "MQTT", pubsub)) {
+        try self.loadMqttPubSub();
+    } else {
+        buffer = try std.fmt.bufPrint(buffer, "pubsub is disabled, as pubsub mode is not provided.", .{});
+        self.log.debug(buffer);
+    }
+}
+
+fn loadKafkaPubSub(self: *Self) !void {
+    var mode: c_uint = rdkafka.RD_KAFKA_PRODUCER;
+
+    var buffer: []u8 = undefined;
+    buffer = try self.allocator.alloc(u8, 1024);
+
+    var error_message: [512]u8 = undefined;
+    const servers = self.config.get("PUBSUB_BROKER");
+    if (std.mem.eql(u8, servers, "") == true) {
+        buffer = try std.fmt.bufPrint(buffer, "pubsub is disabled, as broker(s) is/are not provided.", .{});
+        self.log.debug(buffer);
+        return;
+    }
+
+    const consumerID = self.config.get("CONSUMER_ID");
+    const batchBytes = self.config.getOrDefault("KAFKA_BATCH_BYTES", "1048576");
+    const batchTimeout = self.config.getOrDefault("KAFKA_BATCH_TIMEOUT", "1000");
+    const batchSize = self.config.getOrDefault("KAFKA_BATCH_SIZE", "100");
+
+    const saslProtocol = self.config.getOrDefault("KAFKA_SECURITY_PROTOCOL", "PLAINTEXT");
+    const saslMechanism = self.config.getOrDefault("KAFKA_SASL_MECHANISM", "PLAIN");
+    const saslUsername = self.config.get("KAFKA_SASL_USERNAME");
+    const saslPassword = self.config.get("KAFKA_SASL_PASSWORD");
+
+    const kafkaTlsCertFile = self.config.get("KAFKA_TLS_CERT_FILE");
+    const kafkaTlsKeyFile = self.config.get("KAFKA_TLS_KEY_FILE");
+    const kafkaTlsCACertFile = self.config.get("KAFKA_TLS_CA_CERT_FILE");
+    const kafkaTlsSkipVerify = self.config.getOrDefault("KAFKA_TLS_INSECURE_SKIP_VERIFY", "true");
+
+    const config: ?*rdkafka.struct_rd_kafka_conf_s = rdkafka.rd_kafka_conf_new();
+
+    if (std.mem.eql(u8, servers, "") == true) {
+        buffer = try std.fmt.bufPrint(buffer, "connection to kafka failed: kafka broker is empty.", .{});
+        self.log.err(buffer);
+        return;
+    }
+
+    if (rdkafka.rd_kafka_conf_set(
+        config,
+        "bootstrap.servers",
+        @constCast(servers.ptr),
+        &error_message,
+        error_message.len,
+    ) != rdkafka.RD_KAFKA_CONF_OK) {
+        buffer = try std.fmt.bufPrint(buffer, "connection to kafka failed: error occurred {s}", .{error_message});
+        self.log.err(buffer);
+        return;
+    }
+
+    if (std.mem.eql(u8, consumerID, "") == false) {
+        mode = rdkafka.RD_KAFKA_CONSUMER;
+
+        if (rdkafka.rd_kafka_conf_set(
+            config,
+            "group.id",
+            @constCast(consumerID.ptr),
+            &error_message,
+            error_message.len,
+        ) != rdkafka.RD_KAFKA_CONF_OK) {
+            buffer = try std.fmt.bufPrint(buffer, "connection to kafka failed: error occurred {s}", .{error_message});
+            self.log.err(buffer);
+            return;
+        }
+    }
+
+    if (mode == rdkafka.RD_KAFKA_PRODUCER and
+        rdkafka.rd_kafka_conf_set(
+            config,
+            "batch.num.messages",
+            @constCast(batchSize.ptr),
+            &error_message,
+            error_message.len,
+        ) != rdkafka.RD_KAFKA_CONF_OK)
+    {
+        buffer = try std.fmt.bufPrint(buffer, "connection to kafka failed: error occurred {s}", .{error_message});
+        self.log.err(buffer);
+    }
+
+    if (mode == rdkafka.RD_KAFKA_PRODUCER and
+        rdkafka.rd_kafka_conf_set(
+            config,
+            "request.timeout.ms",
+            @constCast(batchTimeout.ptr),
+            &error_message,
+            error_message.len,
+        ) != rdkafka.RD_KAFKA_CONF_OK)
+    {
+        buffer = try std.fmt.bufPrint(buffer, "connection to kafka failed: error occurred {s}", .{error_message});
+        self.log.err(buffer);
+    }
+
+    if (mode == rdkafka.RD_KAFKA_PRODUCER and
+        rdkafka.rd_kafka_conf_set(
+            config,
+            "batch.size",
+            @constCast(batchBytes.ptr),
+            &error_message,
+            error_message.len,
+        ) != rdkafka.RD_KAFKA_CONF_OK)
+    {
+        buffer = try std.fmt.bufPrint(buffer, "connection to kafka failed: error occurred {s}", .{error_message});
+        self.log.err(buffer);
+    }
+
+    if (std.mem.eql(u8, saslProtocol, "") == false and rdkafka.rd_kafka_conf_set(
+        config,
+        "security.protocol",
+        @constCast(saslProtocol.ptr),
+        &error_message,
+        error_message.len,
+    ) != rdkafka.RD_KAFKA_CONF_OK) {
+        buffer = try std.fmt.bufPrint(buffer, "connection to kafka failed: error occurred {s}", .{error_message});
+        self.log.err(buffer);
+    }
+
+    if (std.mem.eql(u8, saslMechanism, "") == false and rdkafka.rd_kafka_conf_set(
+        config,
+        "sasl.mechanism",
+        @constCast(saslMechanism.ptr),
+        &error_message,
+        error_message.len,
+    ) != rdkafka.RD_KAFKA_CONF_OK) {
+        buffer = try std.fmt.bufPrint(buffer, "connection to kafka failed: error occurred {s}", .{error_message});
+        self.log.err(buffer);
+    }
+
+    if (std.mem.eql(u8, saslUsername, "") == false and rdkafka.rd_kafka_conf_set(
+        config,
+        "sasl.username",
+        @constCast(saslUsername.ptr),
+        &error_message,
+        error_message.len,
+    ) != rdkafka.RD_KAFKA_CONF_OK) {
+        buffer = try std.fmt.bufPrint(buffer, "connection to kafka failed: error occurred {s}", .{error_message});
+        self.log.err(buffer);
+    }
+
+    if (std.mem.eql(u8, saslPassword, "") == false and rdkafka.rd_kafka_conf_set(
+        config,
+        "sasl.password",
+        @constCast(saslPassword.ptr),
+        &error_message,
+        error_message.len,
+    ) != rdkafka.RD_KAFKA_CONF_OK) {
+        buffer = try std.fmt.bufPrint(buffer, "connection to kafka failed: error occurred {s}", .{error_message});
+        self.log.err(buffer);
+    }
+
+    if (std.mem.eql(u8, kafkaTlsKeyFile, "") == false and rdkafka.rd_kafka_conf_set(
+        config,
+        "ssl.key.location",
+        @constCast(kafkaTlsKeyFile.ptr),
+        &error_message,
+        error_message.len,
+    ) != rdkafka.RD_KAFKA_CONF_OK) {
+        buffer = try std.fmt.bufPrint(buffer, "connection to kafka failed: error occurred {s}", .{error_message});
+        self.log.err(buffer);
+    }
+
+    if (std.mem.eql(u8, kafkaTlsCertFile, "") == false and rdkafka.rd_kafka_conf_set(
+        config,
+        "ssl.certificate.location",
+        @constCast(kafkaTlsCertFile.ptr),
+        &error_message,
+        error_message.len,
+    ) != rdkafka.RD_KAFKA_CONF_OK) {
+        buffer = try std.fmt.bufPrint(buffer, "connection to kafka failed: error occurred {s}", .{error_message});
+        self.log.err(buffer);
+    }
+
+    if (std.mem.eql(u8, kafkaTlsCACertFile, "") == false and rdkafka.rd_kafka_conf_set(
+        config,
+        "ssl.ca.location",
+        @constCast(kafkaTlsCACertFile.ptr),
+        &error_message,
+        error_message.len,
+    ) != rdkafka.RD_KAFKA_CONF_OK) {
+        buffer = try std.fmt.bufPrint(buffer, "connection to kafka failed: error occurred {s}", .{error_message});
+        self.log.err(buffer);
+    }
+
+    if (rdkafka.rd_kafka_conf_set(
+        config,
+        "enable.ssl.certificate.verification",
+        @constCast(kafkaTlsSkipVerify.ptr),
+        &error_message,
+        error_message.len,
+    ) != rdkafka.RD_KAFKA_CONF_OK) {
+        buffer = try std.fmt.bufPrint(buffer, "connection to kafka failed: error occurred {s}", .{error_message});
+        self.log.err(buffer);
+    }
+
+    buffer = try self.allocator.alloc(u8, 256);
+    buffer = try std.fmt.bufPrint(buffer, "connecting to kafka at '{s}'", .{servers});
+    self.log.info(buffer);
+
+    self.Kakfa = kafka.create(self, config, null, mode) catch |err| {
+        buffer = try self.allocator.alloc(u8, 1024);
+        buffer = try std.fmt.bufPrint(buffer, "could not connect to kafka at '{s}'", .{servers});
+        self.log.err(buffer);
+        self.log.any(err);
+        return;
+    };
+
+    buffer = try self.allocator.alloc(u8, 256);
+    buffer = try std.fmt.bufPrint(buffer, "connected to kafka at '{s}'", .{servers});
+    self.log.info(buffer);
+
+    switch (mode) {
+        rdkafka.RD_KAFKA_PRODUCER => {
+            self.log.info("kafka publisher mode enabled");
+        },
+        rdkafka.RD_KAFKA_CONSUMER => {
+            self.log.info("kafka subscriber mode enabled");
+        },
+        else => {
+            //do nothing
+        },
+    }
+}
+
+fn loadMqttPubSub(self: *Self) !void {
     var buffer: []u8 = undefined;
     buffer = try self.allocator.alloc(u8, 512);
 

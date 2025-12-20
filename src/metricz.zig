@@ -24,6 +24,13 @@ pub const AppSQLStatsLabel = struct { hostname: []const u8, database: []const u8
 // external service response metric labels
 pub const ServiceResponseLabel = struct { method: []const u8, path: []const u8, status: u16 };
 
+// pubsub metrics labels
+pub const PubSubPublisherTotalLabel = struct { topic: []const u8 };
+pub const PubSubPublisherSuccessLabel = struct { topic: []const u8 };
+
+pub const PubSubSubscriberTotalLabel = struct { topic: []const u8, consumer: []const u8 };
+pub const PubSubSubscriberSuccessLabel = struct { topic: []const u8, consumer: []const u8 };
+
 Info: metrics.CounterVec(
     u32,
     AppInfoLabel,
@@ -124,6 +131,26 @@ SQLBucket: metrics.HistogramVec(
     },
 ).Impl,
 
+PubSubPublisherTotal: metrics.CounterVec(
+    u64,
+    PubSubPublisherTotalLabel,
+).Impl,
+
+PubSubPublisherSuccess: metrics.CounterVec(
+    u64,
+    PubSubPublisherSuccessLabel,
+).Impl,
+
+PubSubSubscriberTotal: metrics.CounterVec(
+    u64,
+    PubSubSubscriberTotalLabel,
+).Impl,
+
+PubSubSubscriberSuccess: metrics.CounterVec(
+    u64,
+    PubSubSubscriberSuccessLabel,
+).Impl,
+
 pub fn info(self: *Self, labels: AppInfoLabel) !void {
     return self.Info.incr(labels);
 }
@@ -156,6 +183,22 @@ pub fn sqlResponse(self: *Self, labels: AppSQLStatsLabel, value: f32) !void {
     return self.SQLBucket.observe(labels, value);
 }
 
+pub fn publisherTotal(self: *Self, labels: PubSubPublisherTotalLabel) !void {
+    return self.PubSubPublisherTotal.incr(labels);
+}
+
+pub fn publisherSuccess(self: *Self, labels: PubSubPublisherSuccessLabel) !void {
+    return self.PubSubPublisherSuccess.incr(labels);
+}
+
+pub fn subscriberTotal(self: *Self, labels: PubSubSubscriberTotalLabel) !void {
+    return self.PubSubSubscriberTotal.incr(labels);
+}
+
+pub fn SubscriberSuccess(self: *Self, labels: PubSubSubscriberSuccessLabel) !void {
+    return self.PubSubSubscriberSuccess.incr(labels);
+}
+
 pub fn initialize(allocator: Allocator, comptime _: metrics.RegistryOpts) !*metricz {
     const m = try allocator.create(metricz);
     errdefer allocator.destroy(m);
@@ -184,6 +227,17 @@ pub fn initialize(allocator: Allocator, comptime _: metrics.RegistryOpts) !*metr
     m.SQLBucket = try metrics.HistogramVec(f64, AppSQLStatsLabel, &.{ 0.001, 0.003, 0.005, 0.01, 0.02, 0.03, 0.05, 0.1, 0.2, 0.3, 0.5, 0.75, 1, 2, 3, 5, 10, 30 }).Impl
         .init(allocator, "app_sql_response", .{ .help = "Response time of sql query execution in seconds." });
 
+    m.PubSubPublisherTotal = try metrics.CounterVec(u64, PubSubPublisherTotalLabel).Impl
+        .init(allocator, "app_pubsub_publish_total_count", .{ .help = "Total pubsub publisher counter per topic" });
+
+    m.PubSubPublisherSuccess = try metrics.CounterVec(u64, PubSubPublisherSuccessLabel).Impl
+        .init(allocator, "app_pubsub_publish_success_count", .{ .help = "Successful pubsub publisher counter per topic" });
+
+    m.PubSubSubscriberTotal = try metrics.CounterVec(u64, PubSubSubscriberTotalLabel).Impl
+        .init(allocator, "app_pubsub_subscriber_total_count", .{ .help = "Total pubsub subscriber counter per topic per consumer group" });
+
+    m.PubSubSubscriberSuccess = try metrics.CounterVec(u64, PubSubSubscriberSuccessLabel).Impl
+        .init(allocator, "app_pubsub_subscriber_success_count", .{ .help = "Successful pubsub subscriber counter per topic per consumer group" });
     return m;
 }
 
@@ -205,7 +259,14 @@ pub fn write(self: *Self, ctx: *Context) !void {
     }
     try self.ResponseBucketHits.write(ctx.response.writer());
     try self.ResponseBucket.write(ctx.response.writer());
-    try self.SQLBucket.write(ctx.response.writer());
-    try pgz.writeMetrics(ctx.response.writer());
     try self.ServiceResponseBucket.write(ctx.response.writer());
+
+    try self.SQLBucket.write(ctx.response.writer());
+    //rewrite pg metrics labelling to match with default
+    try pgz.writeMetrics(ctx.response.writer());
+
+    try self.PubSubPublisherTotal.write(ctx.response.writer());
+    try self.PubSubPublisherSuccess.write(ctx.response.writer());
+    try self.PubSubSubscriberTotal.write(ctx.response.writer());
+    try self.PubSubSubscriberSuccess.write(ctx.response.writer());
 }

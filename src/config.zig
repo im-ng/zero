@@ -9,7 +9,7 @@ const Self = @This();
 
 const defaultPath = "./configs";
 const defaultFile = "./configs/.env";
-// const defaultFile = "/media/ng/home/zig-self-learning/zero/examples/zero-todo-htmx/configs/.env";
+// const defaultFile = "/media/ng/home/zig-self-learning/zero/examples/zero-kafka-subscriber/configs/.env";
 
 allocator: std.mem.Allocator,
 log: *root.logger,

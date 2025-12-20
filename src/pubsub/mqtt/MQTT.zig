@@ -12,8 +12,6 @@ const Thread = std.Thread;
 const Atomic = std.atomic.Value;
 const arena: type = std.heap.ArenaAllocator;
 
-const job = root.cronJob;
-const Error = root.Error;
 const utils = root.utils;
 const Context = root.Context;
 const constants = root.constants;

@@ -40,6 +40,15 @@ pub fn build(b: *std.Build) void {
     const jwt = b.dependency("jwt", .{});
     module.addImport("jwt", jwt.module("zig-jwt"));
 
+    // if (b.option(
+    //     bool,
+    //     "kafka",
+    //     "attach kafka dependencies",
+    // ) orelse false) {
+    //     module.linkSystemLibrary("rdkafka", .{ .weak = true });
+    // }
+    module.linkSystemLibrary("rdkafka", .{ .weak = true });
+
     const test_module = b.createModule(.{
         .root_source_file = b.path("src/zero.zig"),
         .target = target,
@@ -53,4 +62,13 @@ pub fn build(b: *std.Build) void {
     const run_exe_tests = b.addRunArtifact(unit_tests);
     const test_step = b.step("test", "Run tests");
     test_step.dependOn(&run_exe_tests.step);
+
+    const binary = b.addExecutable(.{
+        .name = "zero",
+        .root_module = module,
+    });
+
+    if (b.option(bool, "install-zero", "install zero cli") orelse false) {
+        b.installArtifact(binary);
+    }
 }

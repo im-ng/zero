@@ -8,6 +8,8 @@ const Error = root.Error;
 const Responder = root.responder;
 const constants = root.constants;
 const jwtClaims = root.jwtClaims;
+const kafka = root.kafka;
+const kafkaMessage = root.kafkaMessage;
 
 pub const Context = struct {
     request: *httpz.Request = undefined,
@@ -19,8 +21,10 @@ pub const Context = struct {
     Cache: root.rediz.Client = undefined,
     MQ: *root.MQTT = undefined,
     provider: *root.AuthProvder = undefined,
+    KF: *root.kafka = undefined,
 
     message: ?*mqMessage = null,
+    message2: ?*kafkaMessage = null,
 
     wsMessage: ?[]const u8 = null,
     wsClient: *root.httpz.websocket.Conn = undefined,
@@ -50,6 +54,10 @@ pub const Context = struct {
 
         if (container.pubsub) |pb| {
             c.MQ = pb;
+        }
+
+        if (container.Kakfa) |k| {
+            c.KF = k;
         }
 
         return c;
