@@ -20,6 +20,8 @@ clean:
 	rm -rf examples/zero-stream/.zig-cache examples/zero-stream/zig-out
 	rm -rf examples/zero-todo-htmx/.zig-cache examples/zero-todo-htmx/zig-out
 	rm -rf examples/zero-websocket/.zig-cache examples/zero-websocket/zig-out
+	rm -rf examples/zero-kafka-publisher/.zig-cache examples/zero-kafka-publisher/zig-out
+	rm -rf examples/zero-kafka-subscriber/.zig-cache examples/zero-kafka-subscriber/zig-out
 
 release:
 	zig build --release=fast

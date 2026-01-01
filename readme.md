@@ -19,20 +19,32 @@ Check [feature parity](./feature_parity.md) file to know more upcoming and missi
 ```bash
 ❯ zig version
 0.15.1
+
 ```
+
+zero framework comes with `kafka` support through librdkafka, so we may need to install this C Library dependency to compile the source without issues.
+
+Refer this [publisher](https://zerofmk.in/kafka-publisher.html) section for more information.
+
+```bash
+❯ sudo apt install librdkafka-dev #linux
+❯ brew install librdkafka #macos
+```
+
 
 ### How to get started?
 
-[zero-docs](https://im-ng.github.io/zero-docs/) covers all examples and documentations of the `zero` framework.  Take a deep dive into the framework, usage and outcomes of each built-in services and solutions.
+[zero-docs](https://zerofmk.in/) covers all examples and documentations of the `zero` framework.  Take a deep dive into the framework, usage and outcomes of each built-in services and solutions.
 
-- [Basic](https://im-ng.github.io/zero-docs/hello-zero.html)
-- [Authentications](https://im-ng.github.io/zero-docs/authentication.html)
-- [CRUD Operations](https://im-ng.github.io/zero-docs/htmx-crud.html)
-- [Scheduler](https://im-ng.github.io/zero-docs/cronz.html)
-- [Websockets](https://im-ng.github.io/zero-docs/websocket.html)
-- [OnStartup](https://im-ng.github.io/zero-docs/caching.html)
-- [Pub/Sub](https://im-ng.github.io/zero-docs/message-queue-publisher.html)
-- [Data Migrations](https://im-ng.github.io/zero-docs/migrations.html)
+- [Basic](https://zerofmk.in/hello-zero.html)
+- [Authentications](https://zerofmk.in/authentication.html)
+- [CRUD Operations](https://zerofmk.in/htmx-crud.html)
+- [Scheduler](https://zerofmk.in/cronz.html)
+- [Websockets](https://zerofmk.in/websocket.html)
+- [OnStartup](https://zerofmk.in/caching.html)
+- [Kafka](https://zerofmk.in/kafka-publisher.html)
+- [Pub/Sub](https://zerofmk.in/message-queue-publisher.html)
+- [Data Migrations](https://zerofmk.in/migrations.html)
 
 ### Installation
 
