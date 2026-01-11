@@ -4,7 +4,7 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    const zero = b.dependency("zero", .{ .kafka = true });
+    const zero = b.dependency("zero", .{});
 
     const exe = b.addExecutable(.{
         .name = "pubsub",
