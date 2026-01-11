@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
@@ -47,6 +48,10 @@ pub fn build(b: *std.Build) void {
     // ) orelse false) {
     //     module.linkSystemLibrary("rdkafka", .{ .weak = true });
     // }
+    if (builtin.os.tag == .macos) {
+        module.addIncludePath(.{ .cwd_relative = "/usr/local/Cellar/librdkafka/2.13.0/include" });
+        module.addLibraryPath(.{ .cwd_relative = "/usr/local/Cellar/librdkafka/2.13.0/lib" });
+    }
     module.linkSystemLibrary("rdkafka", .{ .weak = true });
 
     const test_module = b.createModule(.{
