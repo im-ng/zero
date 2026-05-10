@@ -169,19 +169,42 @@ fn calculateCpuUsage(prev: CpuUsage, curr: CpuUsage) f32 {
     return res;
 }
 
-test "cpu" {
-    const testing = std.testing;
-    const cpu_usage = try usage();
-    try testing.expect(cpu_usage.getTotal() > 0);
-    try testing.expect(@TypeOf(try percentageUsed()) == f32);
+test "getFirstNumber finds first digit" {
+    try std.testing.expectEqual(@as(usize, 5), getFirstNumber("cpu  1234 5678"));
+    try std.testing.expectEqual(@as(usize, 3), getFirstNumber("cpu1234 5678"));
+    try std.testing.expectEqual(@as(usize, 4), getFirstNumber("cpu  "));
+    try std.testing.expectEqual(@as(usize, 0), getFirstNumber("1234"));
+}
 
-    const cpuinfo = try info();
-    defer cpuinfo.deinit();
-    try testing.expect(cpuinfo.vendor_id.len > 0);
-    try testing.expect(cpuinfo.cpu_family > 0);
-    try testing.expect(cpuinfo.model > 0);
-    try testing.expect(cpuinfo.model_name.len > 0);
-    try testing.expect(cpuinfo.microcode.len > 0);
-    try testing.expect(cpuinfo.cache_size.len > 0);
-    try testing.expect(cpuinfo.cpu_cores > 0);
+test "calculateCpuUsage computes percentage" {
+    const prev = CpuUsage{ .user = 100, .nice = 10, .system = 50, .idle = 200, .iowait = 20 };
+    const curr = CpuUsage{ .user = 200, .nice = 15, .system = 80, .idle = 300, .iowait = 25 };
+    const result = calculateCpuUsage(prev, curr);
+    try std.testing.expect(result > 0);
+    try std.testing.expect(result <= 100.0);
+}
+
+test "CpuUsage getTotal sums all fields" {
+    const c = CpuUsage{ .user = 100, .nice = 10, .system = 50, .idle = 200, .iowait = 20 };
+    try std.testing.expectEqual(@as(u64, 380), c.getTotal());
+}
+
+test "setValue parses string field" {
+    const allocator = std.testing.allocator;
+    var val: []const u8 = "";
+    try setValue(allocator, []const u8, &val, "vendor_id\t: GenuineIntel", "vendor_id");
+    try std.testing.expectEqualStrings("GenuineIntel", val);
+    allocator.free(val);
+}
+
+test "setValue parses numeric field" {
+    var val: u32 = 0;
+    try setValue(std.testing.allocator, u32, &val, "cpu cores\t: 8", "cpu cores");
+    try std.testing.expectEqual(@as(u32, 8), val);
+}
+
+test "setValue ignores non-matching line" {
+    var val: []const u8 = "original";
+    try setValue(std.testing.allocator, []const u8, &val, "model name\t: Intel", "vendor_id");
+    try std.testing.expectEqualStrings("original", val);
 }

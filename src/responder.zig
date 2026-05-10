@@ -8,3 +8,13 @@ pub fn Do(comptime ActionContext: type) type {
     }
     return *const fn (ActionContext) anyerror!void;
 }
+
+test "Do void type returns no-arg function pointer" {
+    const Fn = Do(void);
+    try std.testing.expect(Fn == *const fn () anyerror!void);
+}
+
+test "Do concrete type returns single-arg function pointer" {
+    const Fn = Do(*u8);
+    try std.testing.expect(Fn == *const fn (*u8) anyerror!void);
+}

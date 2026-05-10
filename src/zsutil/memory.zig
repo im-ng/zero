@@ -82,7 +82,40 @@ test "memory" {
     try testing.expect(mem_usage.free_swap != 0);
     try testing.expect(try mem_usage.percentageUsed() <= 100.0);
 
-    // This is a badly initialization example
     const mem_usage2 = MemUsage{};
     try testing.expectError(error.MemUsageUninitialized, mem_usage2.percentageUsed());
+}
+
+test "MemUsage percentageUsed with known values" {
+    const m = MemUsage{
+        .total = 1000,
+        .free = 400,
+        .cached = 100,
+        .buffers = 50,
+    };
+    const pct = try m.percentageUsed();
+    try testing.expectApproxEqAbs(@as(f32, 45.0), pct, 0.01);
+}
+
+test "MemUsage percentageUsed zero total returns error" {
+    const m = MemUsage{ .total = 0, .free = 100 };
+    try testing.expectError(error.MemUsageUninitialized, m.percentageUsed());
+}
+
+test "setValue parses MemTotal line" {
+    var val: usize = 0;
+    try setValue(&val, "MemTotal:       16384000 kB", "MemTotal:");
+    try testing.expectEqual(@as(usize, 16384000), val);
+}
+
+test "setValue parses MemFree line" {
+    var val: usize = 0;
+    try setValue(&val, "MemFree:          204800 kB", "MemFree:");
+    try testing.expectEqual(@as(usize, 204800), val);
+}
+
+test "setValue ignores non-matching line" {
+    var val: usize = 42;
+    try setValue(&val, "SwapTotal:        4096000 kB", "MemTotal:");
+    try testing.expectEqual(@as(usize, 42), val);
 }

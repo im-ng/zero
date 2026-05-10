@@ -1,3 +1,5 @@
+const std = @import("std");
+
 pub const APP_ENVIRONMENT = "APP_ENV";
 pub const APP_NAME = "APP_NAME";
 pub const APP_VERSION = "APP_VERSION";
@@ -39,3 +41,29 @@ pub const swaggerUIBundlerPreset = "/.well-known/swagger-ui-standalone-preset.js
 pub const swaggerUICss = "/.well-known/swagger-ui.css";
 pub const swaggerUIJs = "/.well-known/swagger-ui.js";
 pub const swagger = "/.well-known/swagger";
+
+test "constants path values" {
+    try std.testing.expectEqualStrings("APP_ENV", APP_ENVIRONMENT);
+    try std.testing.expectEqualStrings("APP_NAME", APP_NAME);
+    try std.testing.expectEqualStrings("APP_VERSION", APP_VERSION);
+}
+
+test "constants port values" {
+    try std.testing.expectEqual(@as(u16, 2121), METRICZ_PORT);
+    try std.testing.expectEqual(@as(u16, 8080), HTTP_PORT);
+}
+
+test "constants status strings" {
+    try std.testing.expectEqualStrings("UP", STATUS_UP);
+    try std.testing.expectEqualStrings("DOWN", STATUS_DOWN);
+}
+
+test "constants header names" {
+    try std.testing.expectEqualStrings("authorization", AUTH_HEADER);
+    try std.testing.expectEqualStrings("x-api-key", APIKEY_HEADER);
+}
+
+test "constants regex patterns" {
+    try std.testing.expectEqualStrings("(.*)/(\\d+)", REGEXP_SPLITS);
+    try std.testing.expectEqualStrings("^(\\d+)-(\\d+)$", REGEXP_RANGES);
+}

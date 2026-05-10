@@ -88,3 +88,26 @@ pub const Host = struct {
     codename: []const u8 = "",
     hostname: []const u8 = "",
 };
+
+test "setValue parses NAME field with quotes" {
+    const allocator = std.testing.allocator;
+    var val: []const u8 = "";
+    try setValue(allocator, []const u8, &val, "NAME=\"Ubuntu\"", "NAME=");
+    try std.testing.expectEqualStrings("Ubuntu", val);
+    allocator.free(val);
+}
+
+test "setValue parses ID field without quotes" {
+    const allocator = std.testing.allocator;
+    var val: []const u8 = "";
+    try setValue(allocator, []const u8, &val, "ID=ubuntu", "ID=");
+    try std.testing.expectEqualStrings("ubuntu", val);
+    allocator.free(val);
+}
+
+test "setValue ignores non-matching line" {
+    const allocator = std.testing.allocator;
+    var val: []const u8 = "original";
+    try setValue(allocator, []const u8, &val, "VERSION=\"22.04\"", "NAME=");
+    try std.testing.expectEqualStrings("original", val);
+}

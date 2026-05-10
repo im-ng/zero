@@ -298,3 +298,60 @@ pub fn addCron(self: *Self, schedule: []const u8, name: []const u8, hook: *const
 
     self.container.log.info(msg);
 }
+
+test "expandOccurance fills range with step 1" {
+    const allocator = std.testing.allocator;
+    var map = std.AutoHashMap(u8, bool).init(allocator);
+    defer map.deinit();
+    var c = Cronz{ .container = undefined };
+    try c.expandOccurance(&map, 59, 0, 1);
+    try std.testing.expect(map.count() == 60);
+    try std.testing.expect(map.contains(0));
+    try std.testing.expect(map.contains(59));
+}
+
+test "expandOccurance fills range with step 5" {
+    const allocator = std.testing.allocator;
+    var map = std.AutoHashMap(u8, bool).init(allocator);
+    defer map.deinit();
+    var c = Cronz{ .container = undefined };
+    try c.expandOccurance(&map, 59, 0, 5);
+    try std.testing.expect(map.contains(0));
+    try std.testing.expect(map.contains(5));
+    try std.testing.expect(map.contains(55));
+    try std.testing.expect(!map.contains(3));
+}
+
+test "expandOccurance fills limited range" {
+    const allocator = std.testing.allocator;
+    var map = std.AutoHashMap(u8, bool).init(allocator);
+    defer map.deinit();
+    var c = Cronz{ .container = undefined };
+    try c.expandOccurance(&map, 23, 0, 1);
+    try std.testing.expect(map.count() == 24);
+    try std.testing.expect(map.contains(0));
+    try std.testing.expect(map.contains(23));
+    try std.testing.expect(!map.contains(24));
+}
+
+test "expandOccurance fills minutes range" {
+    const allocator = std.testing.allocator;
+    var map = std.AutoHashMap(u8, bool).init(allocator);
+    defer map.deinit();
+    var c = Cronz{ .container = undefined };
+    try c.expandOccurance(&map, 59, 0, 1);
+    try std.testing.expect(map.count() == 60);
+}
+
+test "parseSchedule rejects invalid schedule format" {
+    const allocator = std.testing.allocator;
+    var map_jobs = std.array_list.Managed(job).init(allocator);
+    defer map_jobs.deinit();
+
+    var c = Cronz{
+        .container = undefined,
+        .jobs = map_jobs,
+    };
+    const result = c.parseSchedule("* * *");
+    try std.testing.expectError(Error.CronError.BadScheduleFormat, result);
+}

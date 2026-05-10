@@ -1,5 +1,5 @@
 const std = @import("std");
-const root = @import("zero");
+const root = @import("../zero.zig");
 
 const Scheduler = @This();
 const Self = @This();

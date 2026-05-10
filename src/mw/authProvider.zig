@@ -19,14 +19,13 @@ pub const AuthMode = enum {
     OAuth,
     None,
 
-    pub const Modes = [@typeInfo(AuthMode).Enum.fields.len][:0]const u8{
-        "Basic",
-        "APIKey",
-        "OAuth",
-    };
-
     pub fn str(self: AuthMode) [:0]const u8 {
-        return Modes[@enumFromInt(self)];
+        return switch (self) {
+            .Basic => "Basic",
+            .APIKey => "APIKey",
+            .OAuth => "OAuth",
+            .None => "None",
+        };
     }
 };
 
@@ -344,4 +343,42 @@ pub fn refreshKeys(ctx: *Context) !void {
     }
 
     ctx.info("oatuh keys refreshed");
+}
+
+test "AuthMode.str returns correct strings" {
+    try std.testing.expectEqualStrings("Basic", AuthMode.Basic.str());
+    try std.testing.expectEqualStrings("APIKey", AuthMode.APIKey.str());
+    try std.testing.expectEqualStrings("OAuth", AuthMode.OAuth.str());
+}
+
+test "validateAPIKeyAuth rejects unknown API key" {
+    const allocator = std.testing.allocator;
+    var keys = std.StringHashMap([]const u8).init(allocator);
+    defer keys.deinit();
+    try keys.put("my-api-key", "valid");
+
+    var auth = AuthProvider{
+        .mode = AuthMode.APIKey,
+        .container = undefined,
+        .keys = keys,
+    };
+
+    const result = auth.validateAPIKeyAuth(allocator, "ApiKey wrong-key");
+    try std.testing.expectError(AuthError.InvalidAuthAPIHeader, result);
+}
+
+test "validateAPIKeyAuth accepts known API key" {
+    const allocator = std.testing.allocator;
+    var keys = std.StringHashMap([]const u8).init(allocator);
+    defer keys.deinit();
+    try keys.put("my-api-key", "valid");
+
+    var auth = AuthProvider{
+        .mode = AuthMode.APIKey,
+        .container = undefined,
+        .keys = keys,
+    };
+
+    _ = try auth.validateAPIKeyAuth(allocator, "ApiKey my-api-key");
+    try std.testing.expect(1 == 1);
 }
