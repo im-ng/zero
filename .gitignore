@@ -10,6 +10,7 @@ zig-out/
 # /docs
 .zig-cache
 zig-out
+zig-pkg/
 
 # custom
 /tmp

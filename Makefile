@@ -8,7 +8,7 @@ top:
 	top -pid $(pgrep -d',' basic)
 
 clean:
-	rm -rf .zig-cache zig-out
+	rm -rf .zig-cache zig-out zig-pkg
 	rm -rf examples/zero-auth/.zig-cache examples/zero-auth/zig-out
 	rm -rf examples/zero-basic/.zig-cache examples/zero-basic/zig-out
 	rm -rf examples/zero-cronz/.zig-cache examples/zero-cronz/zig-out
