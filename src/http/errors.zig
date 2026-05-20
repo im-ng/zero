@@ -57,3 +57,29 @@ test "ZeroError is PubSubClientNotAvailable" {
     const fn_zero: ZeroError!void = error.PubSubClientNotAvailable;
     try std.testing.expectError(error.PubSubClientNotAvailable, fn_zero);
 }
+
+test "ClientError union contains ServiceNotReachable" {
+    const err: ClientError!void = error.ServiceNotReachable;
+    try std.testing.expectError(error.ServiceNotReachable, err);
+}
+
+test "Err struct construction" {
+    const err = Err{
+        .message = "something went wrong",
+        .err = error.InvalidParam,
+    };
+    try std.testing.expectEqualStrings("something went wrong", err.message);
+    const errResult: HttpError!void = err.err;
+    try std.testing.expectError(error.InvalidParam, errResult);
+}
+
+test "ErrData struct construction" {
+    const inner = Err{
+        .message = "wrapped error",
+        .err = error.EntityNotFound,
+    };
+    const data = ErrData{ .data = inner };
+    try std.testing.expectEqualStrings("wrapped error", data.data.message);
+    const errResult: HttpError!void = data.data.err;
+    try std.testing.expectError(error.EntityNotFound, errResult);
+}

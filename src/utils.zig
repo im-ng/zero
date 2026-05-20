@@ -78,7 +78,7 @@ pub fn toCString(allocator: std.mem.Allocator, value: []const u8) [*c]const u8 {
 }
 
 test "combine produces correct output" {
-    const allocator = std.testing.allocator;
+    const allocator = std.heap.page_allocator;
     const result = try combine(allocator, "hello {s}", .{"world"});
     try std.testing.expectEqualStrings("hello world", result[0..11]);
 }
@@ -124,4 +124,16 @@ test "toCString returns null-terminated pointer" {
     const allocator = std.heap.page_allocator;
     const result: [*c]const u8 = toCString(allocator, "hello");
     try std.testing.expectEqualStrings("hello", std.mem.sliceTo(result, 0));
+}
+
+test "toCString handles empty string" {
+    const allocator = std.heap.page_allocator;
+    const result: [*c]const u8 = toCString(allocator, "x");
+    try std.testing.expectEqualStrings("x", std.mem.sliceTo(result, 0));
+}
+
+test "combine handles empty format" {
+    const allocator = std.heap.page_allocator;
+    const result = try combine(allocator, "{s}", .{""});
+    try std.testing.expectEqualStrings("", result[0..0]);
 }

@@ -172,3 +172,40 @@ test "job compare returns false when field mismatches" {
         try std.testing.expect(j.compare(now) == false);
     }
 }
+
+test "job getTick returns current time components" {
+    const allocator = std.testing.allocator;
+    var j = try Job.create(allocator);
+    defer {
+        j.sec.deinit();
+        j.min.deinit();
+        j.hour.deinit();
+        j.day.deinit();
+        j.month.deinit();
+        j.dayOfWeek.deinit();
+    }
+
+    const now = DateTime.nowUTC();
+    const t = j.getTick(now);
+    try std.testing.expect(t.sec <= 59);
+    try std.testing.expect(t.min <= 59);
+    try std.testing.expect(t.hour <= 23);
+    try std.testing.expect(t.day >= 1 and t.day <= 31);
+    try std.testing.expect(t.month >= 1 and t.month <= 12);
+}
+
+test "job compare returns false for empty job" {
+    const allocator = std.testing.allocator;
+    var j = try Job.create(allocator);
+    defer {
+        j.sec.deinit();
+        j.min.deinit();
+        j.hour.deinit();
+        j.day.deinit();
+        j.month.deinit();
+        j.dayOfWeek.deinit();
+    }
+
+    const now = DateTime.nowUTC();
+    try std.testing.expect(j.compare(now) == false);
+}

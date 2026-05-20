@@ -162,3 +162,43 @@ test "getIntByType parses u16 from known env var" {
     const result = try cfg.getIntByType("ZERO_TEST_INT_UNSET_XYZ", u16);
     try std.testing.expect(result == 0);
 }
+
+test "get returns empty string for unset env var" {
+    const allocator = std.testing.allocator;
+    const log = try root.logger.create(allocator);
+    defer allocator.destroy(log);
+    var cfg = config{ .allocator = allocator, .log = log };
+
+    const result = cfg.get("ZERO_TEST_GET_UNSET_XYZ");
+    try std.testing.expectEqualStrings("", result);
+}
+
+test "getAsBool returns true for true value" {
+    const allocator = std.testing.allocator;
+    const log = try root.logger.create(allocator);
+    defer allocator.destroy(log);
+    var cfg = config{ .allocator = allocator, .log = log };
+
+    const result = cfg.getAsBool("PATH");
+    _ = result;
+}
+
+test "getAsBool returns false for non-true value" {
+    const allocator = std.testing.allocator;
+    const log = try root.logger.create(allocator);
+    defer allocator.destroy(log);
+    var cfg = config{ .allocator = allocator, .log = log };
+
+    const result = cfg.getAsBool("PATH");
+    try std.testing.expect(result == false);
+}
+
+test "getAsInt returns error for non-numeric value" {
+    const allocator = std.testing.allocator;
+    const log = try root.logger.create(allocator);
+    defer allocator.destroy(log);
+    var cfg = config{ .allocator = allocator, .log = log };
+
+    const result: anyerror!u16 = cfg.getAsInt("PATH");
+    try std.testing.expectError(error.InvalidCharacter, @as(anyerror!u16, result));
+}

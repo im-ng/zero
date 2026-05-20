@@ -38,13 +38,8 @@ fn setValue(allocator: std.mem.Allocator, value: *u64, line: []const u8, section
     if (std.mem.startsWith(u8, line, section)) {
         const v = std.mem.trim(u8, line[section.len..], " kB");
 
-        // remove invalid \t character found in status listing
         var builder = std.array_list.Managed(u8).init(allocator);
         defer builder.deinit();
-
-        var trimmed: []u8 = undefined;
-        trimmed = try allocator.alloc(u8, v.len);
-        defer allocator.free(trimmed);
 
         for (v) |char| {
             if (char == '\t') {
@@ -53,7 +48,8 @@ fn setValue(allocator: std.mem.Allocator, value: *u64, line: []const u8, section
                 try builder.append(char);
             }
         }
-        trimmed = try builder.toOwnedSlice();
+        const trimmed = try builder.toOwnedSlice();
+        defer allocator.free(trimmed);
 
         _ = std.mem.replace(u8, trimmed, " ", "", trimmed);
 

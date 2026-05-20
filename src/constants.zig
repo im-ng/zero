@@ -67,3 +67,33 @@ test "constants regex patterns" {
     try std.testing.expectEqualStrings("(.*)/(\\d+)", REGEXP_SPLITS);
     try std.testing.expectEqualStrings("^(\\d+)-(\\d+)$", REGEXP_RANGES);
 }
+
+test "constants swagger paths" {
+    try std.testing.expectEqualStrings("/.well-known/swagger", SWAGGER_PATH);
+    try std.testing.expectEqualStrings("/.well-known/index.css", indexCss);
+    try std.testing.expectEqualStrings("/.well-known/index.html", indexHtml);
+    try std.testing.expectEqualStrings("/.well-known/openapi.json", OPEN_API_PATH);
+}
+
+test "constants static paths" {
+    try std.testing.expectEqualStrings("static", STATIC_DIR_NAME);
+    try std.testing.expectEqualStrings("public", PUBLIC_DIR_NAME);
+    try std.testing.expectEqualStrings("./static", STATIC_DIR);
+    try std.testing.expectEqualStrings("./public", PUBLIC_DIR);
+}
+
+test "constants index paths" {
+    try std.testing.expectEqualStrings("index.html", INDEX_FILE);
+    try std.testing.expectEqualStrings("./static/favicon.ico", FAVICON_FILE_PATH);
+}
+
+test "constants oauth redirect paths" {
+    try std.testing.expectEqualStrings("/.well-known/oauth2-redirect.html", oauthRedirect);
+    try std.testing.expectEqualStrings("/.well-known/swagger-initializer.js", swaggerInitializerJs);
+}
+
+test "constants swagger ui asset paths" {
+    try std.testing.expectEqualStrings("/.well-known/swagger-ui-bundle.js", swaggerUIBundle);
+    try std.testing.expectEqualStrings("/.well-known/swagger-ui.css", swaggerUICss);
+    try std.testing.expectEqualStrings("/.well-known/swagger-ui.js", swaggerUIJs);
+}

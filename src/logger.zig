@@ -165,3 +165,55 @@ pub fn Fatal(self: *Self, allocator: std.mem.Allocator, message: []const u8) voi
 
     std.log.err(errFormat, .{ timestamp, message });
 }
+
+test "create returns logger with default logLevel 1" {
+    const allocator = std.testing.allocator;
+    const log = try create(allocator);
+    defer allocator.destroy(log);
+    try std.testing.expectEqual(@as(u8, 1), log.logLevel);
+}
+
+test "debug suppressed when logLevel > 0" {
+    const allocator = std.testing.allocator;
+    const log = try create(allocator);
+    defer allocator.destroy(log);
+    log.logLevel = 1;
+    log.debug("should not appear");
+    try std.testing.expect(true);
+}
+
+test "info suppressed when logLevel > 1" {
+    const allocator = std.testing.allocator;
+    const log = try create(allocator);
+    defer allocator.destroy(log);
+    log.logLevel = 2;
+    log.info("should not appear");
+    try std.testing.expect(true);
+}
+
+test "warn suppressed when logLevel > 2" {
+    const allocator = std.testing.allocator;
+    const log = try create(allocator);
+    defer allocator.destroy(log);
+    log.logLevel = 3;
+    log.warn("should not appear");
+    try std.testing.expect(true);
+}
+
+test "err suppressed when logLevel > 3" {
+    const allocator = std.testing.allocator;
+    const log = try create(allocator);
+    defer allocator.destroy(log);
+    log.logLevel = 4;
+    log.err("should not appear");
+    try std.testing.expect(true);
+}
+
+test "fatal suppressed when logLevel > 5" {
+    const allocator = std.testing.allocator;
+    const log = try create(allocator);
+    defer allocator.destroy(log);
+    log.logLevel = 5;
+    log.fatal("should not appear");
+    try std.testing.expect(true);
+}

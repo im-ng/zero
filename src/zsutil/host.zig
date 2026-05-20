@@ -58,10 +58,6 @@ fn setValue(
         var builder = std.array_list.Managed(u8).init(allocator);
         defer builder.deinit();
 
-        var trimmed: []u8 = undefined;
-        trimmed = try allocator.alloc(u8, c.len);
-        defer allocator.free(trimmed);
-
         for (c) |char| {
             if (char == '\n') {
                 continue;
@@ -71,7 +67,8 @@ fn setValue(
                 try builder.append(char);
             }
         }
-        trimmed = try builder.toOwnedSlice();
+        const trimmed = try builder.toOwnedSlice();
+        defer allocator.free(trimmed);
 
         const size = std.mem.replace(u8, trimmed, " ", "", trimmed);
         value.* = try std.mem.Allocator.dupe(allocator, u8, trimmed[0 .. trimmed.len - size]);

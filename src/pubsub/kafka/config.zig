@@ -1,4 +1,4 @@
-const root = @import("../../zero.zig");
+const std = @import("std");
 const Self = @This();
 const Config = @This();
 
