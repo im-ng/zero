@@ -6,7 +6,7 @@ on:
       - main
 
 jobs:
-  test-zig-0.15.1:
+  test_zig_0_15_1:
     runs-on: ubuntu-latest
     container:
       image: docker.io/library/zig:0.15.1-alpine
@@ -36,14 +36,7 @@ jobs:
             echo "Coverage for Zig 0.15.1: 0%"
           fi
 
-      - name: Upload coverage report
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: coverage-zig-0.15.1
-          path: zig-out/kcov/test/coverage.json
-
-  test-zig-0.15.2:
+  test_zig_0_15_2:
     runs-on: ubuntu-latest
     container:
       image: docker.io/library/zig:0.15.2-alpine
