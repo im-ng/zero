@@ -25,7 +25,7 @@ jobs:
           ZIG_INSTALL_PATH: zig-out/zig
 
       - name: Extract and display coverage
-        id: coverage-0.15.1
+        id: coverage_0_15_1
         run: |
           if [ -f zig-out/kcov/test/coverage.json ]; then
             COVERAGE=$(jq -r '.percent_covered' zig-out/kcov/test/coverage.json)
@@ -55,7 +55,7 @@ jobs:
           ZIG_INSTALL_PATH: zig-out/zig
 
       - name: Extract and display coverage
-        id: coverage-0.15.2
+        id: coverage_0_15_2
         run: |
           if [ -f zig-out/kcov/test/coverage.json ]; then
             COVERAGE=$(jq -r '.percent_covered' zig-out/kcov/test/coverage.json)
