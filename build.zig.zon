@@ -2,7 +2,7 @@
     .name = .zero,
     .version = "0.0.0",
     .fingerprint = 0xabdef192c03b44cb,
-    .minimum_zig_version = "0.15.1",
+    .minimum_zig_version = "0.15.2",
     .dependencies = .{
         // .dotenv = .{ .path = "../dotenv" },
         // .httpz = .{ .path = "../http.zig" },
@@ -42,10 +42,6 @@
             .url = "git+https://github.com/im-ng/http.zig.git#d21498e2343a4eeab61a57e913f67a3862623d78",
             .hash = "httpz-0.0.0-PNVzrEnhBgBwAemUFsKHu7IrGXnIEPAo8oI6HtIaoTan",
         },
-        .dotenv = .{
-            .url = "git+https://github.com/im-ng/dotenv#82a53e32b25371ab255f150aee089e5f8ffba8c1",
-            .hash = "dotenv-0.2.2-ikMfwBB3AAC89NhL0EVbn6mRYA5z4fec8PcNKJ-P8m16",
-        },
         .zdt = .{
             .url = "git+https://codeberg.org/imng/zdt.git#fa55f4080752ce1c48f2bb392e9513f87b59d8cb",
             .hash = "zdt-0.8.1-xr0_vABUDwDExZVsT91Qid0tOc_48sI47Xhg6nbFsqqC",
@@ -53,6 +49,10 @@
         .metriks = .{
             .url = "git+https://github.com/im-ng/metrics.zig.git#2011171f3542f213b4742f96ed0934f56218b8a7",
             .hash = "metriks-0.0.0-sq540f2_AQCTNA7_ZQWKehRfXynKHT_0baiw5RFDv_3W",
+        },
+        .dotenv = .{
+            .url = "git+https://github.com/im-ng/dotenv.git#e5e09fad22499c4bedfb6cb03fb298581de3174f",
+            .hash = "dotenv-0.2.3-ikMfwFR3AAAdjNnXfM40c1ml45J2cF3axl6p1WGBfcb1",
         },
     },
     .paths = .{

@@ -76,3 +76,64 @@ pub fn toCString(allocator: std.mem.Allocator, value: []const u8) [*c]const u8 {
     buffer = std.fmt.bufPrint(buffer, "{s}", .{value}) catch unreachable;
     return @constCast(buffer.ptr);
 }
+
+test "combine produces correct output" {
+    const allocator = std.heap.page_allocator;
+    const result = try combine(allocator, "hello {s}", .{"world"});
+    try std.testing.expectEqualStrings("hello world", result[0..11]);
+}
+
+test "combine formats integer" {
+    const allocator = std.heap.page_allocator;
+    const result = try combine(allocator, "count: {d}", .{42});
+    try std.testing.expectEqualStrings("count: 42", result[0..9]);
+}
+
+test "toString wraps string in format" {
+    const allocator = std.heap.page_allocator;
+    const result = try toString(allocator, "item: {s}", "test");
+    try std.testing.expectEqualStrings("item: test", result[0..10]);
+}
+
+test "toStringFromInt formats integer" {
+    const allocator = std.heap.page_allocator;
+    const result = try toStringFromInt(allocator, "val: {d}", 99);
+    try std.testing.expectEqualStrings("val: 99", result[0..7]);
+}
+
+test "timestampz returns HH:MM:SS format" {
+    const allocator = std.heap.page_allocator;
+    const result = try timestampz(allocator);
+    try std.testing.expect(result.len == 8);
+    try std.testing.expect(result[2] == ':');
+    try std.testing.expect(result[5] == ':');
+}
+
+test "sqlTimestampz returns ISO-like format" {
+    const allocator = std.heap.page_allocator;
+    const result = try sqlTimestampz(allocator);
+    try std.testing.expect(result.len == 19);
+    try std.testing.expect(result[4] == '-');
+    try std.testing.expect(result[7] == '-');
+    try std.testing.expect(result[10] == 'T');
+    try std.testing.expect(result[13] == ':');
+    try std.testing.expect(result[16] == ':');
+}
+
+test "toCString returns null-terminated pointer" {
+    const allocator = std.heap.page_allocator;
+    const result: [*c]const u8 = toCString(allocator, "hello");
+    try std.testing.expectEqualStrings("hello", std.mem.sliceTo(result, 0));
+}
+
+test "toCString handles empty string" {
+    const allocator = std.heap.page_allocator;
+    const result: [*c]const u8 = toCString(allocator, "x");
+    try std.testing.expectEqualStrings("x", std.mem.sliceTo(result, 0));
+}
+
+test "combine handles empty format" {
+    const allocator = std.heap.page_allocator;
+    const result = try combine(allocator, "{s}", .{""});
+    try std.testing.expectEqualStrings("", result[0..0]);
+}

@@ -38,13 +38,8 @@ fn setValue(allocator: std.mem.Allocator, value: *u64, line: []const u8, section
     if (std.mem.startsWith(u8, line, section)) {
         const v = std.mem.trim(u8, line[section.len..], " kB");
 
-        // remove invalid \t character found in status listing
         var builder = std.array_list.Managed(u8).init(allocator);
         defer builder.deinit();
-
-        var trimmed: []u8 = undefined;
-        trimmed = try allocator.alloc(u8, v.len);
-        defer allocator.free(trimmed);
 
         for (v) |char| {
             if (char == '\t') {
@@ -53,7 +48,8 @@ fn setValue(allocator: std.mem.Allocator, value: *u64, line: []const u8, section
                 try builder.append(char);
             }
         }
-        trimmed = try builder.toOwnedSlice();
+        const trimmed = try builder.toOwnedSlice();
+        defer allocator.free(trimmed);
 
         _ = std.mem.replace(u8, trimmed, " ", "", trimmed);
 
@@ -63,14 +59,30 @@ fn setValue(allocator: std.mem.Allocator, value: *u64, line: []const u8, section
 
 /// Represents the current process status info.
 pub const ProcessStatus = struct {
-    /// The total amount of physical memory.
     threads: u64 = 0,
-    ///
     rssAnon: u64 = 0,
-    ///
     rssFile: u64 = 0,
-    ///
     vmHWM: u64 = 0,
-    ///
     vmRSS: u64 = 0,
 };
+
+test "setValue parses VmHWM line" {
+    const allocator = std.testing.allocator;
+    var val: u64 = 0;
+    try setValue(allocator, &val, "VmHWM:    12345 kB", "VmHWM:");
+    try std.testing.expect(val == 12345);
+}
+
+test "setValue parses Threads line" {
+    const allocator = std.testing.allocator;
+    var val: u64 = 0;
+    try setValue(allocator, &val, "Threads:\t4", "Threads:");
+    try std.testing.expect(val == 4);
+}
+
+test "setValue ignores non-matching line" {
+    const allocator = std.testing.allocator;
+    var val: u64 = 99;
+    try setValue(allocator, &val, "VmRSS:     5000 kB", "VmHWM:");
+    try std.testing.expect(val == 99);
+}

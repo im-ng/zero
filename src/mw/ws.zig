@@ -39,3 +39,22 @@ fn isWebSocketPath(_: *const wsUpgrader, req: *httpz.Request) bool {
 
     return false;
 }
+
+test "ws Config struct can be initialized" {
+    const allocator = std.testing.allocator;
+    const cfg = Config{
+        .allocator = allocator,
+        .container = undefined,
+    };
+    try std.testing.expectEqual(allocator, cfg.allocator);
+}
+
+test "ws init returns struct with container" {
+    const allocator = std.testing.allocator;
+    const cfg = Config{
+        .allocator = allocator,
+        .container = undefined,
+    };
+    const ws = try init(cfg);
+    try std.testing.expectEqual(allocator, ws.allocator);
+}

@@ -58,10 +58,6 @@ fn setValue(
         var builder = std.array_list.Managed(u8).init(allocator);
         defer builder.deinit();
 
-        var trimmed: []u8 = undefined;
-        trimmed = try allocator.alloc(u8, c.len);
-        defer allocator.free(trimmed);
-
         for (c) |char| {
             if (char == '\n') {
                 continue;
@@ -71,7 +67,8 @@ fn setValue(
                 try builder.append(char);
             }
         }
-        trimmed = try builder.toOwnedSlice();
+        const trimmed = try builder.toOwnedSlice();
+        defer allocator.free(trimmed);
 
         const size = std.mem.replace(u8, trimmed, " ", "", trimmed);
         value.* = try std.mem.Allocator.dupe(allocator, u8, trimmed[0 .. trimmed.len - size]);
@@ -88,3 +85,26 @@ pub const Host = struct {
     codename: []const u8 = "",
     hostname: []const u8 = "",
 };
+
+test "setValue parses NAME field with quotes" {
+    const allocator = std.testing.allocator;
+    var val: []const u8 = "";
+    try setValue(allocator, []const u8, &val, "NAME=\"Ubuntu\"", "NAME=");
+    try std.testing.expectEqualStrings("Ubuntu", val);
+    allocator.free(val);
+}
+
+test "setValue parses ID field without quotes" {
+    const allocator = std.testing.allocator;
+    var val: []const u8 = "";
+    try setValue(allocator, []const u8, &val, "ID=ubuntu", "ID=");
+    try std.testing.expectEqualStrings("ubuntu", val);
+    allocator.free(val);
+}
+
+test "setValue ignores non-matching line" {
+    const allocator = std.testing.allocator;
+    var val: []const u8 = "original";
+    try setValue(allocator, []const u8, &val, "VERSION=\"22.04\"", "NAME=");
+    try std.testing.expectEqualStrings("original", val);
+}

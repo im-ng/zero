@@ -10,6 +10,7 @@ zig-out/
 # /docs
 .zig-cache
 zig-out
+zig-pkg/
 
 # custom
 /tmp
@@ -21,3 +22,10 @@ keys/
 benchmark.md
 config.md
 introduction.md
+
+.zig-cache/
+spec/
+spec.md
+recommendation.md
+session*.md
+.opencode/

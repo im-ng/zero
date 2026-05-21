@@ -1,0 +1,74 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  test_zig_0_15_1:
+    runs-on: ubuntu-latest
+    container:
+      image: docker.io/library/zig:0.15.1-alpine
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          apk add --no-cache git bash jq
+
+      - name: Run tests with coverage
+        run: |
+          zig build test -Dcoverage --summary all
+        env:
+          ZIG_INSTALL_PATH: zig-out/zig
+
+      - name: Extract and display coverage
+        id: coverage_0_15_1
+        run: |
+          if [ -f zig-out/kcov/test/coverage.json ]; then
+            COVERAGE=$(jq -r '.percent_covered' zig-out/kcov/test/coverage.json)
+            echo "coverage=$COVERAGE" >> $GITHUB_OUTPUT
+            echo "Coverage for Zig 0.15.1: $COVERAGE%"
+          else
+            echo "coverage=0" >> $GITHUB_OUTPUT
+            echo "Coverage for Zig 0.15.1: 0%"
+          fi
+
+  test_zig_0_15_2:
+    runs-on: ubuntu-latest
+    container:
+      image: docker.io/library/zig:0.15.2-alpine
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          apk add --no-cache git bash jq
+
+      - name: Run tests with coverage
+        run: |
+          zig build test -Dcoverage --summary all
+        env:
+          ZIG_INSTALL_PATH: zig-out/zig
+
+      - name: Extract and display coverage
+        id: coverage_0_15_2
+        run: |
+          if [ -f zig-out/kcov/test/coverage.json ]; then
+            COVERAGE=$(jq -r '.percent_covered' zig-out/kcov/test/coverage.json)
+            echo "coverage=$COVERAGE" >> $GITHUB_OUTPUT
+            echo "Coverage for Zig 0.15.2: $COVERAGE%"
+          else
+            echo "coverage=0" >> $GITHUB_OUTPUT
+            echo "Coverage for Zig 0.15.2: 0%"
+          fi
+
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-zig-0.15.2
+          path: zig-out/kcov/test/coverage.json

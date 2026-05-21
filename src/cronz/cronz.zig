@@ -130,10 +130,11 @@ fn expandRanges(
     min: u8,
     step: u8,
 ) !void {
+    var r = try RegExp.compile(self.container.allocator, constants.REGEXP_RANGES);
+    defer r.deinit();
+
     var iterator = std.mem.splitAny(u8, value, ",");
     while (iterator.next()) |item| {
-        // global compilation crashes
-        var r = try RegExp.compile(self.container.allocator, constants.REGEXP_RANGES);
         const rangeMatches = try RegExp.captures(&r, item);
 
         if (rangeMatches) |ranges| {
@@ -145,6 +146,8 @@ fn expandRanges(
             }
 
             try self.expandOccurance(map, _max, _min, step);
+            var mut_ranges = ranges;
+            mut_ranges.deinit();
         } else {
             const _item = try std.fmt.parseInt(u8, item, 10);
             if (_item < min and _item > max) {
@@ -172,8 +175,8 @@ fn expandSteps(
     if (std.mem.eql(u8, prefix, " ") == false and
         std.mem.eql(u8, prefix, "*") == false)
     {
-        // global compilation crashes
         var r = try RegExp.compile(self.container.allocator, constants.REGEXP_RANGES);
+        defer r.deinit();
         const rangeMatches = try RegExp.captures(&r, suffix);
         if (rangeMatches == null) {
             return Error.CronError.BadScheduleFormat;
@@ -185,6 +188,8 @@ fn expandSteps(
             if (_min < min and _max > max) {
                 return Error.CronError.BadScheduleFormat;
             }
+            var mut_ranges = ranges;
+            mut_ranges.deinit();
         }
     }
 
@@ -194,23 +199,25 @@ fn expandSteps(
 }
 
 fn expandOccurances(self: *Self, value: []const u8, map: *std.AutoHashMap(u8, bool), max: u8, min: u8) !void {
+    if (value.len == 0) return;
+
     // if it *, expand to the limits
     if (std.mem.eql(u8, value, "*")) {
         try self.expandOccurance(map, max, min, 1);
         return;
     }
 
-    //*/5 1-4/5 * * *
-    // global compilation crashes
     var s = try RegExp.compile(self.container.allocator, constants.REGEXP_SPLITS);
+    defer s.deinit();
     const matches = try RegExp.captures(&s, value);
     if (matches) |matched| {
         const prefix = matched.sliceAt(1).?;
         const suffix = matched.sliceAt(2).?;
+        var mut_matched = matched;
+        mut_matched.deinit();
         return self.expandSteps(prefix, suffix, map, max, min);
     }
 
-    //55-59 1-4/5 * * *
     return self.expandRanges(value, map, max, min, 1);
 }
 
@@ -297,4 +304,262 @@ pub fn addCron(self: *Self, schedule: []const u8, name: []const u8, hook: *const
     };
 
     self.container.log.info(msg);
+}
+
+test "expandOccurance fills range with step 1" {
+    const allocator = std.testing.allocator;
+    var map = std.AutoHashMap(u8, bool).init(allocator);
+    defer map.deinit();
+    var c = Cronz{ .container = undefined };
+    try c.expandOccurance(&map, 59, 0, 1);
+    try std.testing.expect(map.count() == 60);
+    try std.testing.expect(map.contains(0));
+    try std.testing.expect(map.contains(59));
+}
+
+test "expandOccurance fills range with step 5" {
+    const allocator = std.testing.allocator;
+    var map = std.AutoHashMap(u8, bool).init(allocator);
+    defer map.deinit();
+    var c = Cronz{ .container = undefined };
+    try c.expandOccurance(&map, 59, 0, 5);
+    try std.testing.expect(map.contains(0));
+    try std.testing.expect(map.contains(5));
+    try std.testing.expect(map.contains(55));
+    try std.testing.expect(!map.contains(3));
+}
+
+test "expandOccurance fills limited range" {
+    const allocator = std.testing.allocator;
+    var map = std.AutoHashMap(u8, bool).init(allocator);
+    defer map.deinit();
+    var c = Cronz{ .container = undefined };
+    try c.expandOccurance(&map, 23, 0, 1);
+    try std.testing.expect(map.count() == 24);
+    try std.testing.expect(map.contains(0));
+    try std.testing.expect(map.contains(23));
+    try std.testing.expect(!map.contains(24));
+}
+
+test "expandOccurance fills minutes range" {
+    const allocator = std.testing.allocator;
+    var map = std.AutoHashMap(u8, bool).init(allocator);
+    defer map.deinit();
+    var c = Cronz{ .container = undefined };
+    try c.expandOccurance(&map, 59, 0, 1);
+    try std.testing.expect(map.count() == 60);
+}
+
+test "parseSchedule rejects invalid schedule format" {
+    const allocator = std.testing.allocator;
+    var map_jobs = std.array_list.Managed(job).init(allocator);
+    defer map_jobs.deinit();
+
+    var c = Cronz{
+        .container = undefined,
+        .jobs = map_jobs,
+    };
+    const result = c.parseSchedule("* * *");
+    try std.testing.expectError(Error.CronError.BadScheduleFormat, result);
+}
+
+test "parseSchedule rejects empty schedule" {
+    const allocator = std.testing.allocator;
+    var map_jobs = std.array_list.Managed(job).init(allocator);
+    defer map_jobs.deinit();
+
+    var c = Cronz{
+        .container = undefined,
+        .jobs = map_jobs,
+    };
+    const result = c.parseSchedule("");
+    try std.testing.expectError(Error.CronError.BadScheduleFormat, result);
+}
+
+test "parseSchedule rejects too-long schedule" {
+    const allocator = std.testing.allocator;
+    var map_jobs = std.array_list.Managed(job).init(allocator);
+    defer map_jobs.deinit();
+
+    var c = Cronz{
+        .container = undefined,
+        .jobs = map_jobs,
+    };
+    const result = c.parseSchedule("* * * * * * *");
+    try std.testing.expectError(Error.CronError.BadScheduleFormat, result);
+}
+
+fn mockContainer(allocator: std.mem.Allocator) root.container {
+    return root.container{
+        .allocator = allocator,
+        .appName = undefined,
+        .appVersion = undefined,
+        .log = undefined,
+        .config = undefined,
+        .metricz = undefined,
+        .authProvider = undefined,
+        .redis = undefined,
+        .rdz = undefined,
+        .SQL = undefined,
+        .services = undefined,
+        .pubsub = null,
+        .Kakfa = null,
+    };
+}
+
+test "expandRanges parses comma-separated values" {
+    const allocator = std.testing.allocator;
+    var map = std.AutoHashMap(u8, bool).init(allocator);
+    defer map.deinit();
+
+    var mc = mockContainer(allocator);
+    var c = Cronz{ .container = &mc };
+
+    try c.expandRanges("10,20,30", &map, 59, 0, 1);
+    try std.testing.expectEqual(@as(usize, 3), map.count());
+    try std.testing.expect(map.contains(10));
+    try std.testing.expect(map.contains(20));
+    try std.testing.expect(map.contains(30));
+}
+
+test "expandRanges parses range expression" {
+    const allocator = std.testing.allocator;
+    var map = std.AutoHashMap(u8, bool).init(allocator);
+    defer map.deinit();
+
+    var mc = mockContainer(allocator);
+    var c = Cronz{ .container = &mc };
+
+    try c.expandRanges("10-15", &map, 59, 0, 1);
+    try std.testing.expectEqual(@as(usize, 6), map.count());
+    try std.testing.expect(map.contains(10));
+    try std.testing.expect(map.contains(15));
+    try std.testing.expect(!map.contains(9));
+    try std.testing.expect(!map.contains(16));
+}
+
+test "expandSteps parses step expression" {
+    const allocator = std.testing.allocator;
+    var map = std.AutoHashMap(u8, bool).init(allocator);
+    defer map.deinit();
+
+    var mc = mockContainer(allocator);
+    var c = Cronz{ .container = &mc };
+
+    try c.expandSteps("*", "15", &map, 59, 0);
+    try std.testing.expectEqual(@as(usize, 4), map.count());
+    try std.testing.expect(map.contains(0));
+    try std.testing.expect(map.contains(15));
+    try std.testing.expect(map.contains(30));
+    try std.testing.expect(map.contains(45));
+}
+
+test "expandSteps parses range-with-step expression" {
+    const allocator = std.testing.allocator;
+    var map = std.AutoHashMap(u8, bool).init(allocator);
+    defer map.deinit();
+
+    var mc = mockContainer(allocator);
+    var c = Cronz{ .container = &mc };
+
+    try c.expandSteps("*", "3", &map, 10, 0);
+    try std.testing.expect(map.contains(0));
+    try std.testing.expect(map.contains(3));
+    try std.testing.expect(map.contains(6));
+    try std.testing.expect(map.contains(9));
+}
+
+test "expandOccurances dispatches wildcard" {
+    const allocator = std.testing.allocator;
+    var map = std.AutoHashMap(u8, bool).init(allocator);
+    defer map.deinit();
+
+    var mc = mockContainer(allocator);
+    var c = Cronz{ .container = &mc };
+
+    try c.expandOccurances("*", &map, 59, 0);
+    try std.testing.expectEqual(@as(usize, 60), map.count());
+}
+
+test "expandOccurances dispatches step expression" {
+    const allocator = std.testing.allocator;
+    var map = std.AutoHashMap(u8, bool).init(allocator);
+    defer map.deinit();
+
+    var mc = mockContainer(allocator);
+    var c = Cronz{ .container = &mc };
+
+    try c.expandOccurances("*/10", &map, 59, 0);
+    try std.testing.expect(map.contains(0));
+    try std.testing.expect(map.contains(10));
+    try std.testing.expect(map.contains(20));
+    try std.testing.expect(map.contains(30));
+    try std.testing.expect(map.contains(40));
+    try std.testing.expect(map.contains(50));
+}
+
+test "expandOccurances dispatches range expression" {
+    const allocator = std.testing.allocator;
+    var map = std.AutoHashMap(u8, bool).init(allocator);
+    defer map.deinit();
+
+    var mc = mockContainer(allocator);
+    var c = Cronz{ .container = &mc };
+
+    try c.expandOccurances("5-10", &map, 59, 0);
+    try std.testing.expectEqual(@as(usize, 6), map.count());
+    try std.testing.expect(map.contains(5));
+    try std.testing.expect(map.contains(10));
+}
+
+test "parseSchedule accepts valid 5-field schedule" {
+    const allocator = std.testing.allocator;
+    var map_jobs = std.array_list.Managed(job).init(allocator);
+    defer map_jobs.deinit();
+
+    var mc = mockContainer(allocator);
+    var c = Cronz{
+        .container = &mc,
+        .jobs = map_jobs,
+    };
+
+    var j = try c.parseSchedule("* * * * *");
+    defer {
+        j.sec.deinit();
+        j.min.deinit();
+        j.hour.deinit();
+        j.day.deinit();
+        j.month.deinit();
+        j.dayOfWeek.deinit();
+    }
+    try std.testing.expectEqual(@as(usize, 60), j.min.count());
+    try std.testing.expectEqual(@as(usize, 24), j.hour.count());
+    try std.testing.expectEqual(@as(usize, 32), j.day.count());
+    try std.testing.expectEqual(@as(usize, 13), j.month.count());
+    try std.testing.expectEqual(@as(usize, 0), j.dayOfWeek.count());
+}
+
+test "parseSchedule accepts valid 6-field schedule with seconds" {
+    const allocator = std.testing.allocator;
+    var map_jobs = std.array_list.Managed(job).init(allocator);
+    defer map_jobs.deinit();
+
+    var mc = mockContainer(allocator);
+    var c = Cronz{
+        .container = &mc,
+        .jobs = map_jobs,
+    };
+
+    var j = try c.parseSchedule("30 * * * * *");
+    defer {
+        j.sec.deinit();
+        j.min.deinit();
+        j.hour.deinit();
+        j.day.deinit();
+        j.month.deinit();
+        j.dayOfWeek.deinit();
+    }
+    try std.testing.expectEqual(@as(usize, 1), j.sec.count());
+    try std.testing.expect(j.sec.contains(30));
+    try std.testing.expectEqual(@as(usize, 60), j.min.count());
 }
