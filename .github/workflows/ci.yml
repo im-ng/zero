@@ -6,56 +6,32 @@ on:
       - main
 
 jobs:
-  test_zig_0_15_1:
+  testzig0152:
     runs-on: ubuntu-latest
     container:
-      image: docker.io/library/zig:0.15.1-alpine
+      image: imng/zero-kcov:0.1
+      options: --security-opt seccomp=unconfined
     steps:
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Install dependencies
+      - name: Set Zig 0.15.2 as active
         run: |
-          apk add --no-cache git bash jq
+          zig version
+          kcov --version
 
       - name: Run tests with coverage
         run: |
           zig build test -Dcoverage --summary all
-        env:
-          ZIG_INSTALL_PATH: zig-out/zig
 
       - name: Extract and display coverage
-        id: coverage_0_15_1
-        run: |
-          if [ -f zig-out/kcov/test/coverage.json ]; then
-            COVERAGE=$(jq -r '.percent_covered' zig-out/kcov/test/coverage.json)
-            echo "coverage=$COVERAGE" >> $GITHUB_OUTPUT
-            echo "Coverage for Zig 0.15.1: $COVERAGE%"
-          else
-            echo "coverage=0" >> $GITHUB_OUTPUT
-            echo "Coverage for Zig 0.15.1: 0%"
-          fi
-
-  test_zig_0_15_2:
-    runs-on: ubuntu-latest
-    container:
-      image: docker.io/library/zig:0.15.2-alpine
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Install dependencies
-        run: |
-          apk add --no-cache git bash jq
-
-      - name: Run tests with coverage
-        run: |
-          zig build test -Dcoverage --summary all
-        env:
-          ZIG_INSTALL_PATH: zig-out/zig
-
-      - name: Extract and display coverage
-        id: coverage_0_15_2
+        id: coverage0152
         run: |
           if [ -f zig-out/kcov/test/coverage.json ]; then
             COVERAGE=$(jq -r '.percent_covered' zig-out/kcov/test/coverage.json)
@@ -70,5 +46,5 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: coverage-zig-0.15.2
+          name: coveragezig0152
           path: zig-out/kcov/test/coverage.json
