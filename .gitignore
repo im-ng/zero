@@ -28,4 +28,4 @@ spec/
 spec.md
 recommendation.md
 session*.md
-
+.opencode/

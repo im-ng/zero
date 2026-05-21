@@ -1,6 +1,8 @@
 ![zero](./static/zero-fmk.png)
 
-[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/im-ng/zero)
+|                            | Coverage                    | Build Status       |
+|----------------------------|----------------------------|--------------------|
+| ![Ask DeepWiki](https://deepwiki.com/badge.svg) | ![Coverage](https://img.shields.io/badge/Coverage-95.80%25-green) | ![Build Status](https://github.com/im-ng/zero/workflows/CI/badge.svg) |
 
 Zero is a strongly opinionated web framework written in Zig, built on top of http.zig that aims for zero allocations and created to make development easier while keeping performance and observability in mind.
 
