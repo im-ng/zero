@@ -79,10 +79,29 @@ pub fn build(b: *std.Build) void {
 
     const unit_tests = b.addTest(.{
         .root_module = test_module,
+        .use_llvm = true,
     });
-    const run_exe_tests = b.addRunArtifact(unit_tests);
+
     const test_step = b.step("test", "Run tests");
-    test_step.dependOn(&run_exe_tests.step);
+
+    const coverage = b.option(bool, "coverage", "enable code coverage using kcov") orelse false;
+    if (coverage) {
+        const mkdir_kcov = b.addSystemCommand(&.{ "mkdir", "-p", "zig-out/kcov" });
+        const run_kcov = b.addSystemCommand(&.{
+            "kcov",
+            "--clean",
+            "--include-path=src/",
+            "zig-out/kcov",
+        });
+        run_kcov.addArtifactArg(unit_tests);
+        run_kcov.step.dependOn(&mkdir_kcov.step);
+
+        test_step.dependOn(&unit_tests.step);
+        test_step.dependOn(&run_kcov.step);
+    } else {
+        const run_exe_tests = b.addRunArtifact(unit_tests);
+        test_step.dependOn(&run_exe_tests.step);
+    }
 
     const binary = b.addExecutable(.{
         .name = "zero",
@@ -91,28 +110,5 @@ pub fn build(b: *std.Build) void {
 
     if (b.option(bool, "install-zero", "install zero cli") orelse false) {
         b.installArtifact(binary);
-    }
-
-    // `zig build test-bin` installs test binary for coverage tools (kcov)
-    const test_bin_step = b.step("test-bin", "Build test binary for coverage");
-    const install_test = b.addInstallArtifact(unit_tests, .{ .dest_sub_path = "test" });
-    test_bin_step.dependOn(&install_test.step);
-
-    // coverage references
-    // https://github.com/dot96gal/zcli/pull/2/files
-    const coverage = b.option(bool, "coverage", "Generate test coverage report") orelse false;
-    if (coverage) {
-        const test_bin = b.addInstallArtifact(unit_tests, .{});
-        const kcov_cmd = b.addSystemCommand(&.{
-            "kcov",
-            "--clean",
-            "--include-pattern=src/",
-            "kcov-output",
-        });
-        kcov_cmd.addArtifactArg(unit_tests);
-        kcov_cmd.step.dependOn(&test_bin.step);
-        test_step.dependOn(&kcov_cmd.step);
-    } else {
-        test_step.dependOn(&b.addRunArtifact(unit_tests).step);
     }
 }

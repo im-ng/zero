@@ -23,8 +23,6 @@ benchmark.md
 config.md
 introduction.md
 
-kcov-output/
-kcov-out/
 .zig-cache/
 spec/
 spec.md
