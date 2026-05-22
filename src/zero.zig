@@ -14,6 +14,7 @@ pub const mqttz = @import("mqttz");
 pub const jwt = @import("jwt");
 
 pub const rdkafka = @import("cimport.zig").librdkafka;
+pub const sqlitez = @import("sqlite");
 
 // zero internals
 pub const logger = @import("logger.zig");
@@ -34,6 +35,7 @@ pub const jwtClaims = AuthProvder.jwtClaims;
 
 pub const rdz = @import("datasource/rdz.zig");
 pub const SQL = @import("datasource/SQL.zig");
+pub const SQLite = @import("datasource/SQLite.zig");
 pub const migration = @import("migration/migration.zig");
 pub const migrate = @import("migration/migrate.zig");
 
