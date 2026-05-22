@@ -1,24 +1,40 @@
-![zero](./static/zero-fmk.png)
+<div style="display: flex; flex-direction: column; align-items: center;">
+  <img src="./static/zero-fmk.png" alt="zero" width="128">
+  <div style="margin-top: 20px;">
+<table style="border-collapse: collapse; width: 100%; max-width: 900px;">
+  <tr style="background-color: #f8f8f8; text-align: center;">
+    <th style="padding: 12px; border: 1px solid #ddd;">Documentation</th>
+    <th style="padding: 12px; border: 1px solid #ddd;">DeepWiki</th>
+    <th style="padding: 12px; border: 1px solid #ddd;">Coverage</th>
+    <th style="padding: 12px; border: 1px solid #ddd;">Build Status</th>
+  </tr>
+  <tr style="text-align: center;">
+    <td style="padding: 12px; border: 1px solid #ddd;"><a href="https://zerofmk.in">zerofmk.in</a></td>
+    <td style="padding: 12px; border: 1px solid #ddd;"><a href="https://deepwiki.com/badge.svg"><img src="https://deepwiki.com/badge.svg" alt="Ask DeepWiki"></a></td>
+    <td style="padding: 12px; border: 1px solid #ddd;"><img src="https://img.shields.io/badge/Coverage-95%-green" alt="Coverage"></td>
+    <td style="padding: 12px; border: 1px solid #ddd;"><a href="https://github.com/im-ng/zero/workflows/CI/badge.svg"><img src="https://github.com/im-ng/zero/workflows/CI/badge.svg" alt="Build Status"></a></td>
+  </tr>
+</table>
+  </div>
+</div>
+<br/>
+<br/>
 
-|                            | Coverage                    | Build Status       |
-|----------------------------|----------------------------|--------------------|
-| ![Ask DeepWiki](https://deepwiki.com/badge.svg) | ![Coverage](https://img.shields.io/badge/Coverage-95.80%25-green) | ![Build Status](https://github.com/im-ng/zero/workflows/CI/badge.svg) |
+**Zero** is a strongly opinionated web framework written in Zig, built on top of http.zig that aims for zero allocations and created to make development easier while keeping performance and observability in mind.
 
-Zero is a strongly opinionated web framework written in Zig, built on top of http.zig that aims for zero allocations and created to make development easier while keeping performance and observability in mind.
+**Zero** framework is completely configurable, you may isolate and attach best-in-class built-in solutions as you see fit using the 12 Factor App methodology.
 
-Zero framework is completely configurable, you may isolate and attach best-in-class built-in solutions as you see fit using the 12 Factor App methodology.
-
-zero framework has useful features like drop-in support for numerous `databases`, `queuing systems`, and external services, as well as `REST`, `authentication`, `logging`, `metrics`, `observability`, and `scheduling`.
+**Zero** framework has useful features like drop-in support for numerous `databases`, `queuing systems`, and external services, as well as `REST`, `authentication`, `logging`, `metrics`, `observability`, and `scheduling`.
 
 ### Zero mascot
 
 ![mascot](./static/iguanax128.png)
 
-### What is available? 
+### What is available?
 
 Check [feature parity](./feature_parity.md) file to know more upcoming and missing things.
 
-### Pre-requisite 
+### Pre-requisite
 
 ```bash
 ❯ zig version
@@ -35,10 +51,9 @@ Refer this [publisher](https://zerofmk.in/kafka-publisher.html) section for more
 ❯ brew install librdkafka #macos
 ```
 
-
 ### How to get started?
 
-[zero-docs](https://zerofmk.in/) covers all examples and documentations of the `zero` framework.  Take a deep dive into the framework, usage and outcomes of each built-in services and solutions.
+[zero-docs](https://zerofmk.in/) covers all examples and documentations of the `zero` framework. Take a deep dive into the framework, usage and outcomes of each built-in services and solutions.
 
 - [Basic](https://zerofmk.in/hello-zero.html)
 - [Authentications](https://zerofmk.in/authentication.html)
@@ -267,6 +282,6 @@ Refer to [Attribution](./attribution.md) file more details.
 
 [Apache](./LICENSE)
 
-This project is licensed under the Apache License 
+This project is licensed under the Apache License
 
 Please refer the LICENSE file for details.

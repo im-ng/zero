@@ -15,3 +15,4 @@
 | Dependency    | MQTT Driver                                       | [mqttz](https://github.com/karlseguin/mqttz.git)             |
 | Dependency    | JWT                                               | [zig-jwt](https://github.com/deatil/zig-jwt.git)             |
 | Duck Icon     | Used as favicon for basic app                     | [Icon](https://www.flaticon.com/free-icon/duck_6023094)      |
+| Dot Env       | Load environment maps                             | [dotenv](https://github.com/dying-will-bullet/dotenv)        |

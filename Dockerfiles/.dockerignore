@@ -1,0 +1,7 @@
+.git
+.gitignore
+**/zig-out/**
+**/build/**
+**/target/**
+!Dockerfile
+!README.md

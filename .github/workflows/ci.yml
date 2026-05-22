@@ -4,6 +4,9 @@ on:
   push:
     branches:
       - main
+  pull_request:
+    branches:
+      - main
 
 jobs:
   testzig0152:
@@ -14,18 +17,21 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Set Zig 0.15.2 as active
         run: |
           zig version
           kcov --version
+          more /etc/os-release
 
       - name: Run tests with coverage
         run: |
           zig build test -Dcoverage --summary all
 
-      - name: Extract and display coverage
-        id: coverage0152
+      - name: Extract coverage
+        id: coverage
         run: |
           if [ -f zig-out/kcov/test/coverage.json ]; then
             COVERAGE=$(jq -r '.percent_covered' zig-out/kcov/test/coverage.json)
@@ -35,6 +41,29 @@ jobs:
             echo "coverage=0" >> $GITHUB_OUTPUT
             echo "Coverage for Zig 0.15.2: 0%"
           fi
+
+      - name: Update README with coverage
+        if: always()
+        run: |
+          NEW_COVERAGE=$(jq -r '.percent_covered' zig-out/kcov/test/coverage.json | cut -d. -f1)
+          echo "Updating coverage to ${NEW_COVERAGE}%"
+          if [ "$NEW_COVERAGE" -lt 85 ]; then
+            COLOR="red"
+          elif [ "$NEW_COVERAGE" -ge 95 ]; then
+            COLOR="green"
+          else
+            COLOR="yellow"
+          fi
+          sed -i "s/Coverage-[0-9]*\.[0-9]*%-[a-z]*/Coverage-${NEW_COVERAGE}%-${COLOR}/; s/Coverage-[0-9]*%-[a-z]*/Coverage-${NEW_COVERAGE}%-${COLOR}/" readme.md
+          git config --global user.name "im-ng"
+          git config --global user.email "2039564+im-ng@users.noreply.github.com"
+          git add readme.md
+          git commit -m "chore: update coverage to $COVERAGE%" || echo "No changes to commit"
+
+      - name: Push coverage update
+        if: always()
+        run: |
+          git push
 
       - name: Upload coverage report
         if: always()
