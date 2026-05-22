@@ -1,23 +1,21 @@
-<div style="display: flex; flex-direction: column; align-items: center;">
-  <img src="./static/zero-fmk.png" alt="zero" width="128">
-  <div style="margin-top: 20px;">
-<table style="border-collapse: collapse; width: 100%; max-width: 900px;">
-  <tr style="background-color: #f8f8f8; text-align: center;">
-    <th style="padding: 12px; border: 1px solid #ddd;">Documentation</th>
-    <th style="padding: 12px; border: 1px solid #ddd;">DeepWiki</th>
-    <th style="padding: 12px; border: 1px solid #ddd;">Coverage</th>
-    <th style="padding: 12px; border: 1px solid #ddd;">Build Status</th>
-  </tr>
-  <tr style="text-align: center;">
-    <td style="padding: 12px; border: 1px solid #ddd;"><a href="https://zerofmk.in">zerofmk.in</a></td>
-    <td style="padding: 12px; border: 1px solid #ddd;"><a href="https://deepwiki.com/badge.svg"><img src="https://deepwiki.com/badge.svg" alt="Ask DeepWiki"></a></td>
-    <td style="padding: 12px; border: 1px solid #ddd;"><img src="https://img.shields.io/badge/Coverage-95%-green" alt="Coverage"></td>
-    <td style="padding: 12px; border: 1px solid #ddd;"><a href="https://github.com/im-ng/zero/workflows/CI/badge.svg"><img src="https://github.com/im-ng/zero/workflows/CI/badge.svg" alt="Build Status"></a></td>
-  </tr>
-</table>
-  </div>
-</div>
+<img src="./static/zero-fmk.png" alt="zero" width="128">
 <br/>
+<p align="center">
+    <table>
+    <tr style="background-color: #f8f8f8; text-align: center;">
+        <th style="padding: 12px; border: 1px solid #ddd;">Documentation</th>
+        <th style="padding: 12px; border: 1px solid #ddd;">DeepWiki</th>
+        <th style="padding: 12px; border: 1px solid #ddd;">Coverage</th>
+        <th style="padding: 12px; border: 1px solid #ddd;">Build Status</th>
+    </tr>
+    <tr style="text-align: center;">
+        <td style="padding: 12px; border: 1px solid #ddd;"><a href="https://zerofmk.in">zerofmk.in</a></td>
+        <td style="padding: 12px; border: 1px solid #ddd;"><a href="https://deepwiki.com/badge.svg"><img src="https://deepwiki.com/badge.svg" alt="Ask DeepWiki"></a></td>
+        <td style="padding: 12px; border: 1px solid #ddd;"><img src="https://img.shields.io/badge/Coverage-95-green" alt="Coverage"></td>
+        <td style="padding: 12px; border: 1px solid #ddd;"><a href="https://github.com/im-ng/zero/workflows/CI/badge.svg"><img src="https://github.com/im-ng/zero/workflows/CI/badge.svg" alt="Build Status"></a></td>
+    </tr>
+    </table>
+</p>
 <br/>
 
 **Zero** is a strongly opinionated web framework written in Zig, built on top of http.zig that aims for zero allocations and created to make development easier while keeping performance and observability in mind.

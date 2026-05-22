@@ -54,7 +54,7 @@ jobs:
           else
             COLOR="yellow"
           fi
-          sed -i "s/Coverage-[0-9]*\.[0-9]*%-[a-z]*/Coverage-${NEW_COVERAGE}%-${COLOR}/; s/Coverage-[0-9]*%-[a-z]*/Coverage-${NEW_COVERAGE}%-${COLOR}/" readme.md
+          sed -i "s/Coverage-[0-9]*\.[0-9]*-[a-z]*/Coverage-${NEW_COVERAGE}-${COLOR}/; s/Coverage-[0-9]*%-[a-z]*/Coverage-${NEW_COVERAGE}-${COLOR}/" readme.md
   
           git config --global --add safe.directory /__w/zero/zero
           git config --global user.name "im-ng"
