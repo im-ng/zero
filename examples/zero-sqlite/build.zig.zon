@@ -1,0 +1,15 @@
+.{
+    .name = .zerosqlite,
+    .version = "0.0.1",
+    .fingerprint = 0x8ee7340c93003d6e,
+    .minimum_zig_version = "0.15.2",
+    .dependencies = .{
+        .zero = .{ .path = "../.." },
+    },
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "src",
+        "configs",
+    },
+}

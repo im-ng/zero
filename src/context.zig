@@ -18,6 +18,7 @@ pub const Context = struct {
     container: *root.container = undefined,
 
     SQL: *root.SQL = undefined,
+    SQLite: *root.SQLite = undefined,
     Cache: root.rediz.Client = undefined,
     MQ: *root.MQTT = undefined,
     provider: *root.AuthProvder = undefined,
@@ -46,6 +47,10 @@ pub const Context = struct {
 
         if (container.SQL) |sql| {
             c.SQL = sql;
+        }
+
+        if (container.SQLite) |sqlz| {
+            c.SQLite = sqlz;
         }
 
         if (container.redis) |rdz| {

@@ -30,6 +30,7 @@ authProvider: *root.AuthProvder = undefined,
 redis: ?rediz.Client = undefined,
 rdz: ?*root.rdz = undefined,
 SQL: ?*root.SQL = undefined,
+SQLite: ?*root.SQLite = undefined,
 services: ?std.StringHashMap(*zeroClient) = undefined,
 pubsub: ?*root.MQTT = null,
 Kakfa: ?*root.kafka = null,
@@ -58,6 +59,9 @@ pub fn create(self: Self) anyerror!*container {
 
     // initialize kv
     try c.loadRedis();
+
+    // initialize sqlite
+    try c.loadSQLite();
 
     // initilize message queues
     try c.loadPubSub();
@@ -515,6 +519,11 @@ fn loadSQL(self: *Self) !void {
         return;
     }
 
+    if (std.mem.eql(u8, dialect, "sqlite") == true) {
+        try self.loadSQLite();
+        return;
+    }
+
     const hostname = self.config.get("DB_HOST");
     if (std.mem.eql(u8, hostname, "") == true) {
         buffer = try std.fmt.bufPrint(buffer, "connection to {s} failed: host name is empty.", .{dialect});
@@ -597,6 +606,44 @@ fn loadSQL(self: *Self) !void {
 
     buffer = try self.allocator.alloc(u8, 256);
     buffer = try std.fmt.bufPrint(buffer, "connected to {s} user to {s} database at '{s}:{s}'", .{ user, db, hostname, port });
+    self.log.info(buffer);
+}
+
+fn loadSQLite(self: *Self) !void {
+    var buffer: []u8 = undefined;
+    buffer = try self.allocator.alloc(u8, 512);
+
+    const dbPath = self.config.get("SQLITE_PATH");
+    if (std.mem.eql(u8, dbPath, "") == true) {
+        buffer = try std.fmt.bufPrint(buffer, "sqlite is disabled, as sqlite path is not provided.", .{});
+        self.log.debug(buffer);
+        return;
+    }
+
+    const sqlite_create = self.config.getAsBool("SQLITE_CREATE");
+    const sqlite_write = self.config.getAsBool("SQLITE_WRITE");
+    const threading = self.config.get("SQLITE_THREADING");
+
+    const threading_mode = if (std.mem.eql(u8, threading, "multi-thread"))
+        root.sqlitez.ThreadingMode.MultiThread
+    else if (std.mem.eql(u8, threading, "single-thread"))
+        root.sqlitez.ThreadingMode.SingleThread
+    else if (std.mem.eql(u8, threading, "serialized"))
+        root.sqlitez.ThreadingMode.Serialized
+    else
+        root.sqlitez.ThreadingMode.MultiThread;
+
+    self.SQLite = try root.SQLite.init(
+        self.allocator,
+        dbPath,
+        sqlite_create,
+        sqlite_write,
+        threading_mode,
+        self.log,
+        self.metricz,
+    );
+
+    buffer = try std.fmt.bufPrint(buffer, "connected to sqlite at '{s}'", .{dbPath});
     self.log.info(buffer);
 }
 
