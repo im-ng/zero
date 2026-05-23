@@ -43,7 +43,7 @@ jobs:
           fi
 
       - name: Update README with coverage
-        if: always()
+        if: github.event.pull_request.merged == true
         run: |
           NEW_COVERAGE=$(jq -r '.percent_covered' zig-out/kcov/test/coverage.json | cut -d. -f1)
           echo "Updating coverage to ${NEW_COVERAGE}%"
@@ -63,7 +63,7 @@ jobs:
           git commit -m "chore: update coverage to $COVERAGE%" || echo "No changes to commit"
 
       - name: Push coverage update
-        if: always()
+        if: github.event.pull_request.merged == true
         run: |
           git push
 
