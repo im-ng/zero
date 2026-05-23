@@ -8,17 +8,17 @@ const zul = root.zul;
 const constants = root.constants;
 const utils = root.utils;
 
-const AuthError = root.AuthProvder.AuthError;
-const AuthMode = root.AuthProvder.AuthMode;
+const AuthError = root.AuthProvider.AuthError;
+const AuthMode = root.AuthProvider.AuthMode;
 
 allocator: std.mem.Allocator,
 container: ?*root.container = undefined,
-provider: ?*root.AuthProvder = undefined,
+provider: ?*root.AuthProvider = undefined,
 
 pub const Config = struct {
     allocator: std.mem.Allocator,
     container: *root.container,
-    provider: ?*root.AuthProvder,
+    provider: ?*root.AuthProvider,
 };
 
 pub fn init(c: Config) !authz {

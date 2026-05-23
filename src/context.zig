@@ -21,7 +21,7 @@ pub const Context = struct {
     SQLite: *root.SQLite = undefined,
     Cache: root.rediz.Client = undefined,
     MQ: *root.MQTT = undefined,
-    provider: *root.AuthProvder = undefined,
+    provider: *root.AuthProvider = undefined,
     KF: *root.kafka = undefined,
 
     message: ?*mqMessage = null,

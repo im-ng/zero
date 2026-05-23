@@ -10,7 +10,7 @@ const migration = root.migration;
 const migrate = root.migrate;
 const zeroClient = root.client;
 const Cronz = root.cronz;
-const AuthProvider = root.AuthProvder;
+const AuthProvider = root.AuthProvider;
 const favoriteIcon = root.favIcon;
 
 pub const indexCss = root.indexCss;
@@ -102,7 +102,7 @@ fn getLogLevel(_: *Self, level: []const u8) u8 {
     return 1;
 }
 
-pub fn onStatup(self: *Self, hook: fn (*root.Context) anyerror!void) void {
+pub fn onStartup(self: *Self, hook: fn (*root.Context) anyerror!void) void {
     self.startupHook = &hook;
 }
 

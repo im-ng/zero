@@ -25,7 +25,7 @@ allocator: std.mem.Allocator,
 log: *root.logger = undefined,
 config: *root.config = undefined,
 metricz: *root.metricz = undefined,
-authProvider: *root.AuthProvder = undefined,
+authProvider: *root.AuthProvider = undefined,
 
 redis: ?rediz.Client = undefined,
 rdz: ?*root.rdz = undefined,

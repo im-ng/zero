@@ -15,7 +15,7 @@ const Self = @This();
 
 const decode = std.base64.Base64Decoder;
 
-const authProvider = root.AuthProvder;
+const authProvider = root.AuthProvider;
 const AuthMode = authProvider.AuthMode;
 const AuthError = authProvider.AuthError;
 const PubKey = authProvider.publiKey;
@@ -33,7 +33,7 @@ http: httpz.Server(*root.handler.Handler) = undefined,
 handler: root.handler.Handler = undefined,
 router: *httpz.Router(*root.handler.Handler, *const fn (*root.Context) anyerror!void) = undefined,
 buffer: [1024]u8 = undefined,
-provider: ?*root.AuthProvder = undefined,
+provider: ?*root.AuthProvider = undefined,
 refresherThread: ?std.Thread = undefined,
 
 pub fn create(allocator: std.mem.Allocator, container: *root.container) !*server {

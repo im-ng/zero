@@ -30,8 +30,8 @@ pub const handler = @import("handler.zig");
 pub const responder = @import("responder.zig");
 pub const tracz = @import("mw/tracz.zig");
 pub const authz = @import("mw/authz.zig");
-pub const AuthProvder = @import("mw/authProvider.zig");
-pub const jwtClaims = AuthProvder.jwtClaims;
+pub const AuthProvider = @import("mw/authProvider.zig");
+pub const jwtClaims = AuthProvider.jwtClaims;
 
 pub const rdz = @import("datasource/rdz.zig");
 pub const SQL = @import("datasource/SQL.zig");
