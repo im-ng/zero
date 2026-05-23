@@ -22,6 +22,7 @@ clean:
 	rm -rf examples/zero-websocket/.zig-cache examples/zero-websocket/zig-out
 	rm -rf examples/zero-kafka-publisher/.zig-cache examples/zero-kafka-publisher/zig-out
 	rm -rf examples/zero-kafka-subscriber/.zig-cache examples/zero-kafka-subscriber/zig-out
+	rm -rf examples/zero-sqlite/.zig-cache examples/zero-sqlite/zig-out
 
 release:
 	zig build --release=fast

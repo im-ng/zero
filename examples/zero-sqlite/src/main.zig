@@ -42,9 +42,9 @@ pub fn main() !void {
     try app.get("/sqlite/init", sqliteInit);
     try app.post("/sqlite/users", createUser);
     try app.get("/sqlite/users", listUsers);
-    try app.get("/sqlite/users/{id}", getUser);
-    try app.put("/sqlite/users/{id}", updateUser);
-    try app.delete("/sqlite/users/{id}", deleteUser);
+    try app.get("/sqlite/users/:id", getUser);
+    try app.put("/sqlite/users/:id", updateUser);
+    try app.delete("/sqlite/users/:id", deleteUser);
     try app.get("/memory", memoryUsage);
 
     try app.run();

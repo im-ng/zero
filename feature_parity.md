@@ -51,6 +51,7 @@ Instead of developing and integrating with these boilerplates, an app developer 
 -  ✅ Database support
     -  ✅ `postgres`
         - ⬜ TLS Support
+    - ✅ `sqlite`
     -  ✅ `redis`
         - ✅ Authentication enabled
     - ✅ `mqtt`

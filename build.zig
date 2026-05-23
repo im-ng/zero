@@ -112,7 +112,11 @@ pub fn build(b: *std.Build) void {
         .root_module = module,
     });
 
-    if (b.option(bool, "install-zero", "install zero cli") orelse false) {
+    if (b.option(
+        bool,
+        "install-zero",
+        "install zero cli",
+    ) orelse false) {
         b.installArtifact(binary);
     }
 }

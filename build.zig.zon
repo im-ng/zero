@@ -1,6 +1,6 @@
 .{
     .name = .zero,
-    .version = "0.0.0",
+    .version = "0.0.2",
     .fingerprint = 0xabdef192c03b44cb,
     .minimum_zig_version = "0.15.2",
     .dependencies = .{
@@ -51,7 +51,7 @@
             .hash = "metriks-0.0.0-sq540f2_AQCTNA7_ZQWKehRfXynKHT_0baiw5RFDv_3W",
         },
         .sqlite = .{
-            .url = "git+https://github.com/vrischmann/zig-sqlite.git#fb73a6cca771c0c26fbab1a1f7689c23ec786257",
+            .url = "git+https://github.com/im-ng/zig-sqlite.git#fb73a6cca771c0c26fbab1a1f7689c23ec786257",
             .hash = "sqlite-3.48.0-F2R_a8WODgDamFQx1fOrpgY7IdluD4Sr_P7G0UPxUUMr",
         },
         .dotenv = .{

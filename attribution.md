@@ -14,5 +14,6 @@
 | Dependency    | Timezone and Date handling                        | [zdt](https://codeberg.org/FObersteiner/zdt.git)             |
 | Dependency    | MQTT Driver                                       | [mqttz](https://github.com/karlseguin/mqttz.git)             |
 | Dependency    | JWT                                               | [zig-jwt](https://github.com/deatil/zig-jwt.git)             |
+| Dependency    | Load environment maps                             | [dotenv](https://github.com/dying-will-bullet/dotenv)        |
+| Dependency    | SQLite Db support                                 | [zig-sqlite](https://github.com/vrischmann/zig-sqlite.git)   |
 | Duck Icon     | Used as favicon for basic app                     | [Icon](https://www.flaticon.com/free-icon/duck_6023094)      |
-| Dot Env       | Load environment maps                             | [dotenv](https://github.com/dying-will-bullet/dotenv)        |
