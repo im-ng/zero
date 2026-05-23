@@ -23,9 +23,11 @@ benchmark.md
 config.md
 introduction.md
 
+# AI assistance
 .zig-cache/
 spec/
 spec.md
 recommendation.md
 session*.md
 .opencode/
+hallucinations/
