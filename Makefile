@@ -27,5 +27,11 @@ clean:
 release:
 	zig build --release=fast
 
+release-prod:
+	zig build --release=small --summary all
+
+ut:
+	zig build test -Dcoverage --summary all
+
 log:
 	git log --pretty=format:"%h%x09%an%x09%ad%x09%s"
