@@ -8,7 +8,7 @@ const migrate = root.migrate;
 const utils = root.utils;
 const dateTime = root.zdt.Datetime;
 
-const migrationTable =
+const migrationTablePostgres =
     \\ CREATE TABLE IF NOT EXISTS zero_migrations (
     \\ epoch BIGINT NOT NULL,
     \\ execution VARCHAR(4) NOT NULL ,
@@ -18,19 +18,33 @@ const migrationTable =
     \\ );
 ;
 
-const lastMigrationRecord = "SELECT COALESCE(MAX(epoch), 0) FROM zero_migrations;";
+const migrationTableSQLite =
+    \\ CREATE TABLE IF NOT EXISTS zero_migrations (
+    \\ epoch INTEGER NOT NULL,
+    \\ execution TEXT NOT NULL,
+    \\ start_time TEXT NOT NULL,
+    \\ duration INTEGER,
+    \\ PRIMARY KEY (epoch, execution)
+    \\ )
+;
 
-const insertMigrationRecord = "INSERT INTO zero_migrations (epoch, execution, start_time, duration) VALUES ($1, $2, $3, $4);";
+const lastMigrationRecord =
+    \\"SELECT COALESCE(MAX(epoch), 0) FROM zero_migrations;"
+;
+
+const insertMigrationRecordPostgres =
+    \\"INSERT INTO zero_migrations (epoch, execution, start_time, duration) VALUES ($1, $2, $3, $4);"
+;
 
 pub fn checkAndCreateMigrationTable(ctx: *Context) !void {
     const dialect = ctx.container.config.get("DB_DIALECT");
     if (std.mem.eql(u8, "postgres", dialect)) {
-        const id = try ctx.SQL.exec(migrationTable, .{});
+        const id = try ctx.SQL.exec(migrationTablePostgres, .{});
         if (id) |_| {
             ctx.info("migration table created");
         }
     } else if (std.mem.eql(u8, "sqlite", dialect)) {
-        ctx.SQLite.exec(migrationTable, .{}) catch |err| {
+        ctx.SQLite.exec(migrationTableSQLite, .{}) catch |err| {
             var buffer: []u8 = undefined;
             buffer = try ctx.allocator.alloc(u8, 100);
             buffer = try std.fmt.bufPrint(buffer, "migration table creation failed: {}", .{err});
@@ -48,10 +62,7 @@ pub fn lastMigration(ctx: *Context) !i64 {
             return r.get(i64, 0);
         }
     } else if (std.mem.eql(u8, "sqlite", dialect)) {
-        const result = try ctx.SQLite.queryRow(i64, lastMigrationRecord, .{});
-        if (result) |r| {
-            return r;
-        }
+        return ctx.SQLite.lastInsertRowID();
     }
 
     return 0;
@@ -64,7 +75,7 @@ pub fn insertMigration(ctx: *Context, m: *const migrate, duration: u64) !?i64 {
         const status = "UP";
         const startTime = try utils.sqlTimestampz(ctx.allocator);
 
-        const id = try ctx.SQL.exec(insertMigrationRecord, .{ epoch, status, startTime, duration });
+        const id = try ctx.SQL.exec(insertMigrationRecordPostgres, .{ epoch, status, startTime, duration });
 
         if (id) |_| {
             return id;
@@ -74,17 +85,17 @@ pub fn insertMigration(ctx: *Context, m: *const migrate, duration: u64) !?i64 {
         const status = "UP";
         const startTime = try utils.sqlTimestampz(ctx.allocator);
 
-        ctx.SQLite.exec(insertMigrationRecord, .{ epoch, status, startTime, duration }) catch |err| {
+        ctx.SQLite.exec(
+            "INSERT INTO zero_migrations (epoch, execution, start_time, duration) VALUES (?, ?, ?, ?)",
+            .{ epoch, status, startTime, duration },
+        ) catch |err| {
             var buffer: []u8 = undefined;
             buffer = try ctx.allocator.alloc(u8, 100);
-            buffer = try std.fmt.bufPrint(buffer, "migration table creation failed: {}", .{err});
+            buffer = try std.fmt.bufPrint(buffer, "migration insert failed: {}", .{err});
             return 0;
         };
 
-        const result = try ctx.SQLite.queryRow(i64, lastMigrationRecord, .{});
-        if (result) |r| {
-            return r;
-        }
+        return ctx.SQLite.lastInsertRowID();
     }
 
     return 0;
