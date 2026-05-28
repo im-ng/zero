@@ -136,10 +136,7 @@ fn printPid(self: *Self) !void {
     self.log.info(buffer);
 }
 
-pub fn run(self: *Self) !void {
-    // run startup hooks
-    try self.runStartupHooks();
-
+fn prepareDefaultRoutes(self: *Self) !void {
     // register live and health check routes
     self.httpServer.router.get(constants.LIVE_PATH, live, .{});
     self.httpServer.router.get(constants.HEALTH_PATH, health, .{});
@@ -160,6 +157,14 @@ pub fn run(self: *Self) !void {
     self.log.info(buffer);
 
     // add open api spec if available
+}
+
+pub fn run(self: *Self) !void {
+    // run startup hooks
+    try self.runStartupHooks();
+
+    // add default routes
+    try self.prepareDefaultRoutes();
 
     // start pubsub
     try self.startPubSubSubscriptions();
@@ -230,6 +235,18 @@ fn startHttpServer(self: Self) !void {
         return;
     };
     thread.join();
+}
+
+pub fn prepareHttpServer(self: Self) !std.Thread {
+    var buffer: []u8 = try self.container.allocator.alloc(u8, 100);
+    buffer = try std.fmt.bufPrint(buffer, "Starting server on port: {d}", .{self.httpServer.port});
+    self.container.log.info(buffer);
+
+    return self.httpServer.run() catch |err| {
+        buffer = try std.fmt.bufPrint(buffer, "Server starting failed: {any}. check configs.", .{error.AddressInUse});
+        self.container.log.any(err);
+        return err;
+    };
 }
 
 fn favIcon(ctx: *Context) !void {

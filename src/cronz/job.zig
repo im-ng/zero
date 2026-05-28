@@ -42,10 +42,12 @@ pub const Job: type = struct {
             return;
         };
 
+        root.cronz.current_job_name = self.name;
         self.exec(ctx) catch |err| {
             ctx.any(err);
             return;
         };
+        root.cronz.current_job_name = null;
 
         const elapsed: f32 = @floatFromInt(timer.lap() / 1000000);
 

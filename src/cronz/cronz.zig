@@ -29,6 +29,9 @@ const minutesIncluded: u8 = 5;
 const _req: *httpz.Request = undefined;
 const _res: *httpz.Response = undefined;
 
+/// Set by cronz before calling a job's exec callback. Read-only for consumers.
+pub var current_job_name: ?[]const u8 = null;
+
 ticker: time.Timer = undefined,
 thread: std.Thread = undefined,
 container: *root.container = undefined,
@@ -263,7 +266,8 @@ fn parseSchedule(self: *Self, schedule: []const u8) !job {
             index += 1;
         },
         else => {
-            // do nothing
+            // Legacy 5-field: seconds field was never set, match every second
+            try self.expandOccurance(&j.sec, totalSeconds, 0, 1);
         },
     }
 
@@ -277,6 +281,11 @@ fn parseSchedule(self: *Self, schedule: []const u8) !job {
     try self.expandOccurances(months, &j.month, totalMonths, 0);
 
     try self.expandOccurances(weekDay, &j.dayOfWeek, totalDaysOfWeek, 0);
+
+    // Safety: if dayOfWeek is empty (legacy 5-field), match every day
+    if (j.dayOfWeek.count() == 0) {
+        try self.expandOccurance(&j.dayOfWeek, totalDaysOfWeek, 0, 1);
+    }
 
     return j;
 }
