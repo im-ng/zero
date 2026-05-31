@@ -17,3 +17,4 @@
 | Dependency    | Load environment maps                             | [dotenv](https://github.com/dying-will-bullet/dotenv)        |
 | Dependency    | SQLite Db support                                 | [zig-sqlite](https://github.com/vrischmann/zig-sqlite.git)   |
 | Duck Icon     | Used as favicon for basic app                     | [Icon](https://www.flaticon.com/free-icon/duck_6023094)      |
+| New mascot    | Google Gemini                                     |                                                              |
