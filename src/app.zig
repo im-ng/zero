@@ -242,6 +242,10 @@ pub fn prepareHttpServer(self: Self) !std.Thread {
     buffer = try std.fmt.bufPrint(buffer, "Starting server on port: {d}", .{self.httpServer.port});
     self.container.log.info(buffer);
 
+    // register signal handlers
+    // TODO: make it clean
+    try self.startShutdownHandler();
+
     return self.httpServer.run() catch |err| {
         buffer = try std.fmt.bufPrint(buffer, "Server starting failed: {any}. check configs.", .{error.AddressInUse});
         self.container.log.any(err);
