@@ -545,7 +545,7 @@ test "parseSchedule accepts valid 5-field schedule" {
     try std.testing.expectEqual(@as(usize, 24), j.hour.count());
     try std.testing.expectEqual(@as(usize, 32), j.day.count());
     try std.testing.expectEqual(@as(usize, 13), j.month.count());
-    try std.testing.expectEqual(@as(usize, 0), j.dayOfWeek.count());
+    try std.testing.expectEqual(@as(usize, 7), j.dayOfWeek.count());
 }
 
 test "parseSchedule accepts valid 6-field schedule with seconds" {

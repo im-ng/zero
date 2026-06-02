@@ -19,6 +19,7 @@ zig-pkg/
 .DS_Store
 
 keys/
+docs/
 benchmark.md
 config.md
 introduction.md
