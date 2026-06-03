@@ -32,7 +32,7 @@ migrations: *root.migration = undefined,
 cronz: ?*root.cronz = null,
 startupHook: ?*const fn (*root.Context) anyerror!void = null,
 
-var hServer: *root.httpServer = undefined;
+var hServer: ?*root.httpServer = undefined;
 var AppInstance: *Self = undefined;
 
 pub fn new(allocator: std.mem.Allocator) !*App {
@@ -214,7 +214,21 @@ fn shutdown(_: c_int) callconv(.c) void {
     }
 
     std.Thread.sleep(1_000_000_000);
-    hServer.shutdown();
+
+    if (hServer) |h| {
+        h.shutdown();
+    }
+}
+
+pub fn shutdownApp(_: Self) void {
+    if (AppInstance.cronz) |cronz| {
+        cronz.destroy();
+        AppInstance.log.info("cleaning running cronz");
+    }
+
+    if (hServer) |h| {
+        h.shutdown();
+    }
 }
 
 fn startMetricsServer(self: Self) !void {
@@ -244,7 +258,7 @@ pub fn prepareHttpServer(self: Self) !std.Thread {
 
     // register signal handlers
     // TODO: make it clean
-    try self.startShutdownHandler();
+    // try self.startShutdownHandler();
 
     return self.httpServer.run() catch |err| {
         buffer = try std.fmt.bufPrint(buffer, "Server starting failed: {any}. check configs.", .{error.AddressInUse});

@@ -107,9 +107,9 @@ pub fn shutdown(self: *Self) void {
 
     self.container.destroy();
 
-    self.http.deinit();
-
     self.http.stop();
+
+    self.http.deinit();
 }
 
 fn loadAuthProviderConfig(self: *Self) anyerror!?*authProvider {
