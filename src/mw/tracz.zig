@@ -4,6 +4,7 @@ const root = @import("../zero.zig");
 
 const tracz = @This();
 const zul = root.zul;
+const utils = root.utils;
 
 allocator: std.mem.Allocator,
 
@@ -14,7 +15,7 @@ pub fn init(c: Config) !tracz {
 }
 
 pub fn execute(_: *const tracz, req: *httpz.Request, res: *httpz.Response, executor: anytype) !void {
-    const uuid = zul.UUID.v4();
+    const uuid = zul.UUID.v4(utils.io);
 
     var buffer: []u8 = undefined;
     buffer = try req.arena.alloc(u8, 36);

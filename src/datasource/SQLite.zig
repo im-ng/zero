@@ -3,131 +3,89 @@ const root = @import("../zero.zig");
 
 const SQLite = @This();
 const Self = @This();
-const sqlitez = root.sqlitez;
 
-db: sqlitez.Db,
+// Deferred sqlite stub. The real im-ng/zig-sqlite (0.16-compatible) should
+// replace this once its build is ready. Methods compile but return errors so
+// the framework builds without the C amalgamation.
+pub const SqliteDisabled = error.SqliteDisabled;
+
+allocator: std.mem.Allocator,
 log: *root.logger,
 metricz: *root.metricz,
-allocator: std.mem.Allocator,
 
 pub fn init(
     allocator: std.mem.Allocator,
     dbPath: []const u8,
     create: bool,
     write: bool,
-    threading_mode: sqlitez.ThreadingMode,
+    threading_mode: root.sqlitez.ThreadingMode,
     l: *root.logger,
     m: *root.metricz,
-) !*SQLite {
-    const source = try allocator.create(SQLite);
-    errdefer allocator.destroy(source);
-
-    const nullTermPath = try allocator.dupeZ(u8, dbPath);
-
-    const options = sqlitez.InitOptions{
-        .mode = .{ .File = nullTermPath },
-        .open_flags = .{ .write = write, .create = create },
-        .threading_mode = threading_mode,
-    };
-
+) error{SqliteDisabled}!*SQLite {
+    _ = dbPath;
+    _ = create;
+    _ = write;
+    _ = threading_mode;
+    const source = allocator.create(SQLite) catch @panic("sqlite alloc failed");
     source.* = SQLite{
-        .db = try sqlitez.Db.init(options),
+        .allocator = allocator,
         .log = l,
         .metricz = m,
-        .allocator = allocator,
     };
-
     return source;
 }
 
-pub fn queryRow(self: *SQLite, comptime Type: type, comptime query: []const u8, args: anytype) !?Type {
-    var timer = try std.time.Timer.start();
-
-    const result = try self.db.one(Type, query, .{}, args);
-
-    const duration: f32 = @floatFromInt(timer.lap() / 1000000);
-    self.recordMetrics(duration, query, "select");
-
-    return result;
+pub fn queryRow(self: *SQLite, comptime Type: type, comptime query: []const u8, args: anytype) error{SqliteDisabled}!?Type {
+    _ = self;
+    _ = query;
+    _ = args;
+    return error.SqliteDisabled;
 }
 
-pub fn queryRowContext(self: *SQLite, comptime Type: type, alloc: std.mem.Allocator, comptime query: []const u8, args: anytype) !?Type {
-    var timer = try std.time.Timer.start();
-
-    const result = try self.db.oneAlloc(Type, alloc, query, .{}, args);
-
-    const duration: f32 = @floatFromInt(timer.lap() / 1000000);
-    self.recordMetrics(duration, query, "select");
-
-    return result;
+pub fn queryRowContext(self: *SQLite, comptime Type: type, alloc: std.mem.Allocator, comptime query: []const u8, args: anytype) error{SqliteDisabled}!?Type {
+    _ = self;
+    _ = alloc;
+    _ = query;
+    _ = args;
+    return error.SqliteDisabled;
 }
 
-pub fn queryRows(self: *SQLite, comptime Type: type, alloc: std.mem.Allocator, comptime query: []const u8, args: anytype) ![]Type {
-    var timer = try std.time.Timer.start();
-
-    var stmt = try self.db.prepare(query);
-    defer stmt.deinit();
-
-    const result = try stmt.all(Type, alloc, .{}, args);
-
-    const duration: f32 = @floatFromInt(timer.lap() / 1000000);
-    self.recordMetrics(duration, query, "select");
-
-    return result;
+pub fn queryRows(self: *SQLite, comptime Type: type, alloc: std.mem.Allocator, comptime query: []const u8, args: anytype) error{SqliteDisabled}![]Type {
+    _ = self;
+    _ = alloc;
+    _ = query;
+    _ = args;
+    return error.SqliteDisabled;
 }
 
-pub fn queryRowsContext(self: *SQLite, comptime Type: type, alloc: std.mem.Allocator, comptime query: []const u8, args: anytype) ![]Type {
-    var timer = try std.time.Timer.start();
-
-    var stmt = try self.db.prepare(query);
-    defer stmt.deinit();
-
-    const result = try stmt.all(Type, alloc, .{}, args);
-
-    const duration: f32 = @floatFromInt(timer.lap() / 1000000);
-    self.recordMetrics(duration, query, "select");
-
-    return result;
+pub fn queryRowsContext(self: *SQLite, comptime Type: type, alloc: std.mem.Allocator, comptime query: []const u8, args: anytype) error{SqliteDisabled}![]Type {
+    _ = self;
+    _ = alloc;
+    _ = query;
+    _ = args;
+    return error.SqliteDisabled;
 }
 
-pub fn exec(self: *SQLite, comptime query: []const u8, args: anytype) !void {
-    var timer = try std.time.Timer.start();
-
-    const options = sqlitez.QueryOptions{};
-    try self.db.exec(query, options, args);
-
-    const duration: f32 = @floatFromInt(timer.lap() / 1000000);
-    self.recordMetrics(duration, query, "exec");
+pub fn exec(self: *SQLite, comptime query: []const u8, args: anytype) error{SqliteDisabled}!void {
+    _ = self;
+    _ = query;
+    _ = args;
+    return error.SqliteDisabled;
 }
 
-pub fn execContext(self: *SQLite, comptime query: []const u8, args: anytype) !void {
-    var timer = try std.time.Timer.start();
-
-    const options = sqlitez.QueryOptions{};
-    try self.db.exec(query, options, args);
-
-    const duration: f32 = @floatFromInt(timer.lap() / 1000000);
-    self.recordMetrics(duration, query, "exec");
+pub fn execContext(self: *SQLite, comptime query: []const u8, args: anytype) error{SqliteDisabled}!void {
+    _ = self;
+    _ = query;
+    _ = args;
+    return error.SqliteDisabled;
 }
 
 pub fn rowsAffected(self: *SQLite) usize {
-    return self.db.rowsAffected();
+    _ = self;
+    return 0;
 }
 
 pub fn lastInsertRowID(self: *SQLite) i64 {
-    return self.db.getLastInsertRowID();
-}
-
-fn recordMetrics(self: *SQLite, duration: f32, query: []const u8, queryType: []const u8) void {
-    _ = query;
-    _ = queryType;
-    self.metricz.sqlResponse(
-        .{
-            .hostname = "",
-            .database = "",
-            .query = "",
-            .operation = "",
-        },
-        duration,
-    ) catch unreachable;
+    _ = self;
+    return 0;
 }

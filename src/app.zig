@@ -207,13 +207,13 @@ fn startShutdownHandler(_: Self) !void {
     }, null);
 }
 
-fn shutdown(_: c_int) callconv(.c) void {
+fn shutdown(_: std.os.linux.SIG) callconv(.c) void {
     if (AppInstance.cronz) |cronz| {
         cronz.destroy();
         AppInstance.log.info("cleaning running cronz");
     }
 
-    std.Thread.sleep(1_000_000_000);
+    std.Io.sleep(utils.io, std.Io.Duration.fromSeconds(1), .awake) catch {};
 
     if (hServer) |h| {
         h.shutdown();
@@ -268,7 +268,7 @@ pub fn prepareHttpServer(self: Self) !std.Thread {
 }
 
 fn favIcon(ctx: *Context) !void {
-    var f = std.fs.cwd().openFile(constants.FAVICON_FILE_PATH, .{}) catch |err| switch (err) {
+    var f = std.Io.Dir.cwd().openFile(utils.io, constants.FAVICON_FILE_PATH, .{}) catch |err| switch (err) {
         else => {
             var buffer: []u8 = try ctx.allocator.alloc(u8, 100);
             buffer = try std.fmt.bufPrint(buffer, "favorite icon not found, using default", .{});
@@ -281,10 +281,10 @@ fn favIcon(ctx: *Context) !void {
             return;
         },
     };
-    defer f.close();
+    defer f.close(utils.io);
 
     // Read the file into a buffer.
-    const stat = f.stat() catch |err| {
+    const stat = f.stat(utils.io) catch |err| {
         var buffer: []u8 = try ctx.allocator.alloc(u8, 100);
         buffer = try std.fmt.bufPrint(buffer, "favorite icon not found, using default {s}", .{
             @errorName(err),
@@ -298,19 +298,8 @@ fn favIcon(ctx: *Context) !void {
         return;
     };
 
-    const buffer = f.readToEndAlloc(ctx.allocator, stat.size) catch |err| {
-        var buffer: []u8 = try ctx.allocator.alloc(u8, 100);
-        buffer = try std.fmt.bufPrint(buffer, "favorite icon not found, using default {s}", .{
-            @errorName(err),
-        });
-        ctx.info(buffer);
-
-        ctx.response.setStatus(.ok);
-        ctx.response.content_type = .ICO;
-        ctx.response.body = favoriteIcon;
-
-        return;
-    };
+    const buffer = try ctx.allocator.alloc(u8, stat.size);
+    _ = try f.readPositionalAll(utils.io, buffer, 0);
 
     ctx.response.setStatus(.ok);
     ctx.response.content_type = .ICO;
@@ -318,17 +307,13 @@ fn favIcon(ctx: *Context) !void {
 }
 
 fn readFile(ctx: *Context, path: []const u8) ![]const u8 {
-    var filePath: []u8 = undefined;
-    filePath = try ctx.allocator.alloc(u8, 100);
-    filePath = try std.fs.cwd().realpath(path, filePath);
-
-    var f = try std.fs.cwd().openFile(filePath, .{});
-    defer f.close();
+    var f = try std.Io.Dir.cwd().openFile(utils.io, path, .{});
+    defer f.close(utils.io);
 
     // Read the file into a buffer.
-    const stat = try f.stat();
-
-    const buffer = f.readToEndAlloc(ctx.allocator, stat.size);
+    const stat = try f.stat(utils.io);
+    const buffer = try ctx.allocator.alloc(u8, stat.size);
+    _ = try f.readPositionalAll(utils.io, buffer, 0);
     return buffer;
 }
 

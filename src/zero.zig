@@ -5,7 +5,7 @@ pub const constants = @import("constants.zig");
 pub const zul = @import("zul");
 pub const pgz = @import("pg");
 pub const httpz = @import("httpz");
-pub const metriks = @import("metriks");
+pub const metriks = @import("metricz");
 pub const rediz = @import("rediz");
 pub const dotenv = @import("dotenv");
 pub const zdt = @import("zdt");
@@ -81,15 +81,14 @@ pub const App = @import("app.zig");
 
 pub const std_options: std.Options = .{
     .logFn = logger.custom,
+    .panicFn = panic,
 };
 
-fn panic(_: []const u8, _: ?*std.builtin.StackTrace, _: ?usize) noreturn {
-    var it = std.debug.StackIterator.init(@returnAddress(), null);
-    var ix: usize = 0;
+fn panic(msg: []const u8, return_address: ?usize) noreturn {
+    _ = msg;
     std.log.err("=== Stack Trace ==============", .{});
-    while (it.next()) |frame| : (ix += 1) {
-        std.log.err("#{d:0>2}: 0x{X:0>16}", .{ ix, frame });
-    }
+    std.debug.dumpCurrentStackTrace(.{ .first_address = return_address });
+    std.process.exit(1);
 }
 
 pub fn main() !void {}

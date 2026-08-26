@@ -1,11 +1,11 @@
 const std = @import("std");
-const metrics = @import("metriks");
 const root = @import("zero.zig");
 const builtin = @import("builtin");
 const Allocator = std.mem.Allocator;
 const Self = @This();
 const metricz = @This();
 const pgz = root.pgz;
+const metrics = root.httpz.metriks;
 const Context = root.Context;
 const Process = root.process;
 const utils = root.utils;
@@ -200,11 +200,12 @@ pub fn SubscriberSuccess(self: *Self, labels: PubSubSubscriberSuccessLabel) !voi
 }
 
 pub fn initialize(allocator: Allocator, comptime _: metrics.RegistryOpts) !*metricz {
+    metrics.setIo(utils.io);
     const m = try allocator.create(metricz);
     errdefer allocator.destroy(m);
 
     m.Info = try metrics.CounterVec(u32, AppInfoLabel).Impl
-        .init(allocator, "app_info", .{ .help = "Info for app_name, app_version and framework_version." });
+        .init(allocator, utils.io, "app_info", .{ .help = "Info for app_name, app_version and framework_version." });
 
     m.Threads = try metrics.GaugeVec(u64, AppThreadsourceLabel).Impl
         .init(allocator, "app_threads", .{ .help = "Info of overall app threads count." });
@@ -216,28 +217,28 @@ pub fn initialize(allocator: Allocator, comptime _: metrics.RegistryOpts) !*metr
         .init(allocator, "app_memory_total", .{ .help = "Info of overall app memory total usage." });
 
     m.ResponseBucket = try metrics.HistogramVec(f64, AppHttpResponseLatencyLabel, &.{ 0.001, 0.003, 0.005, 0.01, 0.02, 0.03, 0.05, 0.1, 0.2, 0.3, 0.5, 0.75, 1, 2, 3, 5, 10, 30 }).Impl
-        .init(allocator, "app_http_response", .{ .help = "Response time of HTTP requests in seconds." });
+        .init(allocator, utils.io, "app_http_response", .{ .help = "Response time of HTTP requests in seconds." });
 
     m.ResponseBucketHits = try metrics.CounterVec(u64, AppHttpResponseHitLabel).Impl
-        .init(allocator, "app_http_response_hits", .{ .help = "Response counts of HTTP requests." });
+        .init(allocator, utils.io, "app_http_response_hits", .{ .help = "Response counts of HTTP requests." });
 
     m.ServiceResponseBucket = try metrics.HistogramVec(f64, ServiceResponseLabel, &.{ 0.001, 0.003, 0.005, 0.01, 0.02, 0.03, 0.05, 0.1, 0.2, 0.3, 0.5, 0.75, 1, 2, 3, 5, 10, 30 }).Impl
-        .init(allocator, "app_http_service_response", .{ .help = "Response time of external service requests in seconds." });
+        .init(allocator, utils.io, "app_http_service_response", .{ .help = "Response time of external service requests in seconds." });
 
     m.SQLBucket = try metrics.HistogramVec(f64, AppSQLStatsLabel, &.{ 0.001, 0.003, 0.005, 0.01, 0.02, 0.03, 0.05, 0.1, 0.2, 0.3, 0.5, 0.75, 1, 2, 3, 5, 10, 30 }).Impl
-        .init(allocator, "app_sql_response", .{ .help = "Response time of sql query execution in seconds." });
+        .init(allocator, utils.io, "app_sql_response", .{ .help = "Response time of sql query execution in seconds." });
 
     m.PubSubPublisherTotal = try metrics.CounterVec(u64, PubSubPublisherTotalLabel).Impl
-        .init(allocator, "app_pubsub_publish_total_count", .{ .help = "Total pubsub publisher counter per topic" });
+        .init(allocator, utils.io, "app_pubsub_publish_total_count", .{ .help = "Total pubsub publisher counter per topic" });
 
     m.PubSubPublisherSuccess = try metrics.CounterVec(u64, PubSubPublisherSuccessLabel).Impl
-        .init(allocator, "app_pubsub_publish_success_count", .{ .help = "Successful pubsub publisher counter per topic" });
+        .init(allocator, utils.io, "app_pubsub_publish_success_count", .{ .help = "Successful pubsub publisher counter per topic" });
 
     m.PubSubSubscriberTotal = try metrics.CounterVec(u64, PubSubSubscriberTotalLabel).Impl
-        .init(allocator, "app_pubsub_subscriber_total_count", .{ .help = "Total pubsub subscriber counter per topic per consumer group" });
+        .init(allocator, utils.io, "app_pubsub_subscriber_total_count", .{ .help = "Total pubsub subscriber counter per topic per consumer group" });
 
     m.PubSubSubscriberSuccess = try metrics.CounterVec(u64, PubSubSubscriberSuccessLabel).Impl
-        .init(allocator, "app_pubsub_subscriber_success_count", .{ .help = "Successful pubsub subscriber counter per topic per consumer group" });
+        .init(allocator, utils.io, "app_pubsub_subscriber_success_count", .{ .help = "Successful pubsub subscriber counter per topic per consumer group" });
     return m;
 }
 

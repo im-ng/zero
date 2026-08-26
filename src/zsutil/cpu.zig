@@ -1,5 +1,6 @@
 const std = @import("std");
 const root = @import("../zero.zig");
+const utils = root.utils;
 const Context = root.Context;
 
 /// The path to the CPU information file.
@@ -35,12 +36,12 @@ pub const CpuInfo = struct {
 ///
 /// Returns a `CpuInfo` struct containing the CPU information.
 pub fn info(ctx: *Context) !CpuInfo {
-    const file = try std.fs.openFileAbsolute("/proc/cpuinfo", .{});
-    defer file.close();
+    const file = try std.Io.Dir.openFileAbsolute(utils.io, "/proc/cpuinfo", .{});
+    defer file.close(utils.io);
 
     var buffer: [1024]u8 = undefined;
 
-    const bytes_read = try file.readAll(&buffer);
+    const bytes_read = try file.readPositionalAll(utils.io, &buffer, 0);
     const contents = buffer[0..bytes_read];
 
     var cpuinfo = CpuInfo{};
@@ -85,7 +86,7 @@ fn setValue(allocator: std.mem.Allocator, comptime T: type, value: *T, line: []c
 /// Returns the percentage of CPU usage as a `f32` value.
 pub fn percentageUsed() !f32 {
     const prev_stats = try usage();
-    std.Thread.sleep(update_interval);
+    std.Io.sleep(utils.io, std.Io.Duration.fromNanoseconds(update_interval), .awake) catch {};
     const curr_stats = try usage();
     return calculateCpuUsage(prev_stats, curr_stats);
 }
@@ -96,11 +97,11 @@ pub fn percentageUsed() !f32 {
 ///
 /// Returns a `CpuUsage` struct with the current CPU usage statistics, or an error if the data is invalid.
 pub fn usage() !CpuUsage {
-    const file = try std.fs.openFileAbsolute(stat_file, .{});
-    defer file.close();
+    const file = try std.Io.Dir.openFileAbsolute(utils.io, stat_file, .{});
+    defer file.close(utils.io);
 
     var buffer: [256]u8 = undefined;
-    const bytes_read = try file.readAll(&buffer);
+    const bytes_read = try file.readPositionalAll(utils.io, &buffer, 0);
     const data = buffer[0..bytes_read];
 
     var lines = std.mem.splitSequence(u8, data, "\n");

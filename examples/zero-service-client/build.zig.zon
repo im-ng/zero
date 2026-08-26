@@ -2,7 +2,7 @@
     .name = .serviceclient,
     .version = "0.0.1",
     .fingerprint = 0xe40e052ef8f4f884,
-    .minimum_zig_version = "0.15.1",
+    .minimum_zig_version = "0.16.0",
     .dependencies = .{
         .zero = .{ .path = "../../." },
     },

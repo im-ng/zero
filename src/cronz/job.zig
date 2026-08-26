@@ -37,10 +37,7 @@ pub const Job: type = struct {
 
         const ctx = context.?;
 
-        var timer = std.time.Timer.start() catch |err| {
-            ctx.any(err);
-            return;
-        };
+        const start = utils.nowMonotonic();
 
         root.cronz.current_job_name = self.name;
         self.exec(ctx) catch |err| {
@@ -49,7 +46,7 @@ pub const Job: type = struct {
         };
         root.cronz.current_job_name = null;
 
-        const elapsed: f32 = @floatFromInt(timer.lap() / 1000000);
+        const elapsed: f32 = utils.elapsedMs(start);
 
         const msg = utils.combine(
             ctx.allocator,
@@ -144,7 +141,7 @@ test "job compare returns true when all fields match" {
     try j.month.put(3, true);
     try j.dayOfWeek.put(1, true);
 
-    const now = DateTime.nowUTC();
+    const now = DateTime.nowUTC(utils.io);
     const result = j.compare(now);
     _ = result;
 }
@@ -168,7 +165,7 @@ test "job compare returns false when field mismatches" {
     try j.month.put(1, true);
     try j.dayOfWeek.put(0, true);
 
-    const now = DateTime.nowUTC();
+    const now = DateTime.nowUTC(utils.io);
     const second = now.second;
     if (!j.sec.contains(second)) {
         try std.testing.expect(j.compare(now) == false);
@@ -187,7 +184,7 @@ test "job getTick returns current time components" {
         j.dayOfWeek.deinit();
     }
 
-    const now = DateTime.nowUTC();
+    const now = DateTime.nowUTC(utils.io);
     const t = j.getTick(now);
     try std.testing.expect(t.sec <= 59);
     try std.testing.expect(t.min <= 59);
@@ -208,6 +205,6 @@ test "job compare returns false for empty job" {
         j.dayOfWeek.deinit();
     }
 
-    const now = DateTime.nowUTC();
+    const now = DateTime.nowUTC(utils.io);
     try std.testing.expect(j.compare(now) == false);
 }

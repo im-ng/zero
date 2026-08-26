@@ -32,7 +32,7 @@ pub fn create(
     const c = try ct.allocator.create(Client);
     // errdefer ct.allocator.destroy(c);
 
-    c.client = zul.http.Client.init(ct.allocator);
+    c.client = zul.http.Client.init(utils.io, ct.allocator);
     c.name = service_name;
     c.container = ct;
     c.url = _url;
@@ -200,11 +200,11 @@ fn createAndSendRequest(
         req.body(body);
     }
 
-    var timer = try std.time.Timer.start();
+    const start = utils.nowMonotonic();
 
     var res = try req.getResponse(.{});
 
-    const elapsed: f32 = @floatFromInt(timer.lap() / 1000000);
+    const elapsed: f32 = utils.elapsedMs(start);
 
     switch (res.status) { //expand more
         404 => {

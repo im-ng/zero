@@ -17,9 +17,6 @@ pub fn build(b: *std.Build) void {
     const httpz = b.dependency("httpz", .{});
     module.addImport("httpz", httpz.module("httpz"));
 
-    const metriks = b.dependency("metriks", .{});
-    module.addImport("metriks", metriks.module("metriks"));
-
     const env = b.dependency("dotenv", .{});
     module.addImport("dotenv", env.module("dotenv"));
 
@@ -55,7 +52,9 @@ pub fn build(b: *std.Build) void {
         module.addIncludePath(.{ .cwd_relative = "/usr/local/Cellar/librdkafka/2.13.0/include" });
         module.addLibraryPath(.{ .cwd_relative = "/usr/local/Cellar/librdkafka/2.13.0/lib" });
     }
-    module.linkSystemLibrary("rdkafka", .{ .weak = true });
+    module.linkSystemLibrary("rdkafka", .{
+        .weak = true,
+    });
 
     const test_module = b.createModule(.{
         .root_source_file = b.path("src/tests.zig"),
@@ -64,7 +63,6 @@ pub fn build(b: *std.Build) void {
     });
     test_module.addImport("pg", pgz.module("pg"));
     test_module.addImport("httpz", httpz.module("httpz"));
-    test_module.addImport("metriks", metriks.module("metriks"));
     test_module.addImport("dotenv", env.module("dotenv"));
     test_module.addImport("zul", zul.module("zul"));
     test_module.addImport("rediz", rediz.module("okredis"));
@@ -83,7 +81,6 @@ pub fn build(b: *std.Build) void {
 
     const unit_tests = b.addTest(.{
         .root_module = test_module,
-        .use_llvm = true,
     });
 
     const test_step = b.step("test", "Run tests");

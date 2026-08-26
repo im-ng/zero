@@ -59,7 +59,7 @@ pub fn run(self: *Self) anyerror!void {
                 continue;
             }
 
-            var timer = try std.time.Timer.start();
+            const start = util.nowMonotonic();
 
             m.run(ctx) catch |err| switch (err) {
                 else => {
@@ -68,7 +68,7 @@ pub fn run(self: *Self) anyerror!void {
                 },
             };
 
-            const duration: u64 = timer.lap() / 1000000;
+            const duration: u64 = @as(u64, @intCast(util.elapsedNanos(start) / 1_000_000));
 
             _ = try sqlMigrator.insertMigration(ctx, m, duration);
 

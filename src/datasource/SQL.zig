@@ -1,5 +1,6 @@
 const std = @import("std");
 const root = @import("../zero.zig");
+const utils = root.utils;
 const SQL = @This();
 const Self = @This();
 
@@ -55,78 +56,78 @@ pub fn recordMetrics(self: *Self, duration: f32, query: []const u8, queryType: [
 }
 
 pub fn queryRow(self: *Self, comptime query: []const u8, args: anytype) !?QueryRow {
-    var timer = try std.time.Timer.start();
+    const start = utils.nowMonotonic();
 
     const rows = try self.sql.row(query, args);
 
-    const duration: f32 = @floatFromInt(timer.lap() / 1000000);
+    const duration: f32 = utils.elapsedMs(start);
     self.recordMetrics(duration, query, "select");
 
     return rows;
 }
 
 pub fn queryRowContext(self: *Self, _: *context, comptime query: []const u8, args: anytype) !?QueryRow {
-    var timer = try std.time.Timer.start();
+    const start = utils.nowMonotonic();
 
     const results = try self.sql.row(query, args);
 
-    const duration: f32 = @floatFromInt(timer.lap() / 1000000);
+    const duration: f32 = utils.elapsedMs(start);
     self.recordMetrics(duration, query, "select");
 
     return results;
 }
 
 pub fn queryRows(self: *Self, comptime query: []const u8, args: anytype) !*Results {
-    var timer = try std.time.Timer.start();
+    const start = utils.nowMonotonic();
 
     const results = try self.sql.query(query, args);
 
-    const duration: f32 = @floatFromInt(timer.lap() / 1000000);
+    const duration: f32 = utils.elapsedMs(start);
     self.recordMetrics(duration, query, "select");
 
     return results;
 }
 
 pub fn queryRowsContext(self: *Self, _: *context, comptime query: []const u8, args: anytype) !*Results {
-    var timer = try std.time.Timer.start();
+    const start = utils.nowMonotonic();
 
     const results = try self.sql.query(query, args);
 
-    const duration: f32 = @floatFromInt(timer.lap() / 1000000);
+    const duration: f32 = utils.elapsedMs(start);
     self.recordMetrics(duration, query, "select");
 
     return results;
 }
 
 pub fn exec(self: *Self, comptime query: []const u8, args: anytype) !?i64 {
-    var timer = try std.time.Timer.start();
+    const start = utils.nowMonotonic();
 
     const id = try self.sql.exec(query, args);
 
-    const duration: f32 = @floatFromInt(timer.lap() / 1000000);
+    const duration: f32 = utils.elapsedMs(start);
     self.recordMetrics(duration, query, "insert");
 
     return id;
 }
 
 pub fn execWithContext(self: *Self, _: *context, comptime query: []const u8, args: anytype) !?i64 {
-    var timer = try std.time.Timer.start();
+    const start = utils.nowMonotonic();
 
     const id = try self.sql.exec(query, args);
 
-    const duration: f32 = @floatFromInt(timer.lap() / 1000000);
+    const duration: f32 = utils.elapsedMs(start);
     self.recordMetrics(duration, query, "insert");
 
     return id;
 }
 
 pub fn select(self: *Self, comptime _type: anytype, comptime query: []const u8, args: anytype) !?_type {
-    var timer = try std.time.Timer.start();
+    const start = utils.nowMonotonic();
 
     const row = self.sql.row(query, args);
     defer row.deinit() catch {};
 
-    const duration: f32 = @floatFromInt(timer.lap() / 1000000);
+    const duration: f32 = utils.elapsedMs(start);
     self.recordMetrics(duration, query, "select");
 
     const result = try row.to(_type, .{});
@@ -134,12 +135,12 @@ pub fn select(self: *Self, comptime _type: anytype, comptime query: []const u8, 
 }
 
 pub fn selectSlice(self: *Self, comptime _type: anytype, comptime query: []const u8, args: anytype) !*Results {
-    var timer = try std.time.Timer.start();
+    const start = utils.nowMonotonic();
 
     const row = self.sql.queryOpts(query, args);
     defer row.deinit() catch {};
 
-    const duration: f32 = @floatFromInt(timer.lap() / 1000000);
+    const duration: f32 = utils.elapsedMs(start);
     self.recordMetrics(duration, query, "select");
 
     const results = try row.mapper(_type, .{});

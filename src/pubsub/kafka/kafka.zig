@@ -28,7 +28,7 @@ const _res: *httpz.Response = undefined;
 thread: std.Thread = undefined,
 container: *root.container = undefined,
 rootContext: *root.Context = undefined,
-mu: std.Thread.Mutex = undefined,
+mu: std.Io.Mutex = undefined,
 signal: Atomic(bool) = undefined,
 config: ?*kafkaConfig,
 topic: ?*kafkaTopic,
@@ -47,7 +47,7 @@ pub fn create(
     const c = try container.allocator.create(Kafka);
     errdefer container.allocator.destroy(c);
 
-    c.mu = .{};
+    c.mu = .init;
     c.signal = Atomic(bool).init(true);
     c.container = container;
     c.subscriber = std.array_list.Managed(kafkaSubscriber).init(container.allocator);
@@ -238,7 +238,7 @@ pub fn readPayload(self: *Self, subscriber: kafkaSubscriber) !void {
 
 fn subscriptions(self: *Self) !void {
     for (self.subscriber.items) |s| {
-        std.Thread.sleep(std.time.ns_per_ms * 100);
+        std.Io.sleep(utils.io, std.Io.Duration.fromMilliseconds(100), .awake) catch {};
         const err_code: c_int = rdkafka.rd_kafka_subscribe(self.client, s.topics);
         if (err_code != rdkafka.RD_KAFKA_RESP_ERR_NO_ERROR) {
             const msg = try utils.combine(
@@ -320,9 +320,9 @@ pub fn addSubscriber(self: *Self, topic: []const u8, hook: *const fn (*root.Cont
         .exec = hook,
     };
 
-    self.mu.lock();
+    self.mu.lock(utils.io) catch {};
     try self.subscriber.append(s);
-    self.mu.unlock();
+    self.mu.unlock(utils.io);
 
     const msg = utils.combine(
         self.container.allocator,

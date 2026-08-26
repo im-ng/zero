@@ -19,7 +19,6 @@ pub const Handler = struct {
     _res: *httpz.Response = undefined,
     container: *root.container = undefined,
     ctx: *Context = undefined,
-    timer: std.time.Timer = undefined,
     wsClient: wsHandler = undefined,
     pub const WebsocketHandler = wsHandler;
 
@@ -51,12 +50,12 @@ pub const Handler = struct {
         var ctx = try Context.init(req.arena, self.container, req, res);
         defer req.arena.destroy(&ctx);
 
-        var timer = try std.time.Timer.start();
+        const start = utils.nowMonotonic();
 
         try action(&ctx);
 
         // does not include middleware executions
-        const duration: f32 = @floatFromInt(timer.lap() / 1000000);
+        const duration: f32 = utils.elapsedMs(start);
 
         try self.metric(duration, @tagName(req.method), res.status, req.url.path);
 

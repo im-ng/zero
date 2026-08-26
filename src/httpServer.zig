@@ -54,9 +54,10 @@ pub fn create(allocator: std.mem.Allocator, container: *root.container) !*server
     };
 
     hzs.http = try httpz.Server(*root.handler.Handler).init(
+        utils.io,
         hzs.container.allocator,
         .{
-            .port = hzs.port,
+            .address = httpz.Config.Address.all(hzs.port),
         },
         &hzs.handler,
     );
@@ -165,7 +166,7 @@ fn loadAuthProviderConfig(self: *Self) anyerror!?*authProvider {
             const refreshAt = try std.fmt.parseInt(i16, refreshInterval, 10);
 
             provider = try authProvider.create(self.container, .OAuth);
-            provider.?.mutex = .{};
+            provider.?.mutex = .init;
             provider.?.pathUrl = jwksUrl;
             provider.?.refreshInterval = refreshAt;
             provider.?.pubKeys = std.StringHashMap(PubKey).init(self.container.allocator);

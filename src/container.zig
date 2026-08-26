@@ -475,22 +475,22 @@ fn loadRedis(self: *Self) !void {
     const dbInt = try self.config.getAsInt("REDIS_DB");
     const portInt = try self.config.getAsInt("REDIS_PORT");
 
-    const addr = try std.net.Address.parseIp4(hostname, portInt);
-    const connection = try std.net.tcpConnectToAddress(addr);
+    const addr = try std.Io.net.IpAddress.parseIp4(hostname, portInt);
+
+    const connection = try addr.connect(utils.io, .{ .mode = .stream });
+    defer connection.close(utils.io);
 
     self.rdz = try rdzDatasource.create(self.allocator);
+    var reader = connection.reader(utils.io, &self.rdz.?.rbuf);
+    var writer = connection.writer(utils.io, &self.rdz.?.wbuf);
 
-    self.redis = rdzClient.init(connection, .{
-        .auth = .{
-            .user = null,
-            .pass = password,
-        },
-        .reader_buffer = &self.rdz.?.rbuf,
-        .writer_buffer = &self.rdz.?.wbuf,
+    self.redis = rdzClient.init(utils.io, &reader.interface, &writer.interface, .{
+        .user = null,
+        .pass = password,
     }) catch |err| {
         buffer = try std.fmt.bufPrint(buffer, "Failed to connect: {}", .{err});
         self.log.err(buffer);
-        std.posix.exit(1);
+        std.process.exit(1);
     };
 
     buffer = try std.fmt.bufPrint(buffer, "connecting to redis at '{s}:{d}' on database {d}", .{ hostname, portInt, dbInt });
@@ -591,10 +591,10 @@ fn loadSQL(self: *Self) !void {
         },
     };
 
-    self.SQL.?.sql = pgz.Pool.init(self.allocator, options) catch |err| {
+    self.SQL.?.sql = pgz.Pool.init(utils.io, self.allocator, options) catch |err| {
         buffer = try std.fmt.bufPrint(buffer, "Failed to connect: {}", .{err});
         self.log.err(buffer);
-        std.posix.exit(1);
+        std.process.exit(1);
     };
     self.SQL.?.options = &options;
 

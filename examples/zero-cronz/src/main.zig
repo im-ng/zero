@@ -9,8 +9,11 @@ pub const std_options: std.Options = .{
     .logFn = zero.logger.custom,
 };
 
-pub fn main() !void {
-    var gpa: std.heap.GeneralPurposeAllocator(.{}) = .init;
+pub fn main(init: std.process.Init) !void {
+    utils.setIo(init.io);
+    zero.config.setEnviron(init.minimal.environ);
+
+    var gpa: std.heap.DebugAllocator(.{}) = .init;
     const allocator = gpa.allocator();
     _ = gpa.detectLeaks();
 

@@ -24,7 +24,7 @@ thread: std.Thread = undefined,
 container: *root.container = undefined,
 rootContext: *root.Context = undefined,
 subscriber: std.array_list.Managed(mqSubscriber) = undefined,
-mu: std.Thread.Mutex = undefined,
+mu: std.Io.Mutex = undefined,
 signal: Atomic(bool) = undefined,
 mqtt: root.mqttz.posix.Client = undefined,
 mqttClient: ?[]const u8 = undefined,
@@ -34,7 +34,7 @@ pub fn create(container: *root.container, config: *const mqConfig) !*MQTT {
     const c = try container.allocator.create(MQTT);
     errdefer container.allocator.destroy(c);
 
-    c.mu = .{};
+    c.mu = .init;
     c.signal = Atomic(bool).init(true);
     c.container = container;
     c.subscriber = std.array_list.Managed(mqSubscriber).init(container.allocator);
@@ -114,7 +114,7 @@ fn destroryChildAllocator(self: *Self, ca: *arena) void {
 
 pub fn readPackets(self: *Self, subscriber: mqSubscriber) !void {
     while (self.signal.load(.monotonic)) {
-        std.Thread.sleep(std.time.ns_per_s);
+        std.Io.sleep(utils.io, std.Io.Duration.fromSeconds(1), .awake) catch {};
         const packet = try self.mqtt.readPacket(.{ .timeout = 1000 }) orelse {
             continue;
         };
@@ -184,7 +184,7 @@ fn subscriptions(self: *Self) !void {
             },
         };
 
-        std.Thread.sleep(std.time.ns_per_ms * 100);
+        std.Io.sleep(utils.io, std.Io.Duration.fromMilliseconds(100), .awake) catch {};
         const thread = Thread.spawn(.{}, Self.readPackets, .{ self, client }) catch |err| {
             self.container.log.any(err);
             return;
@@ -207,9 +207,9 @@ pub fn addSubscriber(self: *Self, topic: []const u8, hook: *const fn (*root.Cont
         .exec = hook,
     };
 
-    self.mu.lock();
+    self.mu.lock(utils.io) catch {};
     try self.subscriber.append(s);
-    self.mu.unlock();
+    self.mu.unlock(utils.io);
 
     const msg = utils.combine(
         self.container.allocator,

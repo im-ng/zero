@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const root = @import("zero.zig");
 const dotenv = root.dotenv;
 const constants = root.constants;
@@ -6,6 +7,15 @@ const utils = root.utils;
 
 const config = @This();
 const Self = @This();
+
+/// Process environment, set once at startup via `setEnviron` (from
+/// `std.process.Init.environ`). Under `zig build test`, `std.testing.environ`
+/// is used instead.
+var g_environ: std.process.Environ = undefined;
+
+pub fn setEnviron(e: std.process.Environ) void {
+    g_environ = e;
+}
 
 const defaultPath = "./configs";
 const defaultFile = "./configs/.env";
@@ -42,7 +52,7 @@ fn isFileRWExist(fn_dir: std.fs.Dir, fn_file_name: []const u8) !bool {
 }
 
 fn loadDefaultEnv(self: *Self) !void {
-    try dotenv.loadFrom(self.allocator, defaultFile, .{});
+    try dotenv.loadFrom(self.allocator, utils.io, defaultFile, .{});
     const msg = try utils.combine(self.allocator, "Loaded config from file: {s}", .{defaultFile});
     self.log.Info(self.allocator, msg);
 }
@@ -57,7 +67,7 @@ fn loadEnvironmentOverrides(self: *Self) !void {
         finalEnvFile = defaultFile;
     }
 
-    dotenv.loadFrom(self.allocator, finalEnvFile, .{ .override = true }) catch |err| switch (err) {
+    dotenv.loadFrom(self.allocator, utils.io, finalEnvFile, .{ .override = true }) catch |err| switch (err) {
         error.FileNotFound => {
             const msg = try utils.combine(self.allocator, "config overriden {s} file not found.", .{finalEnvFile});
             self.log.info(msg);
@@ -100,7 +110,10 @@ pub fn getIntByType(self: *Self, key: []const u8, comptime T: type) !T {
 }
 
 pub fn getOrDefault(_: *Self, key: []const u8, default: []const u8) []const u8 {
-    const value = std.posix.getenv(key);
+    const value = if (builtin.is_test)
+        std.testing.environ.getPosix(key)
+    else
+        g_environ.getPosix(key);
     if (value == null) {
         return default;
     }
