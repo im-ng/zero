@@ -1,5 +1,7 @@
 const std = @import("std");
 const root = @import("zero.zig");
+const EnvMap = std.process.Environ.Map;
+
 const App = @This();
 const Self = @This();
 const httpz = root.httpz;
@@ -23,6 +25,7 @@ pub const swaggerUIBundlerPreset = root.swaggerUIBundlerPreset;
 pub const swaggerUICss = root.swaggerUICss;
 pub const swaggerUIJs = root.swaggerUIJs;
 
+envMap: *EnvMap = undefined,
 log: *root.logger = undefined,
 config: *root.config = undefined,
 container: *root.container = undefined,
@@ -35,7 +38,7 @@ startupHook: ?*const fn (*root.Context) anyerror!void = null,
 var hServer: ?*root.httpServer = undefined;
 var AppInstance: *Self = undefined;
 
-pub fn new(allocator: std.mem.Allocator) !*App {
+pub fn new(allocator: std.mem.Allocator, em: *EnvMap) !*App {
     const app = try allocator.create(App);
     errdefer allocator.destroy(app);
 
@@ -44,6 +47,7 @@ pub fn new(allocator: std.mem.Allocator) !*App {
     const config = try root.config.create(.{
         .allocator = allocator,
         .log = log,
+        .environments = em,
     });
 
     // reset log level

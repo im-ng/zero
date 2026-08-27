@@ -32,11 +32,14 @@ const CreateUser = struct {
     email: []const u8,
 };
 
-pub fn main() !void {
-    var gpa: std.heap.GeneralPurposeAllocator(.{}) = .init;
-    const allocator = gpa.allocator();
+pub fn main(init: std.process.Init) !void {
+    utils.setIo(init.io);
 
-    const app = try App.new(allocator);
+    var gpa: std.heap.DebugAllocator(.{}) = .init;
+    const allocator = gpa.allocator();
+    _ = gpa.detectLeaks();
+
+    const app = try App.new(allocator, init.environ_map);
 
     try app.get("/", index);
     try app.get("/sqlite/init", sqliteInit);

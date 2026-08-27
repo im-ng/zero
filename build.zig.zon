@@ -19,8 +19,8 @@
             .hash = "zdt-0.9.5-xr0_vK7ZEQDFyjfdx_ds5WMEMEUCfUkOnNqLNyvaA8b9",
         },
         .dotenv = .{
-            .url = "git+https://github.com/im-ng/dotenv.git#36fa005b0cf4a1d8bde84924a5c3f37a1d71645e",
-            .hash = "dotenv-0.2.3-ikMfwBd4AACw8eSdnak5nAPg_ITdX7oxYQ0p-kATXKAQ",
+            .url = "git+https://github.com/dying-will-bullet/dotenv.git#f6dff7ce2c39ceaafd00114c7d0674376cd82b87",
+            .hash = "dotenv-0.3.0-hfaNFtm3AACGiIZx5jDPHB4Q1QGs9BEMKH-sq32ZxRXa",
         },
         .httpz = .{
             .url = "git+https://github.com/im-ng/http.zig#a150c6228fdcf5a4ae4cb38f6e0c2e7040acf7cb",

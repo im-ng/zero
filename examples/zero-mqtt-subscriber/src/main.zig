@@ -11,12 +11,14 @@ pub const std_options: std.Options = .{
 
 const pubSubTopic = "zero";
 
-pub fn main() !void {
-    var gpa: std.heap.GeneralPurposeAllocator(.{}) = .init;
+pub fn main(init: std.process.Init) !void {
+    utils.setIo(init.io);
+
+    var gpa: std.heap.DebugAllocator(.{}) = .init;
     const allocator = gpa.allocator();
     _ = gpa.detectLeaks();
 
-    const app: *App = try App.new(allocator);
+    const app = try App.new(allocator, init.environ_map);
 
     try app.addSubscription(pubSubTopic, subscribeTask);
 

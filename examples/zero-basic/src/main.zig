@@ -21,12 +21,11 @@ fn panic(msg: []const u8, return_address: ?usize) noreturn {
 
 pub fn main(init: std.process.Init) !void {
     utils.setIo(init.io);
-    zero.config.setEnviron(init.minimal.environ);
 
-    // var gpa: std.heap.DebugAllocator(.{}) = .init;
-    const allocator = init.gpa;
+    var gpa: std.heap.DebugAllocator(.{}) = .init;
+    const allocator = gpa.allocator();
 
-    const app = try App.new(allocator);
+    const app = try App.new(allocator, init.environ_map);
 
     try app.get("/", index);
 

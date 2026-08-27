@@ -25,13 +25,12 @@ pub const publicKeys = struct {
 
 pub fn main(init: std.process.Init) !void {
     utils.setIo(init.io);
-    zero.config.setEnviron(init.minimal.environ);
 
     var gpa: std.heap.DebugAllocator(.{}) = .init;
     const allocator = gpa.allocator();
     _ = gpa.detectLeaks();
 
-    const app: *App = try App.new(allocator);
+    const app = try App.new(allocator, init.environ_map);
 
     try app.addHttpService("auth-service", app.config.get("SERVICE_URL"));
 

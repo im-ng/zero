@@ -11,13 +11,12 @@ pub const std_options: std.Options = .{
 
 pub fn main(init: std.process.Init) !void {
     utils.setIo(init.io);
-    zero.config.setEnviron(init.minimal.environ);
 
     var gpa: std.heap.DebugAllocator(.{}) = .init;
     const allocator = gpa.allocator();
     _ = gpa.detectLeaks();
 
-    const app = try App.new(allocator);
+    const app = try App.new(allocator, init.environ_map);
 
     try app.addCronJob("* * * * * *", "task-1", task1);
     app.container.log.info("task 1 occurs every 5 seconds of minutes");
