@@ -14,11 +14,8 @@ const Context = zero.Context;
 const utils = zero.utils;
 
 pub fn getAll(ctx: *Context) !void {
-    const _rows = std.array_list.Managed(models.Todo).init(ctx.allocator);
-
+    var _rows = std.array_list.Managed(models.Todo).init(ctx.allocator);
     _ = try ctx.SQL.selectSlice(models.Todo, &_rows, models.getAllTodos, .{});
-    // defer rows.deinit();
-    // var res = rows.mapper(models.Todo, .{ .dupe = true });
 
     var responses = std.array_list.Managed(
         models.HandlerTodo,
@@ -27,13 +24,11 @@ pub fn getAll(ctx: *Context) !void {
     );
 
     for (_rows.items) |row| {
-        // const todo = try row.to(models.Todo, .{});
-
         const response = models.HandlerTodo{
             .id = try std.fmt.allocPrint(ctx.allocator, "{d}", .{row.id.?}),
             .description = row.description,
             .task = row.task,
-            .isDone = row.isDone,
+            .isDone = row.is_done,
             .created_at = try utils.DTtimestampz(
                 ctx.allocator,
                 row.created_at,
@@ -91,7 +86,7 @@ pub fn getTodo(ctx: *Context) !void {
         .id = try std.fmt.allocPrint(ctx.allocator, "{d}", .{row.?.id.?}),
         .description = row.?.description,
         .task = row.?.task,
-        .isDone = row.?.isDone,
+        .isDone = row.?.is_done,
     };
     response.created_at = try utils.DTtimestampz(ctx.allocator, row.?.created_at);
 
@@ -135,7 +130,7 @@ pub fn persistTodo(ctx: *Context) !void {
         ),
         .description = row.?.description,
         .task = row.?.task,
-        .isDone = row.?.isDone,
+        .isDone = row.?.is_done,
     };
     response.created_at = try utils.DTtimestampz(
         ctx.allocator,
@@ -199,27 +194,26 @@ pub fn updateTodo(ctx: *Context) !void {
         ctx.info(status);
     }
 
-    var row = try ctx.SQL.queryRow(
+    const row: ?models.Todo = try ctx.SQL.select(
+        models.Todo,
         models.getTodoByID,
         .{todoID},
-    ) orelse unreachable;
-    defer row.deinit() catch {};
-
-    const res = try row.to(models.Todo, .{});
+    );
+    // const res = try row.to(models.Todo, .{});
 
     var response = models.HandlerTodo{
         .id = try std.fmt.allocPrint(
             ctx.allocator,
             "{d}",
-            .{res.id.?},
+            .{row.?.id.?},
         ),
-        .description = res.description,
-        .task = res.task,
-        .isDone = res.isDone,
+        .description = row.?.description,
+        .task = row.?.task,
+        .isDone = row.?.is_done,
     };
     response.created_at = try utils.DTtimestampz(
         ctx.allocator,
-        res.created_at,
+        row.?.created_at,
     );
 
     var sb = Builder.init(ctx.allocator);
@@ -260,7 +254,7 @@ pub fn markDone(ctx: *Context) !void {
         ),
         .description = res.description,
         .task = res.task,
-        .isDone = res.isDone,
+        .isDone = res.is_done,
     };
     response.created_at = try utils.DTtimestampz(
         ctx.allocator,
@@ -305,7 +299,7 @@ pub fn markUndone(ctx: *Context) !void {
         ),
         .description = res.description,
         .task = res.task,
-        .isDone = res.isDone,
+        .isDone = res.is_done,
     };
     response.created_at = try utils.DTtimestampz(ctx.allocator, res.created_at);
 

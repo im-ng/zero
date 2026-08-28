@@ -181,7 +181,7 @@ pub fn select(self: *Self, comptime _type: anytype, comptime query: []const u8, 
     const conn = try self.sql.acquire();
     defer self.sql.release(conn);
 
-    const row = try conn.query(query, args);
+    const row = try conn.queryOpts(query, args, .{ .column_names = true });
     defer row.deinit();
 
     var result: _type = undefined;
@@ -207,13 +207,12 @@ pub fn selectSlice(
     const conn = try self.sql.acquire();
     defer self.sql.release(conn);
 
-    const rows = try conn.query(query, args);
+    const rows = try conn.queryOpts(query, args, .{ .column_names = true });
     defer rows.deinit();
 
     var res = rows.mapper(_type, .{ .dupe = true });
     while (try res.next()) |T| {
-        self.log.any(T);
-        list.append(T);
+        try list.append(T);
     }
 
     const duration: f32 = utils.elapsedMs(start);
