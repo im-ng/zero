@@ -9,6 +9,7 @@ const Results = root.pgz.Result;
 const QueryRow = root.pgz.QueryRow;
 const context = root.Context;
 const sqlStats = root.metricz.AppSQLStatsLabel;
+const Mapper = root.pgz.Mapper;
 
 sql: *pgz.Pool,
 log: *root.logger,
@@ -58,7 +59,10 @@ pub fn recordMetrics(self: *Self, duration: f32, query: []const u8, queryType: [
 pub fn queryRow(self: *Self, comptime query: []const u8, args: anytype) !?QueryRow {
     const start = utils.nowMonotonic();
 
-    const rows = try self.sql.row(query, args);
+    const conn = try self.sql.acquire();
+    defer self.sql.release(conn);
+
+    const rows = (try conn.row(query, args)) orelse unreachable;
 
     const duration: f32 = utils.elapsedMs(start);
     self.recordMetrics(duration, query, "select");
@@ -69,40 +73,80 @@ pub fn queryRow(self: *Self, comptime query: []const u8, args: anytype) !?QueryR
 pub fn queryRowContext(self: *Self, _: *context, comptime query: []const u8, args: anytype) !?QueryRow {
     const start = utils.nowMonotonic();
 
-    const results = try self.sql.row(query, args);
+    const conn = try self.sql.acquire();
+    defer self.sql.release(conn);
+
+    const rows = conn.row(query, args) catch |err| {
+        if (err == error.PG) {
+            if (conn.err) |pge| {
+                self.log.err(pge.message);
+            }
+        }
+        return err;
+    };
 
     const duration: f32 = utils.elapsedMs(start);
     self.recordMetrics(duration, query, "select");
 
-    return results;
+    return rows;
 }
 
 pub fn queryRows(self: *Self, comptime query: []const u8, args: anytype) !*Results {
     const start = utils.nowMonotonic();
 
-    const results = try self.sql.query(query, args);
+    const conn = try self.sql.acquire();
+    defer self.sql.release(conn);
+
+    const rows = conn.query(query, args) catch |err| {
+        if (err == error.PG) {
+            if (conn.err) |pge| {
+                self.log.err(pge.message);
+            }
+        }
+        return err;
+    };
 
     const duration: f32 = utils.elapsedMs(start);
     self.recordMetrics(duration, query, "select");
 
-    return results;
+    return rows;
 }
 
 pub fn queryRowsContext(self: *Self, _: *context, comptime query: []const u8, args: anytype) !*Results {
     const start = utils.nowMonotonic();
 
-    const results = try self.sql.query(query, args);
+    const conn = try self.sql.acquire();
+    defer self.sql.release(conn);
+
+    const rows = conn.row(query, args) catch |err| {
+        if (err == error.PG) {
+            if (conn.err) |pge| {
+                self.log.err(pge.message);
+            }
+        }
+        return err;
+    };
 
     const duration: f32 = utils.elapsedMs(start);
     self.recordMetrics(duration, query, "select");
 
-    return results;
+    return rows;
 }
 
 pub fn exec(self: *Self, comptime query: []const u8, args: anytype) !?i64 {
     const start = utils.nowMonotonic();
 
-    const id = try self.sql.exec(query, args);
+    const conn = try self.sql.acquire();
+    defer self.sql.release(conn);
+
+    const id = conn.exec(query, args) catch |err| {
+        if (err == error.PG) {
+            if (conn.err) |pge| {
+                self.log.err(pge.message);
+            }
+        }
+        return err;
+    };
 
     const duration: f32 = utils.elapsedMs(start);
     self.recordMetrics(duration, query, "insert");
@@ -113,7 +157,17 @@ pub fn exec(self: *Self, comptime query: []const u8, args: anytype) !?i64 {
 pub fn execWithContext(self: *Self, _: *context, comptime query: []const u8, args: anytype) !?i64 {
     const start = utils.nowMonotonic();
 
-    const id = try self.sql.exec(query, args);
+    const conn = try self.sql.acquire();
+    defer self.sql.release(conn);
+
+    const id = conn.exec(query, args) catch |err| {
+        if (err == error.PG) {
+            if (conn.err) |pge| {
+                self.log.err(pge.message);
+            }
+        }
+        return err;
+    };
 
     const duration: f32 = utils.elapsedMs(start);
     self.recordMetrics(duration, query, "insert");
@@ -124,25 +178,46 @@ pub fn execWithContext(self: *Self, _: *context, comptime query: []const u8, arg
 pub fn select(self: *Self, comptime _type: anytype, comptime query: []const u8, args: anytype) !?_type {
     const start = utils.nowMonotonic();
 
-    const row = self.sql.row(query, args);
-    defer row.deinit() catch {};
+    const conn = try self.sql.acquire();
+    defer self.sql.release(conn);
+
+    const row = try conn.query(query, args);
+    defer row.deinit();
+
+    var result: _type = undefined;
+    while (try row.next()) |_row| {
+        result = try _row.to(_type, .{});
+    }
 
     const duration: f32 = utils.elapsedMs(start);
     self.recordMetrics(duration, query, "select");
 
-    const result = try row.to(_type, .{});
     return result;
 }
 
-pub fn selectSlice(self: *Self, comptime _type: anytype, comptime query: []const u8, args: anytype) !*Results {
+pub fn selectSlice(
+    self: *Self,
+    comptime _type: anytype,
+    list: *std.array_list.Managed(_type),
+    comptime query: []const u8,
+    args: anytype,
+) !i64 {
     const start = utils.nowMonotonic();
 
-    const row = self.sql.queryOpts(query, args);
-    defer row.deinit() catch {};
+    const conn = try self.sql.acquire();
+    defer self.sql.release(conn);
+
+    const rows = try conn.query(query, args);
+    defer rows.deinit();
+
+    var res = rows.mapper(_type, .{ .dupe = true });
+    while (try res.next()) |T| {
+        self.log.any(T);
+        list.append(T);
+    }
 
     const duration: f32 = utils.elapsedMs(start);
     self.recordMetrics(duration, query, "select");
 
-    const results = try row.mapper(_type, .{});
-    return results;
+    return 0;
 }

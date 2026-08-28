@@ -50,7 +50,11 @@ pub fn run(self: *Self) anyerror!void {
     const lastMigration = try sqlMigrator.lastMigration(ctx);
 
     for (self.keys.items) |key| {
-        const keyAsString = try util.toStringFromInt(ctx.allocator, "{d}", key);
+        const keyAsString = try util.toStringFromInt(
+            ctx.allocator,
+            "{d}",
+            key,
+        );
 
         const value = self.map.get(keyAsString);
 

@@ -17,6 +17,12 @@ pub fn build(b: *std.Build) void {
         }),
     });
 
+    const debug = b.option(bool, "debug", "enable code debug mode") orelse false;
+    if (debug) {
+        exe.use_lld = true;
+        exe.use_llvm = true;
+    }
+
     exe.root_module.addImport("zero", zero.module("zero"));
 
     b.installArtifact(exe);
