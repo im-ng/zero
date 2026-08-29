@@ -33,7 +33,7 @@ pub fn usage(ctx: *Context) !Host {
     defer file2.close(utils.io);
 
     buffer = undefined;
-    bytes_read = try file.readPositionalAll(utils.io, &buffer, 0);
+    bytes_read = try file2.readPositionalAll(utils.io, &buffer, 0);
     contents = buffer[0..bytes_read];
 
     try setValue(ctx.allocator, []const u8, &host.hostname, contents, "");

@@ -28,12 +28,16 @@ pub const Handler = struct {
     }
 
     pub fn ws(self: *Handler, action: Responder.Do(*Context), req: *httpz.Request, res: *httpz.Response) !void {
-        var ctx = try Context.init(req.arena, self.container, req, res);
-        defer req.arena.destroy(&ctx);
-
+        // The websocket connection outlives this request, so the Context must be
+        // heap-allocated with a persistent allocator. Using req.arena (and a
+        // stack variable) left a dangling pointer that crashed on the first
+        // message (garbage allocator vtable during logging).
+        const ctx = try self.container.allocator.create(Context);
+        ctx.* = try Context.init(self.container.allocator, self.container, req, res);
         ctx.action = action;
 
-        if (try httpz.upgradeWebsocket(wsHandler, req, res, &ctx) == false) {
+        if (try httpz.upgradeWebsocket(wsHandler, req, res, ctx) == false) {
+            ctx.deinit();
             res.setStatus(.internal_server_error);
             res.body = "invalid websocket";
             return;

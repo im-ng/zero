@@ -26,7 +26,7 @@ rootContext: *root.Context = undefined,
 subscriber: std.array_list.Managed(mqSubscriber) = undefined,
 mu: std.Io.Mutex = undefined,
 signal: Atomic(bool) = undefined,
-mqtt: root.mqttz.posix.Client = undefined,
+mqtt: root.mqttz.posix.Client311 = undefined,
 mqttClient: ?[]const u8 = undefined,
 isPubSubSet: bool = false,
 
@@ -39,7 +39,7 @@ pub fn create(container: *root.container, config: *const mqConfig) !*MQTT {
     c.container = container;
     c.subscriber = std.array_list.Managed(mqSubscriber).init(container.allocator);
 
-    const m = try root.mqttz.posix.Client.init(.{
+    const m = try root.mqttz.posix.Client311.init(utils.io, .{
         .port = config.port,
         .ip = config.ip,
         .host = config.hostname,
@@ -66,8 +66,10 @@ pub fn create(container: *root.container, config: *const mqConfig) !*MQTT {
 
             c.mqttClient = cack.assigned_client_identifier;
 
-            msg = try utils.combine(container.allocator, "MQTT client id {s}", .{cack.assigned_client_identifier.?});
-            container.log.info(msg);
+            if (cack.assigned_client_identifier) |id| {
+                msg = try utils.combine(container.allocator, "MQTT client id {s}", .{id});
+                container.log.info(msg);
+            }
         },
         else => {
             const msg = try utils.combine(container.allocator, "could not connect to MQTT at '{s}:{d}'", .{ config.hostname, config.port });
