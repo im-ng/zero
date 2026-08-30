@@ -12,7 +12,7 @@ jobs:
   unit_test_and_coverage:
     runs-on: ubuntu-latest
     container:
-      image: imng/zero-kcov:0.1
+      image: imng/zero-kcov:0.2
       options: --security-opt seccomp=unconfined
     steps:
       - name: Checkout code
@@ -20,7 +20,7 @@ jobs:
         with:
           token: ${{ secrets.GH_TOKEN }}
 
-      - name: Set Zig 0.15.2 as active
+      - name: Set Zig 0.16.0 as active
         run: |
           zig version
           kcov --version
@@ -36,10 +36,10 @@ jobs:
           if [ -f zig-out/kcov/test/coverage.json ]; then
             COVERAGE=$(jq -r '.percent_covered' zig-out/kcov/test/coverage.json)
             echo "coverage=$COVERAGE" >> $GITHUB_OUTPUT
-            echo "Coverage for Zig 0.15.2: $COVERAGE%"
+            echo "Coverage for Zig 0.16.0: $COVERAGE%"
           else
             echo "coverage=0" >> $GITHUB_OUTPUT
-            echo "Coverage for Zig 0.15.2: 0%"
+            echo "Coverage for Zig 0.16.0: 0%"
           fi
 
       - name: Update README with coverage
