@@ -6,14 +6,14 @@
     .dependencies = .{
         // .jwt = .{ .path = "../zig-jwt" },
         // .regexp = .{ .path = "../zig-regex" },
-        .mqttz = .{ .path = "../mqttz" },
+        // .mqttz = .{ .path = "../mqttz" },
         // .pg = .{ .path = "../pg.zig" },
         // .okredis = .{ .path = "../okredis" },
         // .zul = .{ .path = "../zul" },
         // .httpz = .{ .path = "../http.zig" },
         // .zdt = .{ .path = "../zdt" },
         // .dotenv = .{ .path = "../dotenv" },
-        .sqlite = .{ .path = "../sqlite-stub" },
+        // .sqlite = .{ .path = "../zig-sqlite" },
         .zdt = .{
             .url = "git+https://codeberg.org/FObersteiner/zdt.git?ref=v0.9.5#0db1d32005b7058fea0138e97976cc55b58b403d",
             .hash = "zdt-0.9.5-xr0_vK7ZEQDFyjfdx_ds5WMEMEUCfUkOnNqLNyvaA8b9",
@@ -45,6 +45,14 @@
         .regexp = .{
             .url = "git+https://github.com/tiehuis/zig-regex.git#49c5694c8b3ee4ae4a7131035a44a69841ef4740",
             .hash = "regex-0.1.3-axC357jaAQBRENglwG9NTcuej8pYz1IZmfwER_AXMlHZ",
+        },
+        .mqttz = .{
+            .url = "git+https://github.com/karlseguin/mqttz.git#cf8acd2c1acae7f5c1c67b7df53228e7dd8c8c74",
+            .hash = "mqttz-0.0.0-ywFE_2ZfAwAc6PsPYZq1W7G-EqzyhFPeCbXS_86Qj98V",
+        },
+        .sqlite = .{
+            .url = "git+https://github.com/im-ng/zig-sqlite.git#4af3be0231d5dc1765467b87f1d0df51bbeb9121",
+            .hash = "sqlite-3.48.0-F2R_a0iSDgCgU0ZDXF9fgYM8tauaFdYyt5L9lDYWxjPC",
         },
     },
     .paths = .{
