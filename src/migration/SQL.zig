@@ -71,6 +71,11 @@ pub fn lastMigration(ctx: *Context) !i64 {
             .{},
         );
         return result.?.epoch;
+    } else if (std.mem.eql(u8, "sqlite", dialect)) {
+        const result = try ctx.SQLite.queryRow(i64, lastMigrationRecord, .{});
+        if (result) |r| {
+            return r;
+        }
     }
 
     return 0;
