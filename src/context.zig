@@ -4,6 +4,7 @@ const httpz = root.httpz;
 const zeroClient = root.client;
 const pubSub = root.MQTT;
 const mqMessage = root.mqMessage;
+const natsMessage = root.natsMessage;
 const Error = root.Error;
 const Responder = root.responder;
 const constants = root.constants;
@@ -23,9 +24,12 @@ pub const Context = struct {
     MQ: *root.MQTT = undefined,
     provider: *root.AuthProvider = undefined,
     KF: *root.kafka = undefined,
+    NATS: *root.nats = undefined,
+    PubSub: *root.PubSub = undefined,
 
     message: ?*mqMessage = null,
     message2: ?*kafkaMessage = null,
+    messageN: ?*natsMessage = null,
 
     wsMessage: ?[]const u8 = null,
     wsClient: *root.httpz.websocket.Conn = undefined,
@@ -63,6 +67,14 @@ pub const Context = struct {
 
         if (container.Kakfa) |k| {
             c.KF = k;
+        }
+
+        if (container.Nats) |n| {
+            c.NATS = n;
+        }
+
+        if (container.pubSub) |ps| {
+            c.PubSub = ps;
         }
 
         return c;

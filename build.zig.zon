@@ -54,6 +54,10 @@
             .url = "git+https://github.com/im-ng/zig-sqlite.git#4af3be0231d5dc1765467b87f1d0df51bbeb9121",
             .hash = "sqlite-3.48.0-F2R_a0iSDgCgU0ZDXF9fgYM8tauaFdYyt5L9lDYWxjPC",
         },
+        .nats = .{
+            .url = "git+https://github.com/nats-io/nats.zig#883d29c25db420f59133bc5098059191e6ac6b02",
+            .hash = "nats-0.1.0-991asQCWHwBIwVHZJpXV_b7mll-5F78o_F_vunrfuBm7",
+        },
     },
     .paths = .{
         "build.zig",

@@ -410,6 +410,8 @@ fn mockContainer(allocator: std.mem.Allocator) root.container {
         .services = undefined,
         .pubsub = null,
         .Kakfa = null,
+        .Nats = null,
+        .pubSub = null,
     };
 }
 

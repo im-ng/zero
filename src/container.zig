@@ -14,6 +14,7 @@ const rdzDatasource = root.rdz;
 const zeroClient = root.client;
 const MQTT = root.MQTT;
 const mqConfig = root.mqConfig;
+const natsConfig = root.natsConfig;
 const rdkafka = root.rdkafka;
 const kafka = root.kafka;
 const utils = root.utils;
@@ -34,6 +35,8 @@ SQLite: ?*root.SQLite = undefined,
 services: ?std.StringHashMap(*zeroClient) = undefined,
 pubsub: ?*root.MQTT = null,
 Kakfa: ?*root.kafka = null,
+Nats: ?*root.nats = null,
+pubSub: ?*root.PubSub = null,
 
 pub fn create(self: Self) anyerror!*container {
     const c = try self.allocator.create(container);
@@ -113,6 +116,8 @@ fn loadPubSub(self: *Self) !void {
         try self.loadKafkaPubSub();
     } else if (std.mem.eql(u8, "MQTT", pubsub)) {
         try self.loadMqttPubSub();
+    } else if (std.mem.eql(u8, "NATS", pubsub)) {
+        try self.loadNatsPubSub();
     } else {
         buffer = try std.fmt.bufPrint(buffer, "pubsub is disabled, as pubsub mode is not provided.", .{});
         self.log.debug(buffer);
@@ -338,6 +343,11 @@ fn loadKafkaPubSub(self: *Self) !void {
             //do nothing
         },
     }
+
+    // build the unified PubSub dispatcher
+    const ps = try self.allocator.create(root.PubSub);
+    ps.* = .{ .backend = .kafka, .kafka = self.Kakfa };
+    self.pubSub = ps;
 }
 
 fn loadMqttPubSub(self: *Self) !void {
@@ -412,7 +422,59 @@ fn loadMqttPubSub(self: *Self) !void {
     buffer = try self.allocator.alloc(u8, 256);
     buffer = try std.fmt.bufPrint(buffer, "connected to MQTT at '{s}:{d}'", .{ hostname, portAsInt });
     self.log.info(buffer);
+
+    // build the unified PubSub dispatcher
+    const ps = try self.allocator.create(root.PubSub);
+    ps.* = .{ .backend = .mqtt, .mqtt = self.pubsub };
+    self.pubSub = ps;
 }
+
+fn loadNatsPubSub(self: *Self) !void {
+    var buffer: []u8 = undefined;
+    buffer = try self.allocator.alloc(u8, 512);
+
+    const url = self.config.get("PUBSUB_BROKER");
+    if (std.mem.eql(u8, url, "") == true) {
+        buffer = try std.fmt.bufPrint(buffer, "pubsub is disabled, as nats broker is not provided.", .{});
+        self.log.debug(buffer);
+        return;
+    }
+
+    const stream = self.config.get("NATS_STREAM");
+    const subjects = self.config.getOrDefault("NATS_SUBJECTS", "");
+    const max_wait = try self.config.getAsInt("NATS_MAX_WAIT");
+    const max_pull_wait = try self.config.getAsInt("NATS_MAX_PULL_WAIT");
+    const consumer = self.config.get("NATS_CONSUMER");
+    const creds_file = self.config.get("NATS_CREDS_FILE");
+
+    const config = natsConfig{
+        .url = url,
+        .stream = stream,
+        .subjects = subjects,
+        .max_wait_ms = @intCast(max_wait),
+        .max_pull_wait_ms = @intCast(max_pull_wait),
+        .consumer = consumer,
+        .creds_file = creds_file,
+    };
+
+    self.Nats = root.nats.create(self, &config) catch |err| {
+        buffer = try self.allocator.alloc(u8, 256);
+        buffer = try std.fmt.bufPrint(buffer, "could not connect to NATS at '{s}'", .{url});
+        self.log.err(buffer);
+        self.log.any(err);
+        return;
+    };
+
+    // build the unified PubSub dispatcher
+    const ps = try self.allocator.create(root.PubSub);
+    ps.* = .{ .backend = .nats, .nats = self.Nats };
+    self.pubSub = ps;
+}
+
+pub fn natsPullWaitMs(self: *Self) u32 {
+    return @intCast(self.config.getAsInt("NATS_MAX_PULL_WAIT") catch 5000);
+}
+
 
 fn loadMetricz(self: *Self) !void {
     // initialize metrics

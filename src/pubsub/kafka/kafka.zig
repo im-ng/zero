@@ -174,6 +174,35 @@ pub fn publish(self: *Self, ctx: *Context, topic: *kafkaTopic, key: []const u8, 
     self.container.metricz.publisherTotal(.{ .topic = self.getTopicName(topic) }) catch unreachable;
 }
 
+/// Convenience for the unified `PubSub` interface: publish to a subject
+/// using a throwaway context (Kafka's `publish` requires a `*Context`).
+pub fn publishOnSubject(self: *Self, subject: []const u8, payload: []const u8) !void {
+    const ca = self.prepareChildAllocator() catch |err| {
+        self.container.log.any(err);
+        return;
+    };
+    defer self.destroryChildAllocator(ca);
+
+    var ctx = Context.init(
+        ca.allocator(),
+        self.container,
+        _req,
+        _res,
+    ) catch |err| {
+        self.container.log.any(err);
+        return;
+    };
+    const context = &ctx;
+
+    const topic = self.getTopicHandler(context, subject) catch |err| {
+        self.container.log.any(err);
+        return;
+    };
+    defer rdkafka.rd_kafka_topic_destroy(topic);
+
+    try self.publish(context, topic, "", payload);
+}
+
 pub inline fn wait(self: Self, comptime timeout_ms: u16) void {
     while (rdkafka.rd_kafka_outq_len(self._producer) > 0) {
         _ = rdkafka.rd_kafka_poll(self._producer, timeout_ms);

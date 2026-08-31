@@ -187,11 +187,15 @@ fn startPubSubSubscriptions(self: Self) !void {
     }
 
     if (self.container.Kakfa) |k| {
-        if (k.kafkaMode != root.rdkafka.RD_KAFKA_CONSUMER) {
-            return;
+        if (k.kafkaMode == root.rdkafka.RD_KAFKA_CONSUMER) {
+            self.container.log.info("starting kafka subscriptions");
+            try k.startSubscription();
         }
-        self.container.log.info("starting kafka subscriptions");
-        try k.startSubscription();
+    }
+
+    if (self.container.Nats) |n| {
+        self.container.log.info("starting nats subscriptions");
+        try n.startSubscription();
     }
 }
 
@@ -492,6 +496,25 @@ pub fn addKafkaSubscription(self: *Self, topic: []const u8, hook: fn (*root.Cont
     }
 
     try self.container.Kakfa.?.addSubscriber(topic, hook);
+}
+
+pub fn addNatsSubscription(self: *Self, topic: []const u8, hook: fn (*root.Context) anyerror!void) !void {
+    if (self.container.Nats == null) {
+        self.container.log.err("pubsub is disabled, topic subscription is not available.");
+        return;
+    }
+
+    try self.container.Nats.?.addSubscriber(topic, hook);
+}
+
+/// Subscribe through the unified PubSub interface (backend-agnostic).
+pub fn addPubSubSubscription(self: *Self, topic: []const u8, hook: fn (*root.Context) anyerror!void) !void {
+    if (self.container.pubSub == null) {
+        self.container.log.err("pubsub is disabled, topic subscription is not available.");
+        return;
+    }
+
+    try self.container.pubSub.?.addSubscriber(topic, hook);
 }
 
 pub fn addOAuthKeyRefresher(self: *Self) anyerror!void {

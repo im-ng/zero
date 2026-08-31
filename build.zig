@@ -41,6 +41,9 @@ pub fn build(b: *std.Build) void {
     const sqlite = b.dependency("sqlite", .{});
     module.addImport("sqlite", sqlite.module("sqlite"));
 
+    const nats = b.dependency("nats", .{});
+    module.addImport("nats", nats.module("nats"));
+
     // if (b.option(
     //     bool,
     //     "kafka",
@@ -71,6 +74,7 @@ pub fn build(b: *std.Build) void {
     test_module.addImport("mqttz", mqttz.module("mqttz"));
     test_module.addImport("jwt", jwt.module("zig-jwt"));
     test_module.addImport("sqlite", sqlite.module("sqlite"));
+    test_module.addImport("nats", nats.module("nats"));
     test_module.addImport("zero", module);
 
     if (builtin.os.tag == .macos) {
