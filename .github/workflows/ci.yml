@@ -28,7 +28,7 @@ jobs:
 
       - name: Run tests with coverage
         run: |
-          mkdir -p ~/.cache/zig
+          mkdir -p ~/.cache/zig/tmp
           zig build test -Dcoverage --summary all
 
       - name: Extract coverage
