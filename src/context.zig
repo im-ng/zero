@@ -59,7 +59,7 @@ pub const Context = struct {
             c.Cache = rdz;
         }
 
-        if (container.pubsub) |pb| {
+        if (container.mqtt) |pb| {
             c.MQ = pb;
         }
 

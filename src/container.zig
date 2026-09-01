@@ -33,7 +33,7 @@ rdz: ?*root.rdz = undefined,
 SQL: ?*root.SQL = undefined,
 SQLite: ?*root.SQLite = undefined,
 services: ?std.StringHashMap(*zeroClient) = undefined,
-pubsub: ?*root.MQTT = null,
+mqtt: ?*root.MQTT = null,
 Kakfa: ?*root.kafka = null,
 Nats: ?*root.nats = null,
 pubSub: ?*root.PubSub = null,
@@ -407,7 +407,7 @@ fn loadMqttPubSub(self: *Self) !void {
     buffer = try std.fmt.bufPrint(buffer, "connecting to MQTT at '{s}:{d}'", .{ hostname, portAsInt });
     self.log.info(buffer);
 
-    self.pubsub = MQTT.create(self, config) catch |err| {
+    self.mqtt = MQTT.create(self, config) catch |err| {
         buffer = try self.allocator.alloc(u8, 256);
         buffer = try std.fmt.bufPrint(buffer, "could not connect to MQTT at '{s}:{d}'", .{ hostname, portAsInt });
         self.log.err(buffer);
@@ -415,7 +415,7 @@ fn loadMqttPubSub(self: *Self) !void {
         return;
     };
 
-    if (self.pubsub) |pb| {
+    if (self.mqtt) |pb| {
         try pb.mqtt.ping(.{});
     }
 
@@ -425,7 +425,7 @@ fn loadMqttPubSub(self: *Self) !void {
 
     // build the unified PubSub dispatcher
     const ps = try self.allocator.create(root.PubSub);
-    ps.* = .{ .ptr = @ptrCast(@alignCast(self.pubsub)), .vtable = &root.MQTT.vtable };
+    ps.* = .{ .ptr = @ptrCast(@alignCast(self.mqtt)), .vtable = &root.MQTT.vtable };
     self.pubSub = ps;
 }
 
@@ -474,7 +474,6 @@ fn loadNatsPubSub(self: *Self) !void {
 pub fn natsPullWaitMs(self: *Self) u32 {
     return @intCast(self.config.getAsInt("NATS_MAX_PULL_WAIT") catch 5000);
 }
-
 
 fn loadMetricz(self: *Self) !void {
     // initialize metrics

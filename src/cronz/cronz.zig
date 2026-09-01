@@ -408,7 +408,7 @@ fn mockContainer(allocator: std.mem.Allocator) root.container {
         .rdz = undefined,
         .SQL = undefined,
         .services = undefined,
-        .pubsub = null,
+        .mqtt = null,
         .Kakfa = null,
         .Nats = null,
         .pubSub = null,
@@ -570,4 +570,11 @@ test "parseSchedule accepts valid 6-field schedule with seconds" {
     try std.testing.expectEqual(@as(usize, 1), j.sec.count());
     try std.testing.expect(j.sec.contains(30));
     try std.testing.expectEqual(@as(usize, 60), j.min.count());
+}
+
+/// Signal the scheduler loop to stop WITHOUT joining. Safe to call from a
+/// signal handler (joining a thread from a signal handler is UB/deadlock).
+/// The actual thread join happens later in normal execution via `destroy`.
+pub fn stop(self: *Self) void {
+    self.running.store(false, .release);
 }

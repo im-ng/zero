@@ -13,7 +13,7 @@ const Self = @This();
 /// is used instead.
 const defaultPath = "./configs";
 const defaultFile = "./configs/.env";
-// const defaultFile = "/media/ng/home/zig-self-learning/zero/examples/zero-todo-htmx/configs/.env";
+// const defaultFile = "/media/ng/home/zig-self-learning/zero/examples/zero-sqlite/configs/.env";
 
 environments: *std.process.Environ.Map,
 allocator: std.mem.Allocator,
@@ -119,8 +119,14 @@ pub fn getOrDefault(self: *Self, key: []const u8, default: []const u8) []const u
 test "getAsBool returns false for unset env var" {
     const allocator = std.testing.allocator;
     const log = try root.logger.create(allocator);
+    var emap: std.process.Environ.Map = try std.testing.environ.createMap(allocator);
     defer allocator.destroy(log);
-    var cfg = config{ .allocator = allocator, .log = log };
+    defer emap.deinit();
+    var cfg = config{
+        .allocator = allocator,
+        .log = log,
+        .environments = &emap,
+    };
 
     const result = cfg.getAsBool("ZERO_TEST_BOOL_UNSET_XYZ");
     try std.testing.expect(result == false);
@@ -135,8 +141,15 @@ test "getAsBool logic with known values" {
 test "getAsInt returns 0 for unset env var" {
     const allocator = std.testing.allocator;
     const log = try root.logger.create(allocator);
+    var emap: std.process.Environ.Map = try std.testing.environ.createMap(allocator);
+
     defer allocator.destroy(log);
-    var cfg = config{ .allocator = allocator, .log = log };
+    defer emap.deinit();
+    var cfg = config{
+        .allocator = allocator,
+        .log = log,
+        .environments = &emap,
+    };
 
     const result = try cfg.getAsInt("ZERO_TEST_INT_UNSET_XYZ");
     try std.testing.expect(result == 0);
@@ -145,8 +158,15 @@ test "getAsInt returns 0 for unset env var" {
 test "getOrDefault returns default when env var is unset" {
     const allocator = std.testing.allocator;
     const log = try root.logger.create(allocator);
+    var emap: std.process.Environ.Map = try std.testing.environ.createMap(allocator);
     defer allocator.destroy(log);
-    var cfg = config{ .allocator = allocator, .log = log };
+    defer emap.deinit();
+
+    var cfg = config{
+        .allocator = allocator,
+        .log = log,
+        .environments = &emap,
+    };
 
     const result = cfg.getOrDefault("ZERO_TEST_DEFAULT_UNSET_XYZ", "fallback");
     try std.testing.expectEqualStrings("fallback", result);
@@ -155,8 +175,15 @@ test "getOrDefault returns default when env var is unset" {
 test "getOrDefault returns PATH when set" {
     const allocator = std.testing.allocator;
     const log = try root.logger.create(allocator);
+    var emap: std.process.Environ.Map = try std.testing.environ.createMap(allocator);
     defer allocator.destroy(log);
-    var cfg = config{ .allocator = allocator, .log = log };
+    defer emap.deinit();
+
+    var cfg = config{
+        .allocator = allocator,
+        .log = log,
+        .environments = &emap,
+    };
 
     const result = cfg.getOrDefault("PATH", "fallback");
     try std.testing.expect(result.len > 0);
@@ -165,8 +192,15 @@ test "getOrDefault returns PATH when set" {
 test "getIntByType parses u16 from known env var" {
     const allocator = std.testing.allocator;
     const log = try root.logger.create(allocator);
+    var emap: std.process.Environ.Map = try std.testing.environ.createMap(allocator);
     defer allocator.destroy(log);
-    var cfg = config{ .allocator = allocator, .log = log };
+    defer emap.deinit();
+
+    var cfg = config{
+        .allocator = allocator,
+        .log = log,
+        .environments = &emap,
+    };
 
     const result = try cfg.getIntByType("ZERO_TEST_INT_UNSET_XYZ", u16);
     try std.testing.expect(result == 0);
@@ -175,8 +209,15 @@ test "getIntByType parses u16 from known env var" {
 test "get returns empty string for unset env var" {
     const allocator = std.testing.allocator;
     const log = try root.logger.create(allocator);
+    var emap: std.process.Environ.Map = try std.testing.environ.createMap(allocator);
     defer allocator.destroy(log);
-    var cfg = config{ .allocator = allocator, .log = log };
+    defer emap.deinit();
+
+    var cfg = config{
+        .allocator = allocator,
+        .log = log,
+        .environments = &emap,
+    };
 
     const result = cfg.get("ZERO_TEST_GET_UNSET_XYZ");
     try std.testing.expectEqualStrings("", result);
@@ -185,8 +226,15 @@ test "get returns empty string for unset env var" {
 test "getAsBool returns true for true value" {
     const allocator = std.testing.allocator;
     const log = try root.logger.create(allocator);
+    var emap: std.process.Environ.Map = try std.testing.environ.createMap(allocator);
     defer allocator.destroy(log);
-    var cfg = config{ .allocator = allocator, .log = log };
+    defer emap.deinit();
+
+    var cfg = config{
+        .allocator = allocator,
+        .log = log,
+        .environments = &emap,
+    };
 
     const result = cfg.getAsBool("PATH");
     _ = result;
@@ -195,8 +243,15 @@ test "getAsBool returns true for true value" {
 test "getAsBool returns false for non-true value" {
     const allocator = std.testing.allocator;
     const log = try root.logger.create(allocator);
+    var emap: std.process.Environ.Map = try std.testing.environ.createMap(allocator);
     defer allocator.destroy(log);
-    var cfg = config{ .allocator = allocator, .log = log };
+    defer emap.deinit();
+
+    var cfg = config{
+        .allocator = allocator,
+        .log = log,
+        .environments = &emap,
+    };
 
     const result = cfg.getAsBool("PATH");
     try std.testing.expect(result == false);
@@ -205,8 +260,15 @@ test "getAsBool returns false for non-true value" {
 test "getAsInt returns error for non-numeric value" {
     const allocator = std.testing.allocator;
     const log = try root.logger.create(allocator);
+    var emap: std.process.Environ.Map = try std.testing.environ.createMap(allocator);
     defer allocator.destroy(log);
-    var cfg = config{ .allocator = allocator, .log = log };
+    defer emap.deinit();
+
+    var cfg = config{
+        .allocator = allocator,
+        .log = log,
+        .environments = &emap,
+    };
 
     const result: anyerror!u16 = cfg.getAsInt("PATH");
     try std.testing.expectError(error.InvalidCharacter, @as(anyerror!u16, result));

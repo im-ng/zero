@@ -178,10 +178,30 @@ pub fn run(self: *Self) !void {
 
     // try self.startMetricsServer();
     try self.startHttpServer();
+
+    // The http server has stopped (e.g. after a SIGINT/SIGTERM via the
+    // shutdown handler). Tear down the rest in NORMAL execution flow — never
+    // from the signal handler itself, where joining threads or freeing client
+    // state (while their background threads are still running) is UB/deadlock
+    // and can leave the process hanging (e.g. the NATS io_task thread).
+    if (self.cronz) |cronz| {
+        cronz.destroy();
+    }
+    if (self.container.Nats) |n| {
+        n.destroy();
+    }
+    if (self.container.mqtt) |pb| {
+        pb.destroy();
+    }
+    if (self.container.Kakfa) |k| {
+        k.destroy();
+    }
+
+    self.container.destroy();
 }
 
 fn startPubSubSubscriptions(self: Self) !void {
-    if (self.container.pubsub) |pubsub| {
+    if (self.container.mqtt) |pubsub| {
         self.container.log.info("starting mqtt subscriptions");
         try pubsub.startSubscription();
     }
@@ -216,12 +236,14 @@ fn startShutdownHandler(_: Self) !void {
 }
 
 fn shutdown(_: std.os.linux.SIG) callconv(.c) void {
+    // Signal shutdown only. Joining threads / tearing down from a signal
+    // handler is undefined behavior (can deadlock), so we just stop the
+    // scheduler loop and stop the http server. The actual thread join for
+    // cronz happens later in run() once the server thread exits.
     if (AppInstance.cronz) |cronz| {
-        cronz.destroy();
+        cronz.stop();
         AppInstance.log.info("cleaning running cronz");
     }
-
-    std.Io.sleep(utils.io, std.Io.Duration.fromSeconds(1), .awake) catch {};
 
     if (hServer) |h| {
         h.shutdown();

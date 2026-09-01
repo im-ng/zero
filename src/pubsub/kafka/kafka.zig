@@ -122,19 +122,28 @@ pub fn getTopicHandler(self: *Self, ctx: *Context, name: []const u8) !*kafkaTopi
 }
 
 pub fn destroy(self: *Self) void {
-    const err_code: c_int = rdkafka.rd_kafka_flush(self.client, 60_000);
-    if (err_code != rdkafka.RD_KAFKA_RESP_ERR_NO_ERROR) {
-        const msg = try utils.combine(
-            self.container.allocator,
-            "failed to flush messages {s}",
-            .{rdkafka.rd_kafka_err2str(err_code)},
-        );
-        self.container.log.err(msg);
+    // Signal the consumer thread to stop FIRST, then join it. Blocking on the
+    // client (flush/destroy) before the consumer poll loop has exited would
+    // deadlock join() and hang process shutdown.
+    self.signal.store(false, .release);
+    if (self.kafkaMode == root.rdkafka.RD_KAFKA_CONSUMER) {
+        self.thread.join();
+    }
+
+    // Only producers have pending messages to flush; flushing a consumer
+    // returns "Not implemented" and is meaningless here.
+    if (self.kafkaMode != root.rdkafka.RD_KAFKA_CONSUMER) {
+        const err_code: c_int = rdkafka.rd_kafka_flush(self.client, 60_000);
+        if (err_code != rdkafka.RD_KAFKA_RESP_ERR_NO_ERROR) {
+            const msg = utils.combine(
+                self.container.allocator,
+                "failed to flush messages {s}",
+                .{rdkafka.rd_kafka_err2str(err_code)},
+            ) catch "failed to flush kafka messages";
+            self.container.log.err(msg);
+        }
     }
     rdkafka.rd_kafka_destroy(self.client);
-
-    self.signal.store(false, .release);
-    self.thread.join();
 }
 
 pub fn publish(self: *Self, ctx: *Context, topic: *kafkaTopic, key: []const u8, payload: []const u8) !void {

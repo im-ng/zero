@@ -103,11 +103,8 @@ pub fn create(container: *root.container, config: *const natsConfig) !*NATS {
 
 pub fn destroy(self: *Self) void {
     self.signal.store(false, .release);
-    if (self.stream) |*ps| {
-        ps.deinit();
-    }
     self.client.deinit();
-    if (self.subscriber.count() > 0) {
+    if (self.subscriber.items.len > 0) {
         self.thread.join();
     }
 }

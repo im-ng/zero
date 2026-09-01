@@ -106,8 +106,11 @@ pub fn shutdown(self: *Self) void {
     // recursively deallocate all resources
     // self.refresherThread.join();
 
-    self.container.destroy();
-
+    // NOTE: the container and pub/sub clients are torn down by App.run() once
+    // the server thread has stopped. Destroying them here (from a signal
+    // handler) would free client state while their background threads (e.g.
+    // the NATS io_task) are still running, which both hangs process exit and
+    // risks a use-after-free.
     self.http.stop();
 
     self.http.deinit();
