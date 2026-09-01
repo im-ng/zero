@@ -254,7 +254,7 @@ pub fn readPayload(self: *Self, subscriber: kafkaSubscriber) !void {
             const context = &ctx;
 
             // transform packet to client.response using std.json.parse.
-            context.message2 = &msg;
+            context.message = .{ .kafka = &msg };
 
             try subscriber.exec(context);
 
@@ -369,3 +369,19 @@ inline fn getTopicName(_: *Self, topic: *kafkaTopic) []const u8 {
     const name: []const u8 = std.mem.span(rdkafka.rd_kafka_topic_name(topic));
     return name;
 }
+
+/// Type-erased VTable conforming to `pubsubInterface.Interface.VTable`.
+pub const vtable = root.pubsubInterface.Interface.VTable{
+    .publish = struct {
+        fn call(ptr: *anyopaque, subject: []const u8, payload: []const u8) anyerror!void {
+            const self: *Kafka = @ptrCast(@alignCast(ptr));
+            try self.publishOnSubject(subject, payload);
+        }
+    }.call,
+    .subscribe = struct {
+        fn call(ptr: *anyopaque, subject: []const u8, hook: *const fn (*root.Context) anyerror!void) anyerror!void {
+            const self: *Kafka = @ptrCast(@alignCast(ptr));
+            try self.addSubscriber(subject, hook);
+        }
+    }.call,
+};

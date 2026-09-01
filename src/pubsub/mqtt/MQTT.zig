@@ -145,7 +145,7 @@ pub fn readPackets(self: *Self, subscriber: mqSubscriber) !void {
                 };
 
                 // transform packet to client.response using std.json.parse.
-                context.message = &message;
+                context.message = .{ .mqtt = &message };
 
                 try subscriber.exec(context);
             },
@@ -224,3 +224,19 @@ pub fn addSubscriber(self: *Self, topic: []const u8, hook: *const fn (*root.Cont
 
     self.container.log.info(msg);
 }
+
+/// Type-erased VTable conforming to `pubsubInterface.Interface.VTable`.
+pub const vtable = root.pubsubInterface.Interface.VTable{
+    .publish = struct {
+        fn call(ptr: *anyopaque, subject: []const u8, payload: []const u8) anyerror!void {
+            const self: *MQTT = @ptrCast(@alignCast(ptr));
+            _ = try self.Publish(subject, payload);
+        }
+    }.call,
+    .subscribe = struct {
+        fn call(ptr: *anyopaque, subject: []const u8, hook: *const fn (*root.Context) anyerror!void) anyerror!void {
+            const self: *MQTT = @ptrCast(@alignCast(ptr));
+            try self.addSubscriber(subject, hook);
+        }
+    }.call,
+};

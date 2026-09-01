@@ -27,7 +27,7 @@ pub const mqttConfig = @import("pubsub/mqtt/config.zig");
 pub const mqttSubscriber = @import("pubsub/mqtt/subscriber.zig");
 pub const natsConfig = @import("pubsub/nats/config.zig");
 pub const natsSubscriber = @import("pubsub/nats/subscriber.zig");
-pub const pubsub = @import("pubsub/pubsub.zig");
+pub const pubsub = @import("pubsub/interface.zig");
 
 comptime {
     _ = zero;

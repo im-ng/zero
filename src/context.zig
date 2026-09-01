@@ -21,15 +21,13 @@ pub const Context = struct {
     SQL: *root.SQL = undefined,
     SQLite: *root.SQLite = undefined,
     Cache: root.rediz.Client = undefined,
-    MQ: *root.MQTT = undefined,
     provider: *root.AuthProvider = undefined,
+    MQ: *root.MQTT = undefined,
     KF: *root.kafka = undefined,
     NATS: *root.nats = undefined,
-    PubSub: *root.PubSub = undefined,
 
-    message: ?*mqMessage = null,
-    message2: ?*kafkaMessage = null,
-    messageN: ?*natsMessage = null,
+    pubsub: *root.PubSub = undefined,
+    message: ?root.pubsubInterface.Message = null,
 
     wsMessage: ?[]const u8 = null,
     wsClient: *root.httpz.websocket.Conn = undefined,
@@ -74,7 +72,7 @@ pub const Context = struct {
         }
 
         if (container.pubSub) |ps| {
-            c.PubSub = ps;
+            c.pubsub = ps;
         }
 
         return c;

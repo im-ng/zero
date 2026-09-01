@@ -28,14 +28,14 @@ pub fn main(init: std.process.Init) !void {
 
 fn publishTask1(ctx: *Context) !void {
     const timestamp = try utils.sqlTimestampz(ctx.allocator);
-    try ctx.PubSub.Publish("zero", "publisher 1 says hello! via NATS");
+    try ctx.pubsub.Publish("zero", "publisher 1 says hello! via NATS");
 
     ctx.info(timestamp);
 }
 
 fn publishTask2(ctx: *Context) !void {
     const timestamp = try utils.sqlTimestampz(ctx.allocator);
-    try ctx.PubSub.Publish("zero", "publisher 2 says hi! via NATS");
+    try ctx.pubsub.Publish("zero", "publisher 2 says hi! via NATS");
 
     ctx.info(timestamp);
 }

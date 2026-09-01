@@ -346,7 +346,7 @@ fn loadKafkaPubSub(self: *Self) !void {
 
     // build the unified PubSub dispatcher
     const ps = try self.allocator.create(root.PubSub);
-    ps.* = .{ .backend = .kafka, .kafka = self.Kakfa };
+    ps.* = .{ .ptr = @ptrCast(@alignCast(self.Kakfa)), .vtable = &root.kafka.vtable };
     self.pubSub = ps;
 }
 
@@ -425,7 +425,7 @@ fn loadMqttPubSub(self: *Self) !void {
 
     // build the unified PubSub dispatcher
     const ps = try self.allocator.create(root.PubSub);
-    ps.* = .{ .backend = .mqtt, .mqtt = self.pubsub };
+    ps.* = .{ .ptr = @ptrCast(@alignCast(self.pubsub)), .vtable = &root.MQTT.vtable };
     self.pubSub = ps;
 }
 
@@ -467,7 +467,7 @@ fn loadNatsPubSub(self: *Self) !void {
 
     // build the unified PubSub dispatcher
     const ps = try self.allocator.create(root.PubSub);
-    ps.* = .{ .backend = .nats, .nats = self.Nats };
+    ps.* = .{ .ptr = @ptrCast(@alignCast(self.Nats)), .vtable = &root.nats.vtable };
     self.pubSub = ps;
 }
 

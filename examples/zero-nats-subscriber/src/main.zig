@@ -38,9 +38,14 @@ fn index(ctx: *Context) !void {
 }
 
 fn onMessage(ctx: *Context) !void {
-    if (ctx.messageN) |message| {
+    if (ctx.message) |message| {
+        const m = message.nats;
         var buffer: [256]u8 = undefined;
-        const msg = std.fmt.bufPrint(&buffer, "received on [{s}] {s}", .{ message.subject, message.payload }) catch "decode error";
+        const msg = std.fmt.bufPrint(
+            &buffer,
+            "received on [{s}] {s}",
+            .{ m.subject, m.payload },
+        ) catch "decode error";
         ctx.info(msg);
     }
 }

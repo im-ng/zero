@@ -61,7 +61,8 @@ pub const natsConfig = @import("pubsub/nats/config.zig").natsConfig;
 pub const natsSubscriber = @import("pubsub/nats/subscriber.zig").natsSubscriber;
 pub const natsMessage = @import("pubsub/nats/message.zig").natsMessage;
 pub const nats = @import("pubsub/nats/NATS.zig").NATS;
-pub const PubSub = @import("pubsub/pubsub.zig").PubSub;
+pub const pubsubInterface = @import("pubsub/interface.zig");
+pub const PubSub = pubsubInterface.Interface;
 
 pub const WSHandler = @import("websocket.zig");
 pub const WSMiddleware = @import("mw/ws.zig");

@@ -33,10 +33,11 @@ const customMessage = struct {
 fn subscribeTask(ctx: *Context) !void {
     const timestamp = try utils.sqlTimestampz(ctx.allocator);
     //transform ctx.message to custom type in packet read itself
-    if (ctx.message2) |message| {
+    if (ctx.message) |message| {
+        const k = message.kafka;
         var buffer: []u8 = undefined;
         buffer = try ctx.allocator.alloc(u8, 1024);
-        buffer = try std.fmt.bufPrint(buffer, "Received on [{s}] {s}", .{ message.topic, message.payload.? });
+        buffer = try std.fmt.bufPrint(buffer, "Received on [{s}] {s}", .{ k.topic, k.payload.? });
 
         ctx.info(timestamp);
         ctx.info(buffer);

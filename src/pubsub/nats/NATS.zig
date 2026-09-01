@@ -156,7 +156,7 @@ fn dispatch(self: *Self, subject: []const u8, payload: []const u8, hook: *const 
         .subject = subject,
         .payload = payload,
     };
-    context.messageN = &message;
+    context.message = .{ .nats = &message };
 
     hook(context) catch |err| {
         self.container.log.any(err);
@@ -238,3 +238,19 @@ pub fn addSubscriber(self: *Self, topic: []const u8, hook: *const fn (*root.Cont
 
     self.container.log.info(msg);
 }
+
+/// Type-erased VTable conforming to `pubsubInterface.Interface.VTable`.
+pub const vtable = root.pubsubInterface.Interface.VTable{
+    .publish = struct {
+        fn call(ptr: *anyopaque, subject: []const u8, payload: []const u8) anyerror!void {
+            const self: *NATS = @ptrCast(@alignCast(ptr));
+            try self.Publish(subject, payload);
+        }
+    }.call,
+    .subscribe = struct {
+        fn call(ptr: *anyopaque, subject: []const u8, hook: *const fn (*root.Context) anyerror!void) anyerror!void {
+            const self: *NATS = @ptrCast(@alignCast(ptr));
+            try self.addSubscriber(subject, hook);
+        }
+    }.call,
+};
