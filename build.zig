@@ -87,6 +87,40 @@ pub fn build(b: *std.Build) void {
         .root_module = test_module,
     });
 
+    // Integration tests require a real database driver (native lib) and must not
+    // be traced by kcov, which aborts on driver initialization. They run via a
+    // separate step that performs no coverage instrumentation.
+    const integration_module = b.createModule(.{
+        .root_source_file = b.path("src/tests_integration.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    integration_module.addImport("pg", pgz.module("pg"));
+    integration_module.addImport("httpz", httpz.module("httpz"));
+    integration_module.addImport("dotenv", env.module("dotenv"));
+    integration_module.addImport("zul", zul.module("zul"));
+    integration_module.addImport("rediz", rediz.module("okredis"));
+    integration_module.addImport("zdt", zdt.module("zdt"));
+    integration_module.addImport("regexp", regexp.module("regex"));
+    integration_module.addImport("mqttz", mqttz.module("mqttz"));
+    integration_module.addImport("jwt", jwt.module("zig-jwt"));
+    integration_module.addImport("sqlite", sqlite.module("sqlite"));
+    integration_module.addImport("nats", nats.module("nats"));
+    integration_module.addImport("zero", module);
+
+    if (builtin.os.tag == .macos) {
+        integration_module.addIncludePath(.{ .cwd_relative = "/usr/local/Cellar/librdkafka/2.13.0/include" });
+        integration_module.addLibraryPath(.{ .cwd_relative = "/usr/local/Cellar/librdkafka/2.13.0/lib" });
+    }
+    integration_module.linkSystemLibrary("rdkafka", .{ .weak = true });
+
+    const integration_tests = b.addTest(.{
+        .root_module = integration_module,
+    });
+    const run_integration = b.addRunArtifact(integration_tests);
+    const integration_step = b.step("test-integration", "Run integration tests (real database)");
+    integration_step.dependOn(&run_integration.step);
+
     const test_step = b.step("test", "Run tests");
 
     const coverage = b.option(bool, "coverage", "enable code coverage using kcov") orelse false;
