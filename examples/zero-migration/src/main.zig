@@ -55,7 +55,7 @@ pub fn addTodoTable(c: *Context) anyerror!void {
     const addTodoTableQuery =
         \\ CREATE TABLE IF NOT EXISTS todos (id SERIAL PRIMARY KEY, task TEXT NOT NULL, created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP );
     ;
-    _ = try c.SQL.exec(addTodoTableQuery, .{});
+    _ = try c.SQL.exec(c, addTodoTableQuery, .{});
 }
 
 pub fn addTodoEntries(c: *Context) !void {
@@ -63,5 +63,5 @@ pub fn addTodoEntries(c: *Context) !void {
         \\ INSERT INTO todos(task) values ('add migrations');
         \\ INSERT INTO todos(task) values ('verify migrations');
     ;
-    _ = try c.SQL.exec(addTodoTableQuery, .{});
+    _ = try c.SQL.exec(c, addTodoTableQuery, .{});
 }

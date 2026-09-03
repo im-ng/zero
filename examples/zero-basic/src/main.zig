@@ -94,10 +94,7 @@ const User = struct {
 pub fn dbResponse(ctx: *Context) !void {
     const stmt = "select id, name from users limit 1";
 
-    var row = try ctx.SQL.queryRow(stmt, .{}) orelse unreachable;
-    defer row.deinit() catch {};
-
-    const user = try row.to(User, .{});
+    const user = try ctx.SQL.queryRow(ctx, User, stmt, .{}) orelse unreachable;
 
     try ctx.response.json(user, .{});
 }

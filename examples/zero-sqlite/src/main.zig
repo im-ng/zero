@@ -83,7 +83,7 @@ pub fn index(ctx: *Context) !void {
 pub fn sqliteInit(ctx: *Context) !void {
     ctx.response.setStatus(.ok);
 
-    try ctx.SQLite.exec(
+    _ = try ctx.SQL.exec(ctx, 
         \\CREATE TABLE IF NOT EXISTS users (
         \\    id INTEGER PRIMARY KEY AUTOINCREMENT,
         \\    name TEXT NOT NULL,
@@ -138,19 +138,19 @@ pub fn createUser(ctx: *Context) !void {
         },
     };
 
-    try ctx.SQLite.exec(
+    _ = try ctx.SQL.exec(ctx, 
         "INSERT INTO users (name, email) VALUES (?, ?)",
         .{ name_str, email_str },
     );
 
-    const id = ctx.SQLite.lastInsertRowID();
+    const id = ctx.SQL.lastInsertRowID();
 
     ctx.response.setStatus(.created);
     try ctx.json(.{ .message = "User created", .id = id, .name = name_str, .email = email_str });
 }
 
 pub fn listUsers(ctx: *Context) !void {
-    const users = try ctx.SQLite.queryRowsContext(User, ctx.allocator, "SELECT id, name, email FROM users", .{});
+    const users = try ctx.SQL.queryRowsContext(ctx, User, "SELECT id, name, email FROM users", .{});
 
     ctx.response.setStatus(.ok);
     try ctx.json(.{ .count = users.len, .users = users });
@@ -164,7 +164,7 @@ pub fn getUser(ctx: *Context) !void {
         return;
     };
 
-    const user = try ctx.SQLite.queryRowContext(User, ctx.allocator, "SELECT id, name, email FROM users WHERE id = ?", .{id});
+    const user = try ctx.SQL.queryRowContext(ctx, User, "SELECT id, name, email FROM users WHERE id = ?", .{id});
 
     if (user) |u| {
         ctx.response.setStatus(.ok);
@@ -225,24 +225,24 @@ pub fn updateUser(ctx: *Context) !void {
 
     if (name_str) |n| {
         if (email_str) |e| {
-            try ctx.SQLite.exec(
+            _ = try ctx.SQL.exec(ctx, 
                 "UPDATE users SET name = ?, email = ? WHERE id = ?",
                 .{ n, e, id },
             );
         } else {
-            try ctx.SQLite.exec(
+            _ = try ctx.SQL.exec(ctx, 
                 "UPDATE users SET name = ? WHERE id = ?",
                 .{ n, id },
             );
         }
     } else if (email_str) |e| {
-        try ctx.SQLite.exec(
+        _ = try ctx.SQL.exec(ctx, 
             "UPDATE users SET email = ? WHERE id = ?",
             .{ e, id },
         );
     }
 
-    const affected = ctx.SQLite.rowsAffected();
+    const affected = ctx.SQL.rowsAffected();
     if (affected == 0) {
         ctx.response.setStatus(.not_found);
         try ctx.json(.{ .err = "User not found", .id = id });
@@ -260,12 +260,12 @@ pub fn deleteUser(ctx: *Context) !void {
         return;
     };
 
-    try ctx.SQLite.exec(
+    _ = try ctx.SQL.exec(ctx, 
         "DELETE FROM users WHERE id = ?",
         .{id},
     );
 
-    const affected = ctx.SQLite.rowsAffected();
+    const affected = ctx.SQL.rowsAffected();
     if (affected == 0) {
         ctx.response.setStatus(.not_found);
         try ctx.json(.{ .err = "User not found", .id = id });

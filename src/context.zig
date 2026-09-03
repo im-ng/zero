@@ -18,8 +18,7 @@ pub const Context = struct {
     allocator: std.mem.Allocator = undefined,
     container: *root.container = undefined,
 
-    SQL: *root.SQL = undefined,
-    SQLite: *root.SQLite = undefined,
+    SQL: root.Datasource = undefined,
     Cache: root.rediz.Client = undefined,
     provider: *root.AuthProvider = undefined,
     MQ: *root.MQTT = undefined,
@@ -47,12 +46,8 @@ pub const Context = struct {
             .response = res,
         };
 
-        if (container.SQL) |sql| {
-            c.SQL = sql;
-        }
-
-        if (container.SQLite) |sqlz| {
-            c.SQLite = sqlz;
+        if (container.SQL != null or container.SQLite != null) {
+            c.SQL = container.datasource;
         }
 
         if (container.redis) |rdz| {

@@ -32,6 +32,7 @@ redis: ?rediz.Client = undefined,
 rdz: ?*root.rdz = undefined,
 SQL: ?*root.SQL = undefined,
 SQLite: ?*root.SQLite = undefined,
+datasource: root.Datasource = undefined,
 services: ?std.StringHashMap(*zeroClient) = undefined,
 mqtt: ?*root.MQTT = null,
 Kakfa: ?*root.kafka = null,
@@ -636,6 +637,8 @@ fn loadSQL(self: *Self) !void {
         self.metricz,
     );
 
+    self.SQL.?.allocator = self.allocator;
+
     const portInt = try self.config.getAsInt("DB_PORT");
     var options: pgz.Pool.Opts = .{
         .size = 10,
@@ -661,6 +664,8 @@ fn loadSQL(self: *Self) !void {
 
     // reference metricz
     self.SQL.?.metricz = self.metricz;
+
+    self.datasource = root.Datasource.init(self.SQL, .postgres);
 
     buffer = try std.fmt.bufPrint(buffer, "generating database connection string for {s}", .{dialect});
     self.log.info(buffer);
@@ -703,6 +708,8 @@ fn loadSQLite(self: *Self) !void {
         self.log,
         self.metricz,
     );
+
+    self.datasource = root.Datasource.init(self.SQLite, .sqlite);
 
     buffer = try std.fmt.bufPrint(buffer, "connected to sqlite at '{s}'", .{dbPath});
     self.log.info(buffer);

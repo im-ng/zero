@@ -38,40 +38,63 @@ pub fn init(
     return source;
 }
 
-pub fn queryRow(self: *SQLite, comptime Type: type, comptime query: []const u8, args: anytype) !?Type {
-    var stmt = try self.db.prepareDynamic(query);
-    defer stmt.deinit();
-    return try stmt.one(Type, .{}, args);
+// pub fn queryRow(self: *SQLite, comptime Type: type, comptime query: []const u8, args: anytype) !?Type {
+//     var stmt = try self.db.prepareDynamic(query);
+//     defer stmt.deinit();
+//     return try stmt.one(Type, .{}, args);
+// }
+
+pub fn queryRow(self: *SQLite, ctx: *root.Context, comptime Type: type, comptime query: []const u8, args: anytype) !?Type {
+    return self.queryRowContext(ctx, Type, query, args);
 }
 
-pub fn queryRowContext(self: *SQLite, comptime Type: type, alloc: std.mem.Allocator, comptime query: []const u8, args: anytype) !?Type {
+pub fn queryRowContext(self: *SQLite, ctx: *root.Context, comptime Type: type, comptime query: []const u8, args: anytype) !?Type {
     var stmt = try self.db.prepareDynamic(query);
     defer stmt.deinit();
-    return try stmt.oneAlloc(Type, alloc, .{}, args);
+    return try stmt.oneAlloc(Type, ctx.allocator, .{}, args);
 }
 
-pub fn queryRows(self: *SQLite, comptime Type: type, alloc: std.mem.Allocator, comptime query: []const u8, args: anytype) ![]Type {
-    var stmt = try self.db.prepareDynamic(query);
-    defer stmt.deinit();
-    return try stmt.all(Type, alloc, .{}, args);
+// pub fn queryRows(self: *SQLite, comptime Type: type, alloc: std.mem.Allocator, comptime query: []const u8, args: anytype) ![]Type {
+//     var stmt = try self.db.prepareDynamic(query);
+//     defer stmt.deinit();
+//     return try stmt.all(Type, alloc, .{}, args);
+// }
+
+pub fn queryRows(self: *SQLite, ctx: *root.Context, comptime Type: type, comptime query: []const u8, args: anytype) ![]Type {
+    return self.queryRowsContext(ctx, Type, query, args);
 }
 
-pub fn queryRowsContext(self: *SQLite, comptime Type: type, alloc: std.mem.Allocator, comptime query: []const u8, args: anytype) ![]Type {
+pub fn queryRowsContext(self: *SQLite, ctx: *root.Context, comptime Type: type, comptime query: []const u8, args: anytype) ![]Type {
     var stmt = try self.db.prepareDynamic(query);
     defer stmt.deinit();
-    return try stmt.all(Type, alloc, .{}, args);
+    return try stmt.all(Type, ctx.allocator, .{}, args);
 }
 
-pub fn exec(self: *SQLite, comptime query: []const u8, args: anytype) !void {
-    var stmt = try self.db.prepareDynamic(query);
-    defer stmt.deinit();
-    return try stmt.exec(.{}, args);
+// pub fn exec(self: *SQLite, comptime query: []const u8, args: anytype) !i64 {
+//     var stmt = try self.db.prepareDynamic(query);
+//     defer stmt.deinit();
+//     try stmt.exec(.{}, args);
+//     return self.db.getLastInsertRowID();
+// }
+
+/// Append typed rows into `list` and return the count appended.
+///
+/// Note: sqlitez's `all` borrows text buffers from the live connection, so the
+/// returned `[]Type` (and therefore the copies appended here) are only valid
+/// for the lifetime of the connection / this request. We intentionally keep the
+/// intermediate slice alive (not freed) to avoid dangling text pointers. Prefer
+/// `queryRows` when you need fully-owned results.
+pub fn selectSlice(self: *SQLite, ctx: *root.Context, comptime Type: type, list: *std.array_list.Managed(Type), comptime query: []const u8, args: anytype) !i64 {
+    const rows = try self.queryRowsContext(ctx, Type, query, args);
+    for (rows) |r| try list.append(r);
+    return @intCast(list.items.len);
 }
 
-pub fn execContext(self: *SQLite, comptime query: []const u8, args: anytype) !void {
+pub fn execWithContext(self: *SQLite, _: *root.Context, comptime query: []const u8, args: anytype) !i64 {
     var stmt = try self.db.prepareDynamic(query);
     defer stmt.deinit();
-    return try stmt.exec(.{}, args);
+    try stmt.exec(.{}, args);
+    return self.db.getLastInsertRowID();
 }
 
 pub fn rowsAffected(self: *SQLite) usize {

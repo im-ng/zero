@@ -35,8 +35,12 @@ pub const AuthProvider = @import("mw/authProvider.zig");
 pub const jwtClaims = AuthProvider.jwtClaims;
 
 pub const rdz = @import("datasource/rdz.zig");
+
 pub const SQL = @import("datasource/SQL.zig");
 pub const SQLite = @import("datasource/SQLite.zig");
+pub const datasourceInterface = @import("datasource/interface.zig");
+pub const Datasource = datasourceInterface.Interface;
+
 pub const migration = @import("migration/migration.zig");
 pub const migrate = @import("migration/migrate.zig");
 
@@ -61,6 +65,7 @@ pub const natsConfig = @import("pubsub/nats/config.zig").natsConfig;
 pub const natsSubscriber = @import("pubsub/nats/subscriber.zig").natsSubscriber;
 pub const natsMessage = @import("pubsub/nats/message.zig").natsMessage;
 pub const nats = @import("pubsub/nats/NATS.zig").NATS;
+
 pub const pubsubInterface = @import("pubsub/interface.zig");
 pub const PubSub = pubsubInterface.Interface;
 
