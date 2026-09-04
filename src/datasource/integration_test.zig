@@ -146,10 +146,11 @@ test "datasource postgres backend integration" {
         return;
     };
 
-    _ = try ds.exec(ctx, "CREATE TABLE person (id SERIAL PRIMARY KEY, age INTEGER NOT NULL)", .{});
+    _ = try ds.exec(ctx, "CREATE TABLE person (id SERIAL PRIMARY KEY, age BIGINT NOT NULL)", .{});
     _ = try ds.exec(ctx, "INSERT INTO person (age) VALUES ($1)", .{@as(i64, 42)});
 
-    const Person = struct { id: i64, age: i64 };
+    const Person = struct { id: i32, age: i64 };
+
     const one = try ds.queryRow(ctx, Person, "SELECT id, age FROM person WHERE age = $1", .{@as(i64, 42)});
     try std.testing.expect(one != null);
     try std.testing.expectEqual(@as(i64, 42), one.?.age);
