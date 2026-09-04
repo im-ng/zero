@@ -246,7 +246,7 @@ pub fn readPayload(self: *Self, subscriber: kafkaSubscriber) !void {
             defer msg.deinit();
 
             const ca = self.prepareChildAllocator() catch |err| {
-                self.container.log.any(err);
+                self.container.log.Any(self.container.allocator, err);
                 continue;
             };
             defer self.destroryChildAllocator(ca);
@@ -257,7 +257,7 @@ pub fn readPayload(self: *Self, subscriber: kafkaSubscriber) !void {
                 _req,
                 _res,
             ) catch |err| {
-                self.container.log.any(err);
+                self.container.log.Any(self.container.allocator, err);
                 return;
             };
             const context = &ctx;

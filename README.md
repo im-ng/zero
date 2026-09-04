@@ -68,7 +68,7 @@ _*An `experimental` support has been added to achieve the zig version 0.16 addit
 | CORS            | ✅     | Configurable CORS middleware               |
 | Panic Recovery  | ✅     | Automatic panic recovery                   |
 | Databases       | ✅     | PostgreSQL, SQLite, Redis                  |
-| Pub/Sub         | ✅     | MQTT, Kafka (via librdkafka)               |
+| Pub/Sub         | ✅     | MQTT, NATS, Kafka (via librdkafka)         |
 | Migrations      | ✅     | DB migrations + seed on startup            |
 | HTTP Client     | ✅     | Register multiple external services        |
 | Cron Jobs       | ✅     | `* * * * *` + second-level + range support |
@@ -92,7 +92,7 @@ See [feature_parity.md](./feature_parity.md) for the full roadmap and upcoming f
 Add zero to your project:
 
 ```bash
-zig fetch --save https://github.com/im-ng/zero/archive/refs/heads/main.zip
+zig fetch --save https://github.com/im-ng/zero/archive/refs/heads/experimental.zip
 ```
 
 ## Quick Start
@@ -102,7 +102,7 @@ zig fetch --save https://github.com/im-ng/zero/archive/refs/heads/main.zip
 ```bash
 mkdir zero-web-app && cd zero-web-app
 zig init
-zig fetch --save https://github.com/im-ng/zero/archive/refs/heads/main.zip
+zig fetch --save https://github.com/im-ng/zero/archive/refs/heads/experimental.zip
 ```
 
 ### 2. Configure `build.zig`

@@ -109,6 +109,7 @@ pub fn Debug(self: *Self, allocator: std.mem.Allocator, message: []const u8) voi
     }
 
     const timestamp = utils.timestampz(allocator) catch "";
+    defer allocator.free(timestamp);
 
     std.log.debug(debugFormat, .{ timestamp, message });
 }
@@ -119,6 +120,7 @@ pub fn Info(self: *Self, allocator: std.mem.Allocator, message: []const u8) void
     }
 
     const timestamp = utils.timestampz(allocator) catch "";
+    defer allocator.free(timestamp);
 
     std.log.info(infoFormat, .{ timestamp, message });
 }
@@ -129,6 +131,7 @@ pub fn Any(self: *Self, allocator: std.mem.Allocator, message: anytype) void {
     }
 
     const timestamp = utils.timestampz(allocator) catch "";
+    defer allocator.free(timestamp);
 
     std.log.info(anyFormat, .{ timestamp, message });
 }
@@ -137,7 +140,9 @@ pub fn Warn(self: *Self, allocator: std.mem.Allocator, message: []const u8) void
     if (self.logLevel > 2) {
         return;
     }
+
     const timestamp = utils.timestampz(allocator) catch "";
+    defer allocator.free(timestamp);
 
     std.log.warn(warnFormat, .{ timestamp, message });
 }
@@ -148,6 +153,7 @@ pub fn Err(self: *Self, allocator: std.mem.Allocator, message: []const u8) void 
     }
 
     const timestamp = utils.timestampz(allocator) catch "";
+    defer allocator.free(timestamp);
 
     std.log.err(errFormat, .{ timestamp, message });
 }
@@ -158,6 +164,7 @@ pub fn Fatal(self: *Self, allocator: std.mem.Allocator, message: []const u8) voi
     }
 
     const timestamp = utils.timestampz(allocator) catch "";
+    defer allocator.free(timestamp);
 
     std.log.err(errFormat, .{ timestamp, message });
 }

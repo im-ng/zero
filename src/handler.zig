@@ -100,6 +100,8 @@ pub const Handler = struct {
     }
 
     pub fn uncaughtError(self: *Handler, req: *httpz.Request, res: *httpz.Response, err: anyerror) void {
+        std.debug.print("something went wrong\n", .{});
+
         var ctx = try Context.init(req.arena, self.container, req, res);
         defer req.arena.destroy(&ctx);
 

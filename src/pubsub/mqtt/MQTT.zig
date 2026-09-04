@@ -123,7 +123,7 @@ pub fn readPackets(self: *Self, subscriber: mqSubscriber) !void {
         switch (packet) {
             .publish => |*publish| {
                 const ca = self.prepareChildAllocator() catch |err| {
-                    self.container.log.any(err);
+                    self.container.log.Any(self.container.allocator, err);
                     continue;
                 };
                 defer self.destroryChildAllocator(ca);
@@ -134,7 +134,7 @@ pub fn readPackets(self: *Self, subscriber: mqSubscriber) !void {
                     _req,
                     _res,
                 ) catch |err| {
-                    self.container.log.any(err);
+                    self.container.log.Any(self.container.allocator, err);
                     return;
                 };
                 const context = &ctx;
@@ -188,7 +188,7 @@ fn subscriptions(self: *Self) !void {
 
         std.Io.sleep(utils.io, std.Io.Duration.fromMilliseconds(100), .awake) catch {};
         const thread = Thread.spawn(.{}, Self.readPackets, .{ self, client }) catch |err| {
-            self.container.log.any(err);
+            self.container.log.Any(self.container.allocator, err);
             return;
         };
         thread.join();
@@ -197,7 +197,7 @@ fn subscriptions(self: *Self) !void {
 
 pub fn startSubscription(self: *Self) !void {
     self.thread = Thread.spawn(.{}, Self.subscriptions, .{self}) catch |err| {
-        self.container.log.any(err);
+        self.container.log.Any(self.container.allocator, err);
         return;
     };
 }
@@ -218,7 +218,7 @@ pub fn addSubscriber(self: *Self, topic: []const u8, hook: *const fn (*root.Cont
         "topic:{s} pubsub subscriber added",
         .{s.topic},
     ) catch |err| {
-        self.container.log.any(err);
+        self.container.log.Any(self.container.allocator, err);
         return;
     };
 

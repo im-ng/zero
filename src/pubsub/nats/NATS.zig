@@ -68,7 +68,7 @@ pub fn create(container: *root.container, config: *const natsConfig) !*NATS {
         _ = c.js.?.createStream(.{ .name = config.stream, .subjects = subjects }) catch |err| {
             // a stream with the same name may already exist; treat that as ok.
             if (err != error.StreamExists) {
-                container.log.any(err);
+                container.log.Any(container.allocator, err);
             }
         };
 
@@ -76,7 +76,7 @@ pub fn create(container: *root.container, config: *const natsConfig) !*NATS {
             .durable_name = config.consumer,
             .ack_policy = .all,
         }) catch |err| {
-            container.log.any(err);
+            container.log.Any(container.allocator, err);
             return err;
         };
 
@@ -92,7 +92,7 @@ pub fn create(container: *root.container, config: *const natsConfig) !*NATS {
         "connected to NATS at '{s}'",
         .{config.url},
     ) catch |err| {
-        container.log.any(err);
+        container.log.Any(container.allocator, err);
         return err;
     };
 
@@ -132,7 +132,7 @@ fn destroryChildAllocator(self: *Self, ca: *arena) void {
 
 fn dispatch(self: *Self, subject: []const u8, payload: []const u8, hook: *const fn (*root.Context) anyerror!void) void {
     const ca = self.prepareChildAllocator() catch |err| {
-        self.container.log.any(err);
+        self.container.log.Any(self.container.allocator, err);
         return;
     };
     defer self.destroryChildAllocator(ca);
@@ -143,7 +143,7 @@ fn dispatch(self: *Self, subject: []const u8, payload: []const u8, hook: *const 
         _req,
         _res,
     ) catch |err| {
-        self.container.log.any(err);
+        self.container.log.Any(self.container.allocator, err);
         return;
     };
     const context = &ctx;
@@ -156,7 +156,7 @@ fn dispatch(self: *Self, subject: []const u8, payload: []const u8, hook: *const 
     context.message = .{ .nats = &message };
 
     hook(context) catch |err| {
-        self.container.log.any(err);
+        self.container.log.Any(self.container.allocator, err);
     };
 }
 
@@ -169,7 +169,7 @@ fn readJetStream(self: *Self, sub: natsSubscriber) !void {
             if (err == error.NoHeartbeat) {
                 continue;
             }
-            self.container.log.any(err);
+            self.container.log.Any(self.container.allocator, err);
             return;
         };
         defer result.deinit();
@@ -208,7 +208,7 @@ fn subscriptions(self: *Self) !void {
 
 pub fn startSubscription(self: *Self) !void {
     self.thread = Thread.spawn(.{}, Self.subscriptions, .{self}) catch |err| {
-        self.container.log.any(err);
+        self.container.log.Any(self.container.allocator, err);
         return;
     };
 }
@@ -229,7 +229,7 @@ pub fn addSubscriber(self: *Self, topic: []const u8, hook: *const fn (*root.Cont
         "topic:{s} nats subscriber added",
         .{s.topic},
     ) catch |err| {
-        self.container.log.any(err);
+        self.container.log.Any(self.container.allocator, err);
         return;
     };
 
