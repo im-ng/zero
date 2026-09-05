@@ -4,6 +4,7 @@ const httpz = root.httpz;
 const zeroClient = root.client;
 const pubSub = root.MQTT;
 const mqMessage = root.mqMessage;
+const natsMessage = root.natsMessage;
 const Error = root.Error;
 const Responder = root.responder;
 const constants = root.constants;
@@ -17,15 +18,15 @@ pub const Context = struct {
     allocator: std.mem.Allocator = undefined,
     container: *root.container = undefined,
 
-    SQL: *root.SQL = undefined,
-    SQLite: *root.SQLite = undefined,
+    SQL: root.Datasource = undefined,
     Cache: root.rediz.Client = undefined,
-    MQ: *root.MQTT = undefined,
     provider: *root.AuthProvider = undefined,
+    MQ: *root.MQTT = undefined,
     KF: *root.kafka = undefined,
+    NATS: *root.nats = undefined,
 
-    message: ?*mqMessage = null,
-    message2: ?*kafkaMessage = null,
+    pubsub: *root.PubSub = undefined,
+    message: ?root.pubsubInterface.Message = null,
 
     wsMessage: ?[]const u8 = null,
     wsClient: *root.httpz.websocket.Conn = undefined,
@@ -45,24 +46,28 @@ pub const Context = struct {
             .response = res,
         };
 
-        if (container.SQL) |sql| {
-            c.SQL = sql;
-        }
-
-        if (container.SQLite) |sqlz| {
-            c.SQLite = sqlz;
+        if (container.SQL != null or container.SQLite != null) {
+            c.SQL = container.datasource;
         }
 
         if (container.redis) |rdz| {
             c.Cache = rdz;
         }
 
-        if (container.pubsub) |pb| {
+        if (container.mqtt) |pb| {
             c.MQ = pb;
         }
 
         if (container.Kakfa) |k| {
             c.KF = k;
+        }
+
+        if (container.Nats) |n| {
+            c.NATS = n;
+        }
+
+        if (container.pubSub) |ps| {
+            c.pubsub = ps;
         }
 
         return c;

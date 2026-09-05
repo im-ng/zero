@@ -21,6 +21,8 @@ pub const ErrData = struct {
 
 pub const ClientError = error{
     ServiceNotReachable,
+    CircuitOpen,
+    OAuthTokenFetchFailed,
 } || std.http.Client.FetchError || HttpError;
 
 pub const CronError = error{

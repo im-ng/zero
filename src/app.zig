@@ -1,5 +1,7 @@
 const std = @import("std");
 const root = @import("zero.zig");
+const EnvMap = std.process.Environ.Map;
+
 const App = @This();
 const Self = @This();
 const httpz = root.httpz;
@@ -23,6 +25,7 @@ pub const swaggerUIBundlerPreset = root.swaggerUIBundlerPreset;
 pub const swaggerUICss = root.swaggerUICss;
 pub const swaggerUIJs = root.swaggerUIJs;
 
+envMap: *EnvMap = undefined,
 log: *root.logger = undefined,
 config: *root.config = undefined,
 container: *root.container = undefined,
@@ -35,7 +38,7 @@ startupHook: ?*const fn (*root.Context) anyerror!void = null,
 var hServer: ?*root.httpServer = undefined;
 var AppInstance: *Self = undefined;
 
-pub fn new(allocator: std.mem.Allocator) !*App {
+pub fn new(allocator: std.mem.Allocator, em: *EnvMap) !*App {
     const app = try allocator.create(App);
     errdefer allocator.destroy(app);
 
@@ -44,6 +47,7 @@ pub fn new(allocator: std.mem.Allocator) !*App {
     const config = try root.config.create(.{
         .allocator = allocator,
         .log = log,
+        .environments = em,
     });
 
     // reset log level
@@ -174,20 +178,44 @@ pub fn run(self: *Self) !void {
 
     // try self.startMetricsServer();
     try self.startHttpServer();
+
+    // The http server has stopped (e.g. after a SIGINT/SIGTERM via the
+    // shutdown handler). Tear down the rest in NORMAL execution flow — never
+    // from the signal handler itself, where joining threads or freeing client
+    // state (while their background threads are still running) is UB/deadlock
+    // and can leave the process hanging (e.g. the NATS io_task thread).
+    if (self.cronz) |cronz| {
+        cronz.destroy();
+    }
+    if (self.container.Nats) |n| {
+        n.destroy();
+    }
+    if (self.container.mqtt) |pb| {
+        pb.destroy();
+    }
+    if (self.container.Kakfa) |k| {
+        k.destroy();
+    }
+
+    self.container.destroy();
 }
 
 fn startPubSubSubscriptions(self: Self) !void {
-    if (self.container.pubsub) |pubsub| {
+    if (self.container.mqtt) |pubsub| {
         self.container.log.info("starting mqtt subscriptions");
         try pubsub.startSubscription();
     }
 
     if (self.container.Kakfa) |k| {
-        if (k.kafkaMode != root.rdkafka.RD_KAFKA_CONSUMER) {
-            return;
+        if (k.kafkaMode == root.rdkafka.RD_KAFKA_CONSUMER) {
+            self.container.log.info("starting kafka subscriptions");
+            try k.startSubscription();
         }
-        self.container.log.info("starting kafka subscriptions");
-        try k.startSubscription();
+    }
+
+    if (self.container.Nats) |n| {
+        self.container.log.info("starting nats subscriptions");
+        try n.startSubscription();
     }
 }
 
@@ -207,13 +235,15 @@ fn startShutdownHandler(_: Self) !void {
     }, null);
 }
 
-fn shutdown(_: c_int) callconv(.c) void {
+fn shutdown(_: std.c.SIG) callconv(.c) void {
+    // Signal shutdown only. Joining threads / tearing down from a signal
+    // handler is undefined behavior (can deadlock), so we just stop the
+    // scheduler loop and stop the http server. The actual thread join for
+    // cronz happens later in run() once the server thread exits.
     if (AppInstance.cronz) |cronz| {
-        cronz.destroy();
+        cronz.stop();
         AppInstance.log.info("cleaning running cronz");
     }
-
-    std.Thread.sleep(1_000_000_000);
 
     if (hServer) |h| {
         h.shutdown();
@@ -268,7 +298,7 @@ pub fn prepareHttpServer(self: Self) !std.Thread {
 }
 
 fn favIcon(ctx: *Context) !void {
-    var f = std.fs.cwd().openFile(constants.FAVICON_FILE_PATH, .{}) catch |err| switch (err) {
+    var f = std.Io.Dir.cwd().openFile(utils.io, constants.FAVICON_FILE_PATH, .{}) catch |err| switch (err) {
         else => {
             var buffer: []u8 = try ctx.allocator.alloc(u8, 100);
             buffer = try std.fmt.bufPrint(buffer, "favorite icon not found, using default", .{});
@@ -281,10 +311,10 @@ fn favIcon(ctx: *Context) !void {
             return;
         },
     };
-    defer f.close();
+    defer f.close(utils.io);
 
     // Read the file into a buffer.
-    const stat = f.stat() catch |err| {
+    const stat = f.stat(utils.io) catch |err| {
         var buffer: []u8 = try ctx.allocator.alloc(u8, 100);
         buffer = try std.fmt.bufPrint(buffer, "favorite icon not found, using default {s}", .{
             @errorName(err),
@@ -298,19 +328,8 @@ fn favIcon(ctx: *Context) !void {
         return;
     };
 
-    const buffer = f.readToEndAlloc(ctx.allocator, stat.size) catch |err| {
-        var buffer: []u8 = try ctx.allocator.alloc(u8, 100);
-        buffer = try std.fmt.bufPrint(buffer, "favorite icon not found, using default {s}", .{
-            @errorName(err),
-        });
-        ctx.info(buffer);
-
-        ctx.response.setStatus(.ok);
-        ctx.response.content_type = .ICO;
-        ctx.response.body = favoriteIcon;
-
-        return;
-    };
+    const buffer = try ctx.allocator.alloc(u8, stat.size);
+    _ = try f.readPositionalAll(utils.io, buffer, 0);
 
     ctx.response.setStatus(.ok);
     ctx.response.content_type = .ICO;
@@ -318,17 +337,13 @@ fn favIcon(ctx: *Context) !void {
 }
 
 fn readFile(ctx: *Context, path: []const u8) ![]const u8 {
-    var filePath: []u8 = undefined;
-    filePath = try ctx.allocator.alloc(u8, 100);
-    filePath = try std.fs.cwd().realpath(path, filePath);
-
-    var f = try std.fs.cwd().openFile(filePath, .{});
-    defer f.close();
+    var f = try std.Io.Dir.cwd().openFile(utils.io, path, .{});
+    defer f.close(utils.io);
 
     // Read the file into a buffer.
-    const stat = try f.stat();
-
-    const buffer = f.readToEndAlloc(ctx.allocator, stat.size);
+    const stat = try f.stat(utils.io);
+    const buffer = try ctx.allocator.alloc(u8, stat.size);
+    _ = try f.readPositionalAll(utils.io, buffer, 0);
     return buffer;
 }
 
@@ -475,8 +490,23 @@ pub fn runMigrations(self: *Self) !void {
     };
 }
 
-pub fn addHttpService(self: *Self, name: []const u8, address: []const u8) !void {
-    const service = try zeroClient.create(self.container, name, address);
+pub fn addHttpService(self: *Self, name: []const u8, address: []const u8, opts: zeroClient.ServiceOptions) !void {
+    var resolved = zeroClient.fromEnv(self.container, name);
+    if (opts.auth != null) {
+        resolved.auth = opts.auth;
+    }
+
+    if (opts.circuitBreaker != null) {
+        resolved.circuitBreaker = opts.circuitBreaker;
+    }
+
+    const service = try zeroClient.createWithConfig(
+        self.container,
+        name,
+        address,
+        resolved,
+    );
+
     try self.container.registerZeroClient(service);
 }
 
@@ -505,6 +535,25 @@ pub fn addKafkaSubscription(self: *Self, topic: []const u8, hook: fn (*root.Cont
     try self.container.Kakfa.?.addSubscriber(topic, hook);
 }
 
+pub fn addNatsSubscription(self: *Self, topic: []const u8, hook: fn (*root.Context) anyerror!void) !void {
+    if (self.container.Nats == null) {
+        self.container.log.err("pubsub is disabled, topic subscription is not available.");
+        return;
+    }
+
+    try self.container.Nats.?.addSubscriber(topic, hook);
+}
+
+/// Subscribe through the unified PubSub interface (backend-agnostic).
+pub fn addPubSubSubscription(self: *Self, topic: []const u8, hook: fn (*root.Context) anyerror!void) !void {
+    if (self.container.pubSub == null) {
+        self.container.log.err("pubsub is disabled, topic subscription is not available.");
+        return;
+    }
+
+    try self.container.pubSub.?.addSubscriber(topic, hook);
+}
+
 pub fn addOAuthKeyRefresher(self: *Self) anyerror!void {
     if (self.httpServer.provider == null) {
         return;
@@ -525,7 +574,7 @@ pub fn addOAuthKeyRefresher(self: *Self) anyerror!void {
                 self.container.log.info(schedule);
 
                 //register http client
-                try self.addHttpService("zero-jwks-service", provider.pathUrl);
+                try self.addHttpService("zero-jwks-service", provider.pathUrl, zeroClient.ServiceOptions{});
 
                 //register job to refresh
                 try self.addCronJob(schedule, "zero-jwks-refresher", AuthProvider.refreshKeys);

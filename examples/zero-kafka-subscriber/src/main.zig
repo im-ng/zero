@@ -11,12 +11,14 @@ pub const std_options: std.Options = .{
 
 const topicName = "zero-topic";
 
-pub fn main() !void {
-    var gpa: std.heap.GeneralPurposeAllocator(.{}) = .init;
+pub fn main(init: std.process.Init) !void {
+    utils.setIo(init.io);
+
+    var gpa: std.heap.DebugAllocator(.{}) = .init;
     const allocator = gpa.allocator();
     _ = gpa.detectLeaks();
 
-    const app: *App = try App.new(allocator);
+    const app = try App.new(allocator, init.environ_map);
 
     try app.addKafkaSubscription(topicName, subscribeTask);
 
@@ -31,10 +33,11 @@ const customMessage = struct {
 fn subscribeTask(ctx: *Context) !void {
     const timestamp = try utils.sqlTimestampz(ctx.allocator);
     //transform ctx.message to custom type in packet read itself
-    if (ctx.message2) |message| {
+    if (ctx.message) |message| {
+        const k = message.kafka;
         var buffer: []u8 = undefined;
         buffer = try ctx.allocator.alloc(u8, 1024);
-        buffer = try std.fmt.bufPrint(buffer, "Received on [{s}] {s}", .{ message.topic, message.payload.? });
+        buffer = try std.fmt.bufPrint(buffer, "Received on [{s}] {s}", .{ k.topic, k.payload.? });
 
         ctx.info(timestamp);
         ctx.info(buffer);

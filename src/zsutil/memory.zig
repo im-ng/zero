@@ -1,5 +1,6 @@
 const std = @import("std");
 const testing = std.testing;
+const utils = @import("../utils.zig");
 
 /// Retrieves the current memory usage statistics.
 ///
@@ -7,11 +8,11 @@ const testing = std.testing;
 ///
 /// Returns a `MemUsage` struct with the current memory usage statistics.
 pub fn usage() !MemUsage {
-    const file = try std.fs.openFileAbsolute("/proc/meminfo", .{});
-    defer file.close();
+    const file = try std.Io.Dir.openFileAbsolute(utils.io, "/proc/meminfo", .{});
+    defer file.close(utils.io);
 
     var buffer: [1024]u8 = undefined;
-    const bytes_read = try file.readAll(&buffer);
+    const bytes_read = try file.readPositionalAll(utils.io, &buffer, 0);
 
     const contents = buffer[0..bytes_read];
 

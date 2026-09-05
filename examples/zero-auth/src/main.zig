@@ -6,6 +6,7 @@ const Context = zero.Context;
 const ClientError = zero.Error.ClientError;
 const Client = zero.client;
 const jwtClaims = zero.jwtClaims;
+const utils = zero.utils;
 
 pub const publicKey = struct {
     kid: []const u8,
@@ -24,12 +25,14 @@ pub const std_options: std.Options = .{
     .logFn = zero.logger.custom,
 };
 
-pub fn main() !void {
-    var gpa: std.heap.GeneralPurposeAllocator(.{}) = .init;
+pub fn main(init: std.process.Init) !void {
+    utils.setIo(init.io);
+
+    var gpa: std.heap.DebugAllocator(.{}) = .init;
     const allocator = gpa.allocator();
     _ = gpa.detectLeaks();
 
-    const app: *App = try App.new(allocator);
+    const app: *App = try App.new(allocator, init.environ_map);
 
     try app.get("/basic", basicResponse);
 

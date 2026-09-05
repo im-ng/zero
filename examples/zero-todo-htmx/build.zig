@@ -8,12 +8,20 @@ pub fn build(b: *std.Build) void {
 
     const exe = b.addExecutable(.{
         .name = "todo",
+        .use_lld = true,
+        .use_llvm = true,
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/main.zig"),
             .target = target,
             .optimize = optimize,
         }),
     });
+
+    const debug = b.option(bool, "debug", "enable code debug mode") orelse false;
+    if (debug) {
+        exe.use_lld = true;
+        exe.use_llvm = true;
+    }
 
     exe.root_module.addImport("zero", zero.module("zero"));
 

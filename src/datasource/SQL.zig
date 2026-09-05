@@ -1,5 +1,6 @@
 const std = @import("std");
 const root = @import("../zero.zig");
+const utils = root.utils;
 const SQL = @This();
 const Self = @This();
 
@@ -8,12 +9,16 @@ const Results = root.pgz.Result;
 const QueryRow = root.pgz.QueryRow;
 const context = root.Context;
 const sqlStats = root.metricz.AppSQLStatsLabel;
+const Mapper = root.pgz.Mapper;
 
 sql: *pgz.Pool,
 log: *root.logger,
 metricz: *root.metricz = undefined,
 config: *dbConfig = undefined,
 options: *pgz.Pool.Opts = undefined,
+allocator: std.mem.Allocator = undefined,
+lastId: i64 = 0,
+rows: usize = 0,
 
 // is this neccessary?
 pub const dbConfig = struct {
@@ -54,94 +59,161 @@ pub fn recordMetrics(self: *Self, duration: f32, query: []const u8, queryType: [
     ) catch unreachable;
 }
 
-pub fn queryRow(self: *Self, comptime query: []const u8, args: anytype) !?QueryRow {
-    var timer = try std.time.Timer.start();
-
-    const rows = try self.sql.row(query, args);
-
-    const duration: f32 = @floatFromInt(timer.lap() / 1000000);
-    self.recordMetrics(duration, query, "select");
-
-    return rows;
+pub fn queryRowContext(self: *Self, ctx: *context, comptime Type: type, comptime query: []const u8, args: anytype) !?Type {
+    return self.queryRow(ctx, Type, query, args);
 }
 
-pub fn queryRowContext(self: *Self, _: *context, comptime query: []const u8, args: anytype) !?QueryRow {
-    var timer = try std.time.Timer.start();
-
-    const results = try self.sql.row(query, args);
-
-    const duration: f32 = @floatFromInt(timer.lap() / 1000000);
-    self.recordMetrics(duration, query, "select");
-
-    return results;
+pub fn queryRowsContext(self: *Self, ctx: *context, comptime Type: type, comptime query: []const u8, args: anytype) ![]Type {
+    return self.queryRows(ctx, Type, query, args);
 }
 
-pub fn queryRows(self: *Self, comptime query: []const u8, args: anytype) !*Results {
-    var timer = try std.time.Timer.start();
+pub fn queryRow(self: *Self, ctx: *context, comptime Type: type, comptime query: []const u8, args: anytype) !?Type {
+    const start = utils.nowMonotonic();
 
-    const results = try self.sql.query(query, args);
+    const conn = try self.sql.acquire();
+    defer self.sql.release(conn);
 
-    const duration: f32 = @floatFromInt(timer.lap() / 1000000);
+    var maybe = conn.row(query, args) catch |err| {
+        if (err == error.PG) {
+            if (conn.err) |pge| {
+                self.log.err(pge.message);
+            }
+        }
+        return err;
+    };
+
+    const duration: f32 = utils.elapsedMs(start);
     self.recordMetrics(duration, query, "select");
 
-    return results;
+    if (maybe) |*row| {
+        defer row.deinit() catch {};
+        return try row.to(Type, .{ .allocator = ctx.allocator });
+    }
+    return null;
 }
 
-pub fn queryRowsContext(self: *Self, _: *context, comptime query: []const u8, args: anytype) !*Results {
-    var timer = try std.time.Timer.start();
+pub fn queryRows(self: *Self, ctx: *root.Context, comptime Type: type, comptime query: []const u8, args: anytype) ![]Type {
+    const start = utils.nowMonotonic();
 
-    const results = try self.sql.query(query, args);
+    const conn = try self.sql.acquire();
+    defer self.sql.release(conn);
 
-    const duration: f32 = @floatFromInt(timer.lap() / 1000000);
+    const rows = conn.queryOpts(query, args, .{ .column_names = true }) catch |err| {
+        if (err == error.PG) {
+            if (conn.err) |pge| {
+                self.log.err(pge.message);
+            }
+        }
+        return err;
+    };
+    defer rows.deinit();
+
+    const duration: f32 = utils.elapsedMs(start);
     self.recordMetrics(duration, query, "select");
 
-    return results;
+    var list = std.array_list.Managed(Type).init(ctx.allocator);
+    var res = rows.mapper(Type, .{ .allocator = ctx.allocator });
+    while (try res.next()) |t| try list.append(t);
+    return try list.toOwnedSlice();
 }
 
-pub fn exec(self: *Self, comptime query: []const u8, args: anytype) !?i64 {
-    var timer = try std.time.Timer.start();
+pub fn exec(self: *Self, comptime query: []const u8, args: anytype) !i64 {
+    const start = utils.nowMonotonic();
 
-    const id = try self.sql.exec(query, args);
+    const conn = try self.sql.acquire();
+    defer self.sql.release(conn);
 
-    const duration: f32 = @floatFromInt(timer.lap() / 1000000);
+    const id = conn.exec(query, args) catch |err| {
+        if (err == error.PG) {
+            if (conn.err) |pge| {
+                self.log.err(pge.message);
+            }
+        }
+        return err;
+    };
+
+    const duration: f32 = utils.elapsedMs(start);
     self.recordMetrics(duration, query, "insert");
 
-    return id;
+    self.lastId = id orelse 0;
+    self.rows = 0;
+    return self.lastId;
 }
 
-pub fn execWithContext(self: *Self, _: *context, comptime query: []const u8, args: anytype) !?i64 {
-    var timer = try std.time.Timer.start();
+pub fn execWithContext(self: *Self, _: *context, comptime query: []const u8, args: anytype) !i64 {
+    const start = utils.nowMonotonic();
 
-    const id = try self.sql.exec(query, args);
+    const conn = try self.sql.acquire();
+    defer self.sql.release(conn);
 
-    const duration: f32 = @floatFromInt(timer.lap() / 1000000);
+    const id = conn.exec(query, args) catch |err| {
+        if (err == error.PG) {
+            if (conn.err) |pge| {
+                self.log.err(pge.message);
+            }
+        }
+        return err;
+    };
+
+    const duration: f32 = utils.elapsedMs(start);
     self.recordMetrics(duration, query, "insert");
 
-    return id;
+    self.lastId = id orelse 0;
+    self.rows = 0;
+    return self.lastId;
+}
+
+pub fn lastInsertRowID(self: *Self) i64 {
+    return self.lastId;
+}
+
+pub fn rowsAffected(self: *Self) usize {
+    return self.rows;
 }
 
 pub fn select(self: *Self, comptime _type: anytype, comptime query: []const u8, args: anytype) !?_type {
-    var timer = try std.time.Timer.start();
+    const start = utils.nowMonotonic();
 
-    const row = self.sql.row(query, args);
-    defer row.deinit() catch {};
+    const conn = try self.sql.acquire();
+    defer self.sql.release(conn);
 
-    const duration: f32 = @floatFromInt(timer.lap() / 1000000);
+    const row = try conn.queryOpts(query, args, .{ .column_names = true });
+    defer row.deinit();
+
+    var result: _type = undefined;
+    while (try row.next()) |_row| {
+        result = try _row.to(_type, .{});
+    }
+
+    const duration: f32 = utils.elapsedMs(start);
     self.recordMetrics(duration, query, "select");
 
-    const result = try row.to(_type, .{});
     return result;
 }
 
-pub fn selectSlice(self: *Self, comptime _type: anytype, comptime query: []const u8, args: anytype) !*Results {
-    var timer = try std.time.Timer.start();
+pub fn selectSlice(
+    self: *Self,
+    _: *root.Context,
+    comptime _type: anytype,
+    list: *std.array_list.Managed(_type),
+    comptime query: []const u8,
+    args: anytype,
+) !i64 {
+    const start = utils.nowMonotonic();
 
-    const row = self.sql.queryOpts(query, args);
-    defer row.deinit() catch {};
+    const conn = try self.sql.acquire();
+    defer self.sql.release(conn);
 
-    const duration: f32 = @floatFromInt(timer.lap() / 1000000);
+    const rows = try conn.queryOpts(query, args, .{ .column_names = true });
+    defer rows.deinit();
+
+    var res = rows.mapper(_type, .{ .dupe = true });
+    while (try res.next()) |T| {
+        try list.append(T);
+    }
+
+    const duration: f32 = utils.elapsedMs(start);
     self.recordMetrics(duration, query, "select");
 
-    const results = try row.mapper(_type, .{});
-    return results;
+    return 0;
 }

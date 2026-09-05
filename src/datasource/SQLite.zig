@@ -2,112 +2,99 @@ const std = @import("std");
 const root = @import("../zero.zig");
 
 const SQLite = @This();
-const Self = @This();
-const sqlitez = root.sqlitez;
 
-db: sqlitez.Db,
+allocator: std.mem.Allocator,
 log: *root.logger,
 metricz: *root.metricz,
-allocator: std.mem.Allocator,
+db: root.sqlitez.Db,
 
 pub fn init(
     allocator: std.mem.Allocator,
-    dbPath: []const u8,
+    db_path: []const u8,
     create: bool,
     write: bool,
-    threading_mode: sqlitez.ThreadingMode,
+    threading_mode: root.sqlitez.ThreadingMode,
     l: *root.logger,
     m: *root.metricz,
 ) !*SQLite {
+    const db_path_z = try allocator.dupeZ(u8, db_path);
+
     const source = try allocator.create(SQLite);
     errdefer allocator.destroy(source);
 
-    const nullTermPath = try allocator.dupeZ(u8, dbPath);
-
-    const options = sqlitez.InitOptions{
-        .mode = .{ .File = nullTermPath },
-        .open_flags = .{ .write = write, .create = create },
-        .threading_mode = threading_mode,
-    };
-
     source.* = SQLite{
-        .db = try sqlitez.Db.init(options),
+        .allocator = allocator,
         .log = l,
         .metricz = m,
-        .allocator = allocator,
+        .db = undefined,
     };
+
+    source.db = try root.sqlitez.Db.init(.{
+        .mode = .{ .File = db_path_z },
+        .open_flags = .{ .write = write, .create = create },
+        .threading_mode = threading_mode,
+    });
 
     return source;
 }
 
-pub fn queryRow(self: *SQLite, comptime Type: type, comptime query: []const u8, args: anytype) !?Type {
-    var timer = try std.time.Timer.start();
+// pub fn queryRow(self: *SQLite, comptime Type: type, comptime query: []const u8, args: anytype) !?Type {
+//     var stmt = try self.db.prepareDynamic(query);
+//     defer stmt.deinit();
+//     return try stmt.one(Type, .{}, args);
+// }
 
-    const result = try self.db.one(Type, query, .{}, args);
-
-    const duration: f32 = @floatFromInt(timer.lap() / 1000000);
-    self.recordMetrics(duration, query, "select");
-
-    return result;
+pub fn queryRow(self: *SQLite, ctx: *root.Context, comptime Type: type, comptime query: []const u8, args: anytype) !?Type {
+    return self.queryRowContext(ctx, Type, query, args);
 }
 
-pub fn queryRowContext(self: *SQLite, comptime Type: type, alloc: std.mem.Allocator, comptime query: []const u8, args: anytype) !?Type {
-    var timer = try std.time.Timer.start();
-
-    const result = try self.db.oneAlloc(Type, alloc, query, .{}, args);
-
-    const duration: f32 = @floatFromInt(timer.lap() / 1000000);
-    self.recordMetrics(duration, query, "select");
-
-    return result;
-}
-
-pub fn queryRows(self: *SQLite, comptime Type: type, alloc: std.mem.Allocator, comptime query: []const u8, args: anytype) ![]Type {
-    var timer = try std.time.Timer.start();
-
-    var stmt = try self.db.prepare(query);
+pub fn queryRowContext(self: *SQLite, ctx: *root.Context, comptime Type: type, comptime query: []const u8, args: anytype) !?Type {
+    var stmt = try self.db.prepareDynamic(query);
     defer stmt.deinit();
-
-    const result = try stmt.all(Type, alloc, .{}, args);
-
-    const duration: f32 = @floatFromInt(timer.lap() / 1000000);
-    self.recordMetrics(duration, query, "select");
-
-    return result;
+    return try stmt.oneAlloc(Type, ctx.allocator, .{}, args);
 }
 
-pub fn queryRowsContext(self: *SQLite, comptime Type: type, alloc: std.mem.Allocator, comptime query: []const u8, args: anytype) ![]Type {
-    var timer = try std.time.Timer.start();
+// pub fn queryRows(self: *SQLite, comptime Type: type, alloc: std.mem.Allocator, comptime query: []const u8, args: anytype) ![]Type {
+//     var stmt = try self.db.prepareDynamic(query);
+//     defer stmt.deinit();
+//     return try stmt.all(Type, alloc, .{}, args);
+// }
 
-    var stmt = try self.db.prepare(query);
+pub fn queryRows(self: *SQLite, ctx: *root.Context, comptime Type: type, comptime query: []const u8, args: anytype) ![]Type {
+    return self.queryRowsContext(ctx, Type, query, args);
+}
+
+pub fn queryRowsContext(self: *SQLite, ctx: *root.Context, comptime Type: type, comptime query: []const u8, args: anytype) ![]Type {
+    var stmt = try self.db.prepareDynamic(query);
     defer stmt.deinit();
-
-    const result = try stmt.all(Type, alloc, .{}, args);
-
-    const duration: f32 = @floatFromInt(timer.lap() / 1000000);
-    self.recordMetrics(duration, query, "select");
-
-    return result;
+    return try stmt.all(Type, ctx.allocator, .{}, args);
 }
 
-pub fn exec(self: *SQLite, comptime query: []const u8, args: anytype) !void {
-    var timer = try std.time.Timer.start();
+// pub fn exec(self: *SQLite, comptime query: []const u8, args: anytype) !i64 {
+//     var stmt = try self.db.prepareDynamic(query);
+//     defer stmt.deinit();
+//     try stmt.exec(.{}, args);
+//     return self.db.getLastInsertRowID();
+// }
 
-    const options = sqlitez.QueryOptions{};
-    try self.db.exec(query, options, args);
-
-    const duration: f32 = @floatFromInt(timer.lap() / 1000000);
-    self.recordMetrics(duration, query, "exec");
+/// Append typed rows into `list` and return the count appended.
+///
+/// Note: sqlitez's `all` borrows text buffers from the live connection, so the
+/// returned `[]Type` (and therefore the copies appended here) are only valid
+/// for the lifetime of the connection / this request. We intentionally keep the
+/// intermediate slice alive (not freed) to avoid dangling text pointers. Prefer
+/// `queryRows` when you need fully-owned results.
+pub fn selectSlice(self: *SQLite, ctx: *root.Context, comptime Type: type, list: *std.array_list.Managed(Type), comptime query: []const u8, args: anytype) !i64 {
+    const rows = try self.queryRowsContext(ctx, Type, query, args);
+    for (rows) |r| try list.append(r);
+    return @intCast(list.items.len);
 }
 
-pub fn execContext(self: *SQLite, comptime query: []const u8, args: anytype) !void {
-    var timer = try std.time.Timer.start();
-
-    const options = sqlitez.QueryOptions{};
-    try self.db.exec(query, options, args);
-
-    const duration: f32 = @floatFromInt(timer.lap() / 1000000);
-    self.recordMetrics(duration, query, "exec");
+pub fn execWithContext(self: *SQLite, _: *root.Context, comptime query: []const u8, args: anytype) !i64 {
+    var stmt = try self.db.prepareDynamic(query);
+    defer stmt.deinit();
+    try stmt.exec(.{}, args);
+    return self.db.getLastInsertRowID();
 }
 
 pub fn rowsAffected(self: *SQLite) usize {
@@ -116,18 +103,4 @@ pub fn rowsAffected(self: *SQLite) usize {
 
 pub fn lastInsertRowID(self: *SQLite) i64 {
     return self.db.getLastInsertRowID();
-}
-
-fn recordMetrics(self: *SQLite, duration: f32, query: []const u8, queryType: []const u8) void {
-    _ = query;
-    _ = queryType;
-    self.metricz.sqlResponse(
-        .{
-            .hostname = "",
-            .database = "",
-            .query = "",
-            .operation = "",
-        },
-        duration,
-    ) catch unreachable;
 }

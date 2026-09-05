@@ -24,9 +24,9 @@ thread: std.Thread = undefined,
 container: *root.container = undefined,
 rootContext: *root.Context = undefined,
 subscriber: std.array_list.Managed(mqSubscriber) = undefined,
-mu: std.Thread.Mutex = undefined,
+mu: std.Io.Mutex = undefined,
 signal: Atomic(bool) = undefined,
-mqtt: root.mqttz.posix.Client = undefined,
+mqtt: root.mqttz.posix.Client311 = undefined,
 mqttClient: ?[]const u8 = undefined,
 isPubSubSet: bool = false,
 
@@ -34,12 +34,12 @@ pub fn create(container: *root.container, config: *const mqConfig) !*MQTT {
     const c = try container.allocator.create(MQTT);
     errdefer container.allocator.destroy(c);
 
-    c.mu = .{};
+    c.mu = .init;
     c.signal = Atomic(bool).init(true);
     c.container = container;
     c.subscriber = std.array_list.Managed(mqSubscriber).init(container.allocator);
 
-    const m = try root.mqttz.posix.Client.init(.{
+    const m = try root.mqttz.posix.Client311.init(utils.io, .{
         .port = config.port,
         .ip = config.ip,
         .host = config.hostname,
@@ -66,8 +66,10 @@ pub fn create(container: *root.container, config: *const mqConfig) !*MQTT {
 
             c.mqttClient = cack.assigned_client_identifier;
 
-            msg = try utils.combine(container.allocator, "MQTT client id {s}", .{cack.assigned_client_identifier.?});
-            container.log.info(msg);
+            if (cack.assigned_client_identifier) |id| {
+                msg = try utils.combine(container.allocator, "MQTT client id {s}", .{id});
+                container.log.info(msg);
+            }
         },
         else => {
             const msg = try utils.combine(container.allocator, "could not connect to MQTT at '{s}:{d}'", .{ config.hostname, config.port });
@@ -114,14 +116,14 @@ fn destroryChildAllocator(self: *Self, ca: *arena) void {
 
 pub fn readPackets(self: *Self, subscriber: mqSubscriber) !void {
     while (self.signal.load(.monotonic)) {
-        std.Thread.sleep(std.time.ns_per_s);
+        std.Io.sleep(utils.io, std.Io.Duration.fromSeconds(1), .awake) catch {};
         const packet = try self.mqtt.readPacket(.{ .timeout = 1000 }) orelse {
             continue;
         };
         switch (packet) {
             .publish => |*publish| {
                 const ca = self.prepareChildAllocator() catch |err| {
-                    self.container.log.any(err);
+                    self.container.log.Any(self.container.allocator, err);
                     continue;
                 };
                 defer self.destroryChildAllocator(ca);
@@ -132,7 +134,7 @@ pub fn readPackets(self: *Self, subscriber: mqSubscriber) !void {
                     _req,
                     _res,
                 ) catch |err| {
-                    self.container.log.any(err);
+                    self.container.log.Any(self.container.allocator, err);
                     return;
                 };
                 const context = &ctx;
@@ -143,7 +145,7 @@ pub fn readPackets(self: *Self, subscriber: mqSubscriber) !void {
                 };
 
                 // transform packet to client.response using std.json.parse.
-                context.message = &message;
+                context.message = .{ .mqtt = &message };
 
                 try subscriber.exec(context);
             },
@@ -184,9 +186,9 @@ fn subscriptions(self: *Self) !void {
             },
         };
 
-        std.Thread.sleep(std.time.ns_per_ms * 100);
+        std.Io.sleep(utils.io, std.Io.Duration.fromMilliseconds(100), .awake) catch {};
         const thread = Thread.spawn(.{}, Self.readPackets, .{ self, client }) catch |err| {
-            self.container.log.any(err);
+            self.container.log.Any(self.container.allocator, err);
             return;
         };
         thread.join();
@@ -195,7 +197,7 @@ fn subscriptions(self: *Self) !void {
 
 pub fn startSubscription(self: *Self) !void {
     self.thread = Thread.spawn(.{}, Self.subscriptions, .{self}) catch |err| {
-        self.container.log.any(err);
+        self.container.log.Any(self.container.allocator, err);
         return;
     };
 }
@@ -207,18 +209,34 @@ pub fn addSubscriber(self: *Self, topic: []const u8, hook: *const fn (*root.Cont
         .exec = hook,
     };
 
-    self.mu.lock();
+    self.mu.lock(utils.io) catch {};
     try self.subscriber.append(s);
-    self.mu.unlock();
+    self.mu.unlock(utils.io);
 
     const msg = utils.combine(
         self.container.allocator,
         "topic:{s} pubsub subscriber added",
         .{s.topic},
     ) catch |err| {
-        self.container.log.any(err);
+        self.container.log.Any(self.container.allocator, err);
         return;
     };
 
     self.container.log.info(msg);
 }
+
+/// Type-erased VTable conforming to `pubsubInterface.Interface.VTable`.
+pub const vtable = root.pubsubInterface.Interface.VTable{
+    .publish = struct {
+        fn call(ptr: *anyopaque, subject: []const u8, payload: []const u8) anyerror!void {
+            const self: *MQTT = @ptrCast(@alignCast(ptr));
+            _ = try self.Publish(subject, payload);
+        }
+    }.call,
+    .subscribe = struct {
+        fn call(ptr: *anyopaque, subject: []const u8, hook: *const fn (*root.Context) anyerror!void) anyerror!void {
+            const self: *MQTT = @ptrCast(@alignCast(ptr));
+            try self.addSubscriber(subject, hook);
+        }
+    }.call,
+};

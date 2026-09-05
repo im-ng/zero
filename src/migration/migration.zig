@@ -9,6 +9,7 @@ const SQL = root.SQL;
 const util = root.utils;
 const migrate = root.migrate;
 const zdt = root.zdt;
+const utils = root.utils;
 
 const sqlMigrator = @import("./SQL.zig");
 
@@ -49,7 +50,11 @@ pub fn run(self: *Self) anyerror!void {
     const lastMigration = try sqlMigrator.lastMigration(ctx);
 
     for (self.keys.items) |key| {
-        const keyAsString = try util.toStringFromInt(ctx.allocator, "{d}", key);
+        const keyAsString = try util.toStringFromInt(
+            ctx.allocator,
+            "{d}",
+            key,
+        );
 
         const value = self.map.get(keyAsString);
 
@@ -59,7 +64,7 @@ pub fn run(self: *Self) anyerror!void {
                 continue;
             }
 
-            var timer = try std.time.Timer.start();
+            const start = util.nowReal();
 
             m.run(ctx) catch |err| switch (err) {
                 else => {
@@ -68,7 +73,7 @@ pub fn run(self: *Self) anyerror!void {
                 },
             };
 
-            const duration: u64 = timer.lap() / 1000000;
+            const duration: u64 = @as(u64, @intCast(@divTrunc(start.nanoseconds, 1_000_000)));
 
             _ = try sqlMigrator.insertMigration(ctx, m, duration);
 

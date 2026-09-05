@@ -1,6 +1,7 @@
 const std = @import("std");
 const testing = std.testing;
 const root = @import("../zero.zig");
+const utils = root.utils;
 const Context = root.Context;
 
 /// Retrieves the current process statistics.
@@ -10,11 +11,11 @@ const Context = root.Context;
 ///
 /// Returns a `ProcessStatus` struct with the current memory usage statistics.
 pub fn usage(ctx: *Context) !Host {
-    const file = try std.fs.openFileAbsolute("/etc/os-release", .{});
-    defer file.close();
+    const file = try std.Io.Dir.openFileAbsolute(utils.io, "/etc/os-release", .{});
+    defer file.close(utils.io);
 
     var buffer: [1024]u8 = undefined;
-    var bytes_read = try file.readAll(&buffer);
+    var bytes_read = try file.readPositionalAll(utils.io, &buffer, 0);
     var contents = buffer[0..bytes_read];
 
     var lines = std.mem.splitSequence(u8, contents, "\n");
@@ -28,11 +29,11 @@ pub fn usage(ctx: *Context) !Host {
         try setValue(ctx.allocator, []const u8, &host.versionFull, line, "DEBIAN_VERSION_FULL=");
     }
 
-    const file2 = try std.fs.openFileAbsolute("/etc/hostname", .{});
-    defer file2.close();
+    const file2 = try std.Io.Dir.openFileAbsolute(utils.io, "/etc/hostname", .{});
+    defer file2.close(utils.io);
 
     buffer = undefined;
-    bytes_read = try file2.readAll(&buffer);
+    bytes_read = try file2.readPositionalAll(utils.io, &buffer, 0);
     contents = buffer[0..bytes_read];
 
     try setValue(ctx.allocator, []const u8, &host.hostname, contents, "");

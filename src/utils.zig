@@ -1,9 +1,34 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const utils = @This();
 const Self = @This();
 
 const root = @import("zero.zig");
 const dateTime = root.zdt.Datetime;
+
+/// Global I/O reactor. Set once at startup (see `setIo`) and used by any
+/// code that needs the clock or file descriptors under Zig 0.16's `std.Io`.
+pub var io: std.Io = if (builtin.is_test) std.testing.io else undefined;
+
+pub fn setIo(i: std.Io) void {
+    io = i;
+}
+
+pub fn nowMonotonic() std.Io.Timestamp {
+    return std.Io.Timestamp.now(io, .awake);
+}
+
+pub fn nowReal() std.Io.Timestamp {
+    return std.Io.Timestamp.now(io, .real);
+}
+
+pub fn elapsedNanos(start: std.Io.Timestamp) i96 {
+    return std.Io.Timestamp.durationTo(start, nowMonotonic()).nanoseconds;
+}
+
+pub fn elapsedMs(start: std.Io.Timestamp) f32 {
+    return @floatFromInt(@as(u64, @intCast(@divTrunc(elapsedNanos(start), 1_000_000))));
+}
 
 pub fn combine(allocator: std.mem.Allocator, comptime format: []const u8, value: anytype) ![]const u8 {
     var buffer: []u8 = undefined;
@@ -27,47 +52,38 @@ pub fn toStringFromInt(allocator: std.mem.Allocator, comptime format: []const u8
 }
 
 pub fn timestampz(allocator: std.mem.Allocator) ![]const u8 {
-    const now = @as(u64, @intCast(std.time.timestamp()));
+    const now = @as(u64, @intCast(@divTrunc(nowReal().nanoseconds, 1_000_000_000)));
     const epoch_seconds = std.time.epoch.EpochSeconds{ .secs = now };
     const time = epoch_seconds.getDaySeconds();
     const hour = time.getHoursIntoDay();
     const minute = time.getMinutesIntoHour();
     const second = time.getSecondsIntoMinute();
-    var buffer: []u8 = undefined;
-    buffer = try allocator.alloc(u8, 10);
-    buffer = try std.fmt.bufPrint(buffer, "{d:0>2}:{d:0>2}:{d:0>2}", .{ hour, minute, second });
-    return buffer;
+    return try std.fmt.allocPrint(allocator, "{d:0>2}:{d:0>2}:{d:0>2}", .{ hour, minute, second });
 }
 
 pub fn sqlTimestampz(allocator: std.mem.Allocator) ![]const u8 {
-    var buffer: []u8 = undefined;
-    buffer = try allocator.alloc(u8, 100);
-
-    const now = dateTime.nowUTC();
+    const now = dateTime.nowUTC(utils.io);
     const yr = @as(u64, @intCast(now.year));
 
     //2000-01-01T07:24:22
-    buffer = try allocator.alloc(u8, 20);
-    buffer = try std.fmt.bufPrint(buffer, "{d:0>4}-{d:0>2}-{d:0>2}T{d:0>2}:{d:0>2}:{d:0>2}", .{ yr, now.month, now.day, now.hour, now.minute, now.second });
-
-    // try now.toString("%Y-%m-%dT%H:%M:%S", stdout); crashes
-
-    return buffer;
+    return try std.fmt.allocPrint(
+        allocator,
+        "{d:0>4}-{d:0>2}-{d:0>2}T{d:0>2}:{d:0>2}:{d:0>2}",
+        .{ yr, now.month, now.day, now.hour, now.minute, now.second },
+    );
 }
 
 pub fn DTtimestampz(allocator: std.mem.Allocator, timestamp: ?i64) ![]const u8 {
-    var buffer: []u8 = undefined;
-    buffer = try allocator.alloc(u8, 100);
-    defer allocator.free(buffer);
-
     const timestampns = @as(i128, @intCast(timestamp.?));
     const now = try dateTime.fromUnix(timestampns, .microsecond, null);
     const yr = @as(u64, @intCast(now.year));
 
     //2021-01-01T07:24:22
-    buffer = try allocator.alloc(u8, 20);
-    buffer = try std.fmt.bufPrint(buffer, "{d:0>4}-{d:0>2}-{d:0>2}T{d:0>2}:{d:0>2}:{d:0>2}", .{ yr, now.month, now.day, now.hour, now.minute, now.second });
-    return buffer;
+    return try std.fmt.allocPrint(
+        allocator,
+        "{d:0>4}-{d:0>2}-{d:0>2}T{d:0>2}:{d:0>2}:{d:0>2}",
+        .{ yr, now.month, now.day, now.hour, now.minute, now.second },
+    );
 }
 
 pub fn toCString(allocator: std.mem.Allocator, value: []const u8) [*c]const u8 {

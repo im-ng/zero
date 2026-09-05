@@ -19,7 +19,6 @@ pub const Handler = struct {
     _res: *httpz.Response = undefined,
     container: *root.container = undefined,
     ctx: *Context = undefined,
-    timer: std.time.Timer = undefined,
     wsClient: wsHandler = undefined,
     pub const WebsocketHandler = wsHandler;
 
@@ -29,12 +28,16 @@ pub const Handler = struct {
     }
 
     pub fn ws(self: *Handler, action: Responder.Do(*Context), req: *httpz.Request, res: *httpz.Response) !void {
-        var ctx = try Context.init(req.arena, self.container, req, res);
-        defer req.arena.destroy(&ctx);
-
+        // The websocket connection outlives this request, so the Context must be
+        // heap-allocated with a persistent allocator. Using req.arena (and a
+        // stack variable) left a dangling pointer that crashed on the first
+        // message (garbage allocator vtable during logging).
+        const ctx = try self.container.allocator.create(Context);
+        ctx.* = try Context.init(self.container.allocator, self.container, req, res);
         ctx.action = action;
 
-        if (try httpz.upgradeWebsocket(wsHandler, req, res, &ctx) == false) {
+        if (try httpz.upgradeWebsocket(wsHandler, req, res, ctx) == false) {
+            ctx.deinit();
             res.setStatus(.internal_server_error);
             res.body = "invalid websocket";
             return;
@@ -51,12 +54,12 @@ pub const Handler = struct {
         var ctx = try Context.init(req.arena, self.container, req, res);
         defer req.arena.destroy(&ctx);
 
-        var timer = try std.time.Timer.start();
+        const start = utils.nowMonotonic();
 
         try action(&ctx);
 
         // does not include middleware executions
-        const duration: f32 = @floatFromInt(timer.lap() / 1000000);
+        const duration: f32 = utils.elapsedMs(start);
 
         try self.metric(duration, @tagName(req.method), res.status, req.url.path);
 
@@ -97,6 +100,8 @@ pub const Handler = struct {
     }
 
     pub fn uncaughtError(self: *Handler, req: *httpz.Request, res: *httpz.Response, err: anyerror) void {
+        std.debug.print("something went wrong\n", .{});
+
         var ctx = try Context.init(req.arena, self.container, req, res);
         defer req.arena.destroy(&ctx);
 

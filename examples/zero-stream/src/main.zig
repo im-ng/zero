@@ -9,19 +9,21 @@ const Process = zero.process;
 const Host = zero.host;
 const utils = zero.utils;
 const Builder = zero.zul.StringBuilder;
-var mutex: std.Thread.Mutex = .{};
+var mutex: std.Io.Mutex = .init;
 var connections: std.hash_map.StringHashMap(?*zero.WSClient) = undefined;
 
 pub const std_options: std.Options = .{
     .logFn = zero.logger.custom,
 };
 
-pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    const allocator = gpa.allocator();
-    defer _ = gpa.detectLeaks();
+pub fn main(init: std.process.Init) !void {
+    utils.setIo(init.io);
 
-    const app: *App = try App.new(allocator);
+    var gpa: std.heap.DebugAllocator(.{}) = .init;
+    const allocator = gpa.allocator();
+    _ = gpa.detectLeaks();
+
+    const app = try App.new(allocator, init.environ_map);
 
     connections = std.hash_map.StringHashMap(?*zero.WSClient).init(allocator);
 
@@ -39,8 +41,8 @@ pub fn main() !void {
 }
 
 pub fn connect(ctx: *Context) !void {
-    mutex.lock();
-    defer mutex.unlock();
+    mutex.lock(utils.io) catch {};
+    defer mutex.unlock(utils.io);
     try connections.put(ctx.request.header("sec-websocket-key").?, ctx.wsClient);
 }
 

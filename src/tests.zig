@@ -25,6 +25,10 @@ pub const kafkaConfig = @import("pubsub/kafka/config.zig");
 pub const kafkaSubscriber = @import("pubsub/kafka/subscriber.zig");
 pub const mqttConfig = @import("pubsub/mqtt/config.zig");
 pub const mqttSubscriber = @import("pubsub/mqtt/subscriber.zig");
+pub const natsConfig = @import("pubsub/nats/config.zig");
+pub const natsSubscriber = @import("pubsub/nats/subscriber.zig");
+pub const pubsub = @import("pubsub/interface.zig");
+pub const datasourceInterface = @import("datasource/interface.zig");
 
 comptime {
     _ = zero;
@@ -52,4 +56,11 @@ comptime {
     _ = kafkaSubscriber;
     _ = mqttConfig;
     _ = mqttSubscriber;
+    _ = natsConfig;
+    _ = natsSubscriber;
+    _ = pubsub;
+    _ = datasourceInterface;
+    _ = @import("service/circuit_breaker.zig");
+    _ = @import("service/outbound_auth.zig");
+    _ = @import("service/client.zig");
 }

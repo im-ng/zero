@@ -28,7 +28,7 @@ const _res: *httpz.Response = undefined;
 thread: std.Thread = undefined,
 container: *root.container = undefined,
 rootContext: *root.Context = undefined,
-mu: std.Thread.Mutex = undefined,
+mu: std.Io.Mutex = undefined,
 signal: Atomic(bool) = undefined,
 config: ?*kafkaConfig,
 topic: ?*kafkaTopic,
@@ -47,7 +47,7 @@ pub fn create(
     const c = try container.allocator.create(Kafka);
     errdefer container.allocator.destroy(c);
 
-    c.mu = .{};
+    c.mu = .init;
     c.signal = Atomic(bool).init(true);
     c.container = container;
     c.subscriber = std.array_list.Managed(kafkaSubscriber).init(container.allocator);
@@ -122,19 +122,28 @@ pub fn getTopicHandler(self: *Self, ctx: *Context, name: []const u8) !*kafkaTopi
 }
 
 pub fn destroy(self: *Self) void {
-    const err_code: c_int = rdkafka.rd_kafka_flush(self.client, 60_000);
-    if (err_code != rdkafka.RD_KAFKA_RESP_ERR_NO_ERROR) {
-        const msg = try utils.combine(
-            self.container.allocator,
-            "failed to flush messages {s}",
-            .{rdkafka.rd_kafka_err2str(err_code)},
-        );
-        self.container.log.err(msg);
+    // Signal the consumer thread to stop FIRST, then join it. Blocking on the
+    // client (flush/destroy) before the consumer poll loop has exited would
+    // deadlock join() and hang process shutdown.
+    self.signal.store(false, .release);
+    if (self.kafkaMode == root.rdkafka.RD_KAFKA_CONSUMER) {
+        self.thread.join();
+    }
+
+    // Only producers have pending messages to flush; flushing a consumer
+    // returns "Not implemented" and is meaningless here.
+    if (self.kafkaMode != root.rdkafka.RD_KAFKA_CONSUMER) {
+        const err_code: c_int = rdkafka.rd_kafka_flush(self.client, 60_000);
+        if (err_code != rdkafka.RD_KAFKA_RESP_ERR_NO_ERROR) {
+            const msg = utils.combine(
+                self.container.allocator,
+                "failed to flush messages {s}",
+                .{rdkafka.rd_kafka_err2str(err_code)},
+            ) catch "failed to flush kafka messages";
+            self.container.log.err(msg);
+        }
     }
     rdkafka.rd_kafka_destroy(self.client);
-
-    self.signal.store(false, .release);
-    self.thread.join();
 }
 
 pub fn publish(self: *Self, ctx: *Context, topic: *kafkaTopic, key: []const u8, payload: []const u8) !void {
@@ -174,6 +183,35 @@ pub fn publish(self: *Self, ctx: *Context, topic: *kafkaTopic, key: []const u8, 
     self.container.metricz.publisherTotal(.{ .topic = self.getTopicName(topic) }) catch unreachable;
 }
 
+/// Convenience for the unified `PubSub` interface: publish to a subject
+/// using a throwaway context (Kafka's `publish` requires a `*Context`).
+pub fn publishOnSubject(self: *Self, subject: []const u8, payload: []const u8) !void {
+    const ca = self.prepareChildAllocator() catch |err| {
+        self.container.log.any(err);
+        return;
+    };
+    defer self.destroryChildAllocator(ca);
+
+    var ctx = Context.init(
+        ca.allocator(),
+        self.container,
+        _req,
+        _res,
+    ) catch |err| {
+        self.container.log.any(err);
+        return;
+    };
+    const context = &ctx;
+
+    const topic = self.getTopicHandler(context, subject) catch |err| {
+        self.container.log.any(err);
+        return;
+    };
+    defer rdkafka.rd_kafka_topic_destroy(topic);
+
+    try self.publish(context, topic, "", payload);
+}
+
 pub inline fn wait(self: Self, comptime timeout_ms: u16) void {
     while (rdkafka.rd_kafka_outq_len(self._producer) > 0) {
         _ = rdkafka.rd_kafka_poll(self._producer, timeout_ms);
@@ -208,7 +246,7 @@ pub fn readPayload(self: *Self, subscriber: kafkaSubscriber) !void {
             defer msg.deinit();
 
             const ca = self.prepareChildAllocator() catch |err| {
-                self.container.log.any(err);
+                self.container.log.Any(self.container.allocator, err);
                 continue;
             };
             defer self.destroryChildAllocator(ca);
@@ -219,13 +257,13 @@ pub fn readPayload(self: *Self, subscriber: kafkaSubscriber) !void {
                 _req,
                 _res,
             ) catch |err| {
-                self.container.log.any(err);
+                self.container.log.Any(self.container.allocator, err);
                 return;
             };
             const context = &ctx;
 
             // transform packet to client.response using std.json.parse.
-            context.message2 = &msg;
+            context.message = .{ .kafka = &msg };
 
             try subscriber.exec(context);
 
@@ -238,7 +276,7 @@ pub fn readPayload(self: *Self, subscriber: kafkaSubscriber) !void {
 
 fn subscriptions(self: *Self) !void {
     for (self.subscriber.items) |s| {
-        std.Thread.sleep(std.time.ns_per_ms * 100);
+        std.Io.sleep(utils.io, std.Io.Duration.fromMilliseconds(100), .awake) catch {};
         const err_code: c_int = rdkafka.rd_kafka_subscribe(self.client, s.topics);
         if (err_code != rdkafka.RD_KAFKA_RESP_ERR_NO_ERROR) {
             const msg = try utils.combine(
@@ -320,9 +358,9 @@ pub fn addSubscriber(self: *Self, topic: []const u8, hook: *const fn (*root.Cont
         .exec = hook,
     };
 
-    self.mu.lock();
+    self.mu.lock(utils.io) catch {};
     try self.subscriber.append(s);
-    self.mu.unlock();
+    self.mu.unlock(utils.io);
 
     const msg = utils.combine(
         self.container.allocator,
@@ -340,3 +378,19 @@ inline fn getTopicName(_: *Self, topic: *kafkaTopic) []const u8 {
     const name: []const u8 = std.mem.span(rdkafka.rd_kafka_topic_name(topic));
     return name;
 }
+
+/// Type-erased VTable conforming to `pubsubInterface.Interface.VTable`.
+pub const vtable = root.pubsubInterface.Interface.VTable{
+    .publish = struct {
+        fn call(ptr: *anyopaque, subject: []const u8, payload: []const u8) anyerror!void {
+            const self: *Kafka = @ptrCast(@alignCast(ptr));
+            try self.publishOnSubject(subject, payload);
+        }
+    }.call,
+    .subscribe = struct {
+        fn call(ptr: *anyopaque, subject: []const u8, hook: *const fn (*root.Context) anyerror!void) anyerror!void {
+            const self: *Kafka = @ptrCast(@alignCast(ptr));
+            try self.addSubscriber(subject, hook);
+        }
+    }.call,
+};

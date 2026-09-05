@@ -14,6 +14,7 @@ const rdzDatasource = root.rdz;
 const zeroClient = root.client;
 const MQTT = root.MQTT;
 const mqConfig = root.mqConfig;
+const natsConfig = root.natsConfig;
 const rdkafka = root.rdkafka;
 const kafka = root.kafka;
 const utils = root.utils;
@@ -31,9 +32,12 @@ redis: ?rediz.Client = undefined,
 rdz: ?*root.rdz = undefined,
 SQL: ?*root.SQL = undefined,
 SQLite: ?*root.SQLite = undefined,
+datasource: root.Datasource = undefined,
 services: ?std.StringHashMap(*zeroClient) = undefined,
-pubsub: ?*root.MQTT = null,
+mqtt: ?*root.MQTT = null,
 Kakfa: ?*root.kafka = null,
+Nats: ?*root.nats = null,
+pubSub: ?*root.PubSub = null,
 
 pub fn create(self: Self) anyerror!*container {
     const c = try self.allocator.create(container);
@@ -113,6 +117,8 @@ fn loadPubSub(self: *Self) !void {
         try self.loadKafkaPubSub();
     } else if (std.mem.eql(u8, "MQTT", pubsub)) {
         try self.loadMqttPubSub();
+    } else if (std.mem.eql(u8, "NATS", pubsub)) {
+        try self.loadNatsPubSub();
     } else {
         buffer = try std.fmt.bufPrint(buffer, "pubsub is disabled, as pubsub mode is not provided.", .{});
         self.log.debug(buffer);
@@ -338,6 +344,11 @@ fn loadKafkaPubSub(self: *Self) !void {
             //do nothing
         },
     }
+
+    // build the unified PubSub dispatcher
+    const ps = try self.allocator.create(root.PubSub);
+    ps.* = .{ .ptr = @ptrCast(@alignCast(self.Kakfa)), .vtable = &root.kafka.vtable };
+    self.pubSub = ps;
 }
 
 fn loadMqttPubSub(self: *Self) !void {
@@ -397,7 +408,7 @@ fn loadMqttPubSub(self: *Self) !void {
     buffer = try std.fmt.bufPrint(buffer, "connecting to MQTT at '{s}:{d}'", .{ hostname, portAsInt });
     self.log.info(buffer);
 
-    self.pubsub = MQTT.create(self, config) catch |err| {
+    self.mqtt = MQTT.create(self, config) catch |err| {
         buffer = try self.allocator.alloc(u8, 256);
         buffer = try std.fmt.bufPrint(buffer, "could not connect to MQTT at '{s}:{d}'", .{ hostname, portAsInt });
         self.log.err(buffer);
@@ -405,13 +416,64 @@ fn loadMqttPubSub(self: *Self) !void {
         return;
     };
 
-    if (self.pubsub) |pb| {
+    if (self.mqtt) |pb| {
         try pb.mqtt.ping(.{});
     }
 
     buffer = try self.allocator.alloc(u8, 256);
     buffer = try std.fmt.bufPrint(buffer, "connected to MQTT at '{s}:{d}'", .{ hostname, portAsInt });
     self.log.info(buffer);
+
+    // build the unified PubSub dispatcher
+    const ps = try self.allocator.create(root.PubSub);
+    ps.* = .{ .ptr = @ptrCast(@alignCast(self.mqtt)), .vtable = &root.MQTT.vtable };
+    self.pubSub = ps;
+}
+
+fn loadNatsPubSub(self: *Self) !void {
+    var buffer: []u8 = undefined;
+    buffer = try self.allocator.alloc(u8, 512);
+
+    const url = self.config.get("PUBSUB_BROKER");
+    if (std.mem.eql(u8, url, "") == true) {
+        buffer = try std.fmt.bufPrint(buffer, "pubsub is disabled, as nats broker is not provided.", .{});
+        self.log.debug(buffer);
+        return;
+    }
+
+    const stream = self.config.get("NATS_STREAM");
+    const subjects = self.config.getOrDefault("NATS_SUBJECTS", "");
+    const max_wait = try self.config.getAsInt("NATS_MAX_WAIT");
+    const max_pull_wait = try self.config.getAsInt("NATS_MAX_PULL_WAIT");
+    const consumer = self.config.get("NATS_CONSUMER");
+    const creds_file = self.config.get("NATS_CREDS_FILE");
+
+    const config = natsConfig{
+        .url = url,
+        .stream = stream,
+        .subjects = subjects,
+        .max_wait_ms = @intCast(max_wait),
+        .max_pull_wait_ms = @intCast(max_pull_wait),
+        .consumer = consumer,
+        .creds_file = creds_file,
+    };
+
+    self.Nats = root.nats.create(self, &config) catch |err| {
+        buffer = try self.allocator.alloc(u8, 256);
+        buffer = try std.fmt.bufPrint(buffer, "could not connect to NATS at '{s}'", .{url});
+        self.log.err(buffer);
+        self.log.any(err);
+        return;
+    };
+
+    // build the unified PubSub dispatcher
+    const ps = try self.allocator.create(root.PubSub);
+    ps.* = .{ .ptr = @ptrCast(@alignCast(self.Nats)), .vtable = &root.nats.vtable };
+    self.pubSub = ps;
+}
+
+pub fn natsPullWaitMs(self: *Self) u32 {
+    return @intCast(self.config.getAsInt("NATS_MAX_PULL_WAIT") catch 5000);
 }
 
 fn loadMetricz(self: *Self) !void {
@@ -475,22 +537,22 @@ fn loadRedis(self: *Self) !void {
     const dbInt = try self.config.getAsInt("REDIS_DB");
     const portInt = try self.config.getAsInt("REDIS_PORT");
 
-    const addr = try std.net.Address.parseIp4(hostname, portInt);
-    const connection = try std.net.tcpConnectToAddress(addr);
+    const addr = try std.Io.net.IpAddress.parseIp4(hostname, portInt);
+
+    const connection = try addr.connect(utils.io, .{ .mode = .stream });
+    defer connection.close(utils.io);
 
     self.rdz = try rdzDatasource.create(self.allocator);
+    var reader = connection.reader(utils.io, &self.rdz.?.rbuf);
+    var writer = connection.writer(utils.io, &self.rdz.?.wbuf);
 
-    self.redis = rdzClient.init(connection, .{
-        .auth = .{
-            .user = null,
-            .pass = password,
-        },
-        .reader_buffer = &self.rdz.?.rbuf,
-        .writer_buffer = &self.rdz.?.wbuf,
+    self.redis = rdzClient.init(utils.io, &reader.interface, &writer.interface, .{
+        .user = null,
+        .pass = password,
     }) catch |err| {
         buffer = try std.fmt.bufPrint(buffer, "Failed to connect: {}", .{err});
         self.log.err(buffer);
-        std.posix.exit(1);
+        std.process.exit(1);
     };
 
     buffer = try std.fmt.bufPrint(buffer, "connecting to redis at '{s}:{d}' on database {d}", .{ hostname, portInt, dbInt });
@@ -575,6 +637,8 @@ fn loadSQL(self: *Self) !void {
         self.metricz,
     );
 
+    self.SQL.?.allocator = self.allocator;
+
     const portInt = try self.config.getAsInt("DB_PORT");
     var options: pgz.Pool.Opts = .{
         .size = 10,
@@ -591,15 +655,17 @@ fn loadSQL(self: *Self) !void {
         },
     };
 
-    self.SQL.?.sql = pgz.Pool.init(self.allocator, options) catch |err| {
+    self.SQL.?.sql = pgz.Pool.init(utils.io, self.allocator, options) catch |err| {
         buffer = try std.fmt.bufPrint(buffer, "Failed to connect: {}", .{err});
         self.log.err(buffer);
-        std.posix.exit(1);
+        std.process.exit(1);
     };
     self.SQL.?.options = &options;
 
     // reference metricz
     self.SQL.?.metricz = self.metricz;
+
+    self.datasource = root.Datasource.init(self.SQL, .postgres);
 
     buffer = try std.fmt.bufPrint(buffer, "generating database connection string for {s}", .{dialect});
     self.log.info(buffer);
@@ -642,6 +708,8 @@ fn loadSQLite(self: *Self) !void {
         self.log,
         self.metricz,
     );
+
+    self.datasource = root.Datasource.init(self.SQLite, .sqlite);
 
     buffer = try std.fmt.bufPrint(buffer, "connected to sqlite at '{s}'", .{dbPath});
     self.log.info(buffer);

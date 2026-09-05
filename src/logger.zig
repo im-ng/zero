@@ -4,10 +4,7 @@ const Self = @This();
 const root = @import("zero.zig");
 const utils = root.utils;
 
-var stdout: *std.Io.Writer = undefined;
-var stdout_buffer: [512]u8 = undefined;
-var stdout_writer: std.fs.File.Writer = undefined;
-var mutex: std.Thread.Mutex = .{};
+var mutex: std.Io.Mutex = .init;
 
 allocator: std.mem.Allocator,
 logLevel: u8 = undefined,
@@ -18,18 +15,17 @@ pub fn custom(
     comptime format: []const u8,
     args: anytype,
 ) void {
-    mutex.lock();
-    defer mutex.unlock();
-    nosuspend stdout.print(format, args) catch return;
-    nosuspend stdout.flush() catch return;
+    mutex.lock(utils.io) catch {};
+    defer mutex.unlock(utils.io);
+    var buf: [2048]u8 = undefined;
+    const msg = std.fmt.bufPrint(&buf, format, args) catch "log format error";
+    const out = std.Io.File.stdout();
+    out.writeStreamingAll(utils.io, msg) catch return;
 }
 
 pub fn create(allocator: std.mem.Allocator) !*logger {
     const l: *logger = try allocator.create(logger);
     errdefer allocator.destroy(l);
-
-    stdout_writer = std.fs.File.stdout().writer(&stdout_buffer);
-    stdout = &stdout_writer.interface;
 
     l.allocator = allocator;
     l.logLevel = 1;
@@ -113,6 +109,7 @@ pub fn Debug(self: *Self, allocator: std.mem.Allocator, message: []const u8) voi
     }
 
     const timestamp = utils.timestampz(allocator) catch "";
+    defer allocator.free(timestamp);
 
     std.log.debug(debugFormat, .{ timestamp, message });
 }
@@ -123,6 +120,7 @@ pub fn Info(self: *Self, allocator: std.mem.Allocator, message: []const u8) void
     }
 
     const timestamp = utils.timestampz(allocator) catch "";
+    defer allocator.free(timestamp);
 
     std.log.info(infoFormat, .{ timestamp, message });
 }
@@ -133,6 +131,7 @@ pub fn Any(self: *Self, allocator: std.mem.Allocator, message: anytype) void {
     }
 
     const timestamp = utils.timestampz(allocator) catch "";
+    defer allocator.free(timestamp);
 
     std.log.info(anyFormat, .{ timestamp, message });
 }
@@ -141,7 +140,9 @@ pub fn Warn(self: *Self, allocator: std.mem.Allocator, message: []const u8) void
     if (self.logLevel > 2) {
         return;
     }
+
     const timestamp = utils.timestampz(allocator) catch "";
+    defer allocator.free(timestamp);
 
     std.log.warn(warnFormat, .{ timestamp, message });
 }
@@ -152,6 +153,7 @@ pub fn Err(self: *Self, allocator: std.mem.Allocator, message: []const u8) void 
     }
 
     const timestamp = utils.timestampz(allocator) catch "";
+    defer allocator.free(timestamp);
 
     std.log.err(errFormat, .{ timestamp, message });
 }
@@ -162,6 +164,7 @@ pub fn Fatal(self: *Self, allocator: std.mem.Allocator, message: []const u8) voi
     }
 
     const timestamp = utils.timestampz(allocator) catch "";
+    defer allocator.free(timestamp);
 
     std.log.err(errFormat, .{ timestamp, message });
 }

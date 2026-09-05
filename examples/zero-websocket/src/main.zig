@@ -3,6 +3,7 @@ const zero = @import("zero");
 
 const App = zero.App;
 const Context = zero.Context;
+const utils = zero.utils;
 
 pub const std_options: std.Options = .{
     .logFn = zero.logger.custom,
@@ -17,12 +18,14 @@ fn panic(_: []const u8, _: ?*std.builtin.StackTrace, _: ?usize) noreturn {
     }
 }
 
-pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    const allocator = gpa.allocator();
-    defer _ = gpa.detectLeaks();
+pub fn main(init: std.process.Init) !void {
+    utils.setIo(init.io);
 
-    const app: *App = try App.new(allocator);
+    var gpa: std.heap.DebugAllocator(.{}) = .init;
+    const allocator = gpa.allocator();
+    _ = gpa.detectLeaks();
+
+    const app: *App = try App.new(allocator, init.environ_map);
 
     try app.addWebsocket(socketHandler);
 
@@ -32,6 +35,9 @@ pub fn main() !void {
 pub fn socketHandler(ctx: *Context) !void {
     if (ctx.wsMessage) |msg| {
         ctx.info(msg);
+
+        try ctx.wsClient.write(msg);
+        return;
     }
 
     try ctx.wsClient.write("hello!");

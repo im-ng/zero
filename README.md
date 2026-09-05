@@ -30,6 +30,15 @@
 <img src="./static/zero-mascot-1.webp" alt="zero mascot" width="128">
 </p>
 
+### Zig version support
+
+_*An `experimental` support has been added to achieve the zig version 0.16 addition for the zero framework. For all stable work, prefer to use the `main` branch itself.*_
+
+| Branch           | Version |
+| ---------------- | ------- |
+| **experimental** | 0.16.0  |
+| **main**         | 0.15.2  |
+
 ## Table of Contents
 
 - [Features](#features)
@@ -59,7 +68,7 @@
 | CORS            | ✅     | Configurable CORS middleware               |
 | Panic Recovery  | ✅     | Automatic panic recovery                   |
 | Databases       | ✅     | PostgreSQL, SQLite, Redis                  |
-| Pub/Sub         | ✅     | MQTT, Kafka (via librdkafka)               |
+| Pub/Sub         | ✅     | MQTT, NATS, Kafka (via librdkafka)         |
 | Migrations      | ✅     | DB migrations + seed on startup            |
 | HTTP Client     | ✅     | Register multiple external services        |
 | Cron Jobs       | ✅     | `* * * * *` + second-level + range support |
@@ -71,7 +80,7 @@ See [feature_parity.md](./feature_parity.md) for the full roadmap and upcoming f
 
 ## Requirements
 
-- **Zig 0.15.1** (tested and production baseline)
+- **Zig 0.16.0** (tested and experimental baseline)
 - **librdkafka** — required for Kafka support:
   ```bash
   sudo apt install librdkafka-dev   # Linux
@@ -83,7 +92,7 @@ See [feature_parity.md](./feature_parity.md) for the full roadmap and upcoming f
 Add zero to your project:
 
 ```bash
-zig fetch --save https://github.com/im-ng/zero/archive/refs/heads/main.zip
+zig fetch --save https://github.com/im-ng/zero/archive/refs/heads/experimental.zip
 ```
 
 ## Quick Start
@@ -93,7 +102,7 @@ zig fetch --save https://github.com/im-ng/zero/archive/refs/heads/main.zip
 ```bash
 mkdir zero-web-app && cd zero-web-app
 zig init
-zig fetch --save https://github.com/im-ng/zero/archive/refs/heads/main.zip
+zig fetch --save https://github.com/im-ng/zero/archive/refs/heads/experimental.zip
 ```
 
 ### 2. Configure `build.zig`
@@ -129,16 +138,20 @@ const zero = @import("zero");
 
 const App = zero.App;
 const Context = zero.Context;
+const utils = zero.utils;
 
 pub const std_options: std.Options = .{
     .logFn = zero.logger.custom,
 };
 
-pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    const allocator = gpa.allocator();
+pub fn main(init: std.process.Init) !void {
+    utils.setIo(init.io);
 
-    const app = try App.new(allocator);
+    var gpa: std.heap.DebugAllocator(.{}) = .init;
+    const allocator = gpa.allocator();
+    _ = gpa.detectLeaks();
+
+    const app = try App.new(allocator, init.environ_map);
     try app.get("/json", jsonResponse);
     try app.run();
 }
@@ -163,17 +176,17 @@ See [full documentation](https://zerofmk.in/) for detailed guides on authenticat
 
 ## Project Structure
 
-| Directory         | Purpose                                  |
-| ----------------- | ---------------------------------------- |
-| `src/datasource/` | PostgreSQL (`SQL`), Redis (`Cache`)      |
-| `src/pubsub/`     | MQTT and Kafka publishers/subscribers    |
-| `src/cronz/`      | Cron scheduler and job execution         |
-| `src/migration/`  | Database migrations and seeding          |
-| `src/mw/`         | Middleware: auth, tracing, websocket     |
-| `src/service/`    | HTTP client for external services        |
-| `src/http/`       | Error types and HTTP utilities           |
-| `src/zsutil/`     | System utils: memory, CPU, process, host |
-| `src/static/`     | Embedded Swagger UI assets               |
+| Directory         | Purpose                                     |
+| ----------------- | ------------------------------------------- |
+| `src/datasource/` | PostgreSQL (`SQL`), Redis (`Cache`)         |
+| `src/pubsub/`     | MQTT, NATS and Kafka publishers/subscribers |
+| `src/cronz/`      | Cron scheduler and job execution            |
+| `src/migration/`  | Database migrations and seeding             |
+| `src/mw/`         | Middleware: auth, tracing, websocket        |
+| `src/service/`    | HTTP client for external services           |
+| `src/http/`       | Error types and HTTP utilities              |
+| `src/zsutil/`     | System utils: memory, CPU, process, host    |
+| `src/static/`     | Embedded Swagger UI assets                  |
 
 Key entry points:
 
@@ -225,7 +238,7 @@ All keys are commented out by default; features activate only when uncommented. 
 
 ## Examples
 
-14 example applications are available in the `examples/` directory:
+16 example applications are available in the `examples/` directory:
 
 | Example                 | Description                            |
 | ----------------------- | -------------------------------------- |
@@ -236,6 +249,8 @@ All keys are commented out by default; features activate only when uncommented. 
 | `zero-kafka-subscriber` | Kafka message consumption              |
 | `zero-mqtt-publisher`   | MQTT message publishing                |
 | `zero-mqtt-subscriber`  | MQTT message consumption               |
+| `zero-nats-publisher`   | NATS message publishing                |
+| `zero-nats-subscriber`  | NATS message consumption               |
 | `zero-redis`            | Redis cache operations                 |
 | `zero-sqlite`           | SQLite database usage                  |
 | `zero-migration`        | Database migrations                    |
@@ -290,11 +305,11 @@ stddev:			743µs
 
 ## Zig Version Compatibility
 
-| Version | Compiles | Tests | Runtime | Notes                    |
-| ------- | -------- | ----- | ------- | ------------------------ |
-| 0.15.1  | ✅       | 52/52 | ✅      | Production baseline      |
-| 0.15.2  | ✅       | 52/52 | ✅      | Production               |
-| 0.16.0  | ❌       | N/A   | N/A     | Build system API changed |
+| Version | Compiles | Tests | Runtime | Notes               |
+| ------- | -------- | ----- | ------- | ------------------- |
+| 0.15.1  | ✅       | 52/52 | ✅      | Production baseline |
+| 0.15.2  | ✅       | 52/52 | ✅      | Production          |
+| 0.16.0  | ✅       | 94/94 | ✅      | Experimental        |
 
 ## Known Gotchas
 

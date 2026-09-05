@@ -1,6 +1,5 @@
 const std = @import("std");
 const root = @import("../zero.zig");
-const time = std.time;
 const arena: type = std.heap.ArenaAllocator;
 const Thread = std.Thread;
 const Atomic = std.atomic.Value;
@@ -32,11 +31,10 @@ const _res: *httpz.Response = undefined;
 /// Set by cronz before calling a job's exec callback. Read-only for consumers.
 pub var current_job_name: ?[]const u8 = null;
 
-ticker: time.Timer = undefined,
 thread: std.Thread = undefined,
 container: *root.container = undefined,
 jobs: std.array_list.Managed(job) = undefined,
-mu: std.Thread.Mutex = undefined,
+mu: std.Io.Mutex = undefined,
 running: Atomic(bool) = undefined,
 request: *httpz.Request = undefined,
 response: *httpz.Response = undefined,
@@ -45,12 +43,11 @@ pub fn create(container: *root.container) !*Cronz {
     const c = try container.allocator.create(Cronz);
     errdefer container.allocator.destroy(c);
 
-    c.mu = .{};
+    c.mu = .init;
     c.running = Atomic(bool).init(true);
     c.container = container;
-    c.ticker = try time.Timer.start();
     c.jobs = std.array_list.Managed(job).init(container.allocator);
-    c.thread = try Thread.spawn(.{}, Cronz.runSchedules, .{ c, std.time.nanoTimestamp() });
+    c.thread = try Thread.spawn(.{}, Cronz.runSchedules, .{ c, @as(i128, utils.nowReal().nanoseconds) });
 
     return c;
 }
@@ -79,8 +76,8 @@ fn destroryChildAllocator(self: *Self, ca: *arena) void {
 
 pub fn runSchedules(self: *Self, _: i128) void {
     while (self.running.load(.monotonic)) {
-        std.Thread.sleep(std.time.ns_per_s);
-        const now = dateTime.nowUTC();
+        std.Io.sleep(utils.io, std.Io.Duration.fromSeconds(1), .awake) catch {};
+        const now = dateTime.nowUTC(utils.io);
         for (self.jobs.items) |j| {
             if (j.compare(now)) {
                 const ca = self.prepareChildAllocator() catch |err| {
@@ -299,9 +296,9 @@ pub fn addCron(self: *Self, schedule: []const u8, name: []const u8, hook: *const
     j.name = name;
     j.exec = hook;
 
-    self.mu.lock();
+    self.mu.lock(utils.io) catch {};
     try self.jobs.append(j);
-    self.mu.unlock();
+    self.mu.unlock(utils.io);
 
     const msg = utils.combine(
         self.container.allocator,
@@ -411,8 +408,10 @@ fn mockContainer(allocator: std.mem.Allocator) root.container {
         .rdz = undefined,
         .SQL = undefined,
         .services = undefined,
-        .pubsub = null,
+        .mqtt = null,
         .Kakfa = null,
+        .Nats = null,
+        .pubSub = null,
     };
 }
 
@@ -571,4 +570,11 @@ test "parseSchedule accepts valid 6-field schedule with seconds" {
     try std.testing.expectEqual(@as(usize, 1), j.sec.count());
     try std.testing.expect(j.sec.contains(30));
     try std.testing.expectEqual(@as(usize, 60), j.min.count());
+}
+
+/// Signal the scheduler loop to stop WITHOUT joining. Safe to call from a
+/// signal handler (joining a thread from a signal handler is UB/deadlock).
+/// The actual thread join happens later in normal execution via `destroy`.
+pub fn stop(self: *Self) void {
+    self.running.store(false, .release);
 }

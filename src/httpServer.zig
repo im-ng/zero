@@ -54,9 +54,10 @@ pub fn create(allocator: std.mem.Allocator, container: *root.container) !*server
     };
 
     hzs.http = try httpz.Server(*root.handler.Handler).init(
+        utils.io,
         hzs.container.allocator,
         .{
-            .port = hzs.port,
+            .address = httpz.Config.Address.all(hzs.port),
         },
         &hzs.handler,
     );
@@ -105,8 +106,11 @@ pub fn shutdown(self: *Self) void {
     // recursively deallocate all resources
     // self.refresherThread.join();
 
-    self.container.destroy();
-
+    // NOTE: the container and pub/sub clients are torn down by App.run() once
+    // the server thread has stopped. Destroying them here (from a signal
+    // handler) would free client state while their background threads (e.g.
+    // the NATS io_task) are still running, which both hangs process exit and
+    // risks a use-after-free.
     self.http.stop();
 
     self.http.deinit();
@@ -165,7 +169,7 @@ fn loadAuthProviderConfig(self: *Self) anyerror!?*authProvider {
             const refreshAt = try std.fmt.parseInt(i16, refreshInterval, 10);
 
             provider = try authProvider.create(self.container, .OAuth);
-            provider.?.mutex = .{};
+            provider.?.mutex = .init;
             provider.?.pathUrl = jwksUrl;
             provider.?.refreshInterval = refreshAt;
             provider.?.pubKeys = std.StringHashMap(PubKey).init(self.container.allocator);

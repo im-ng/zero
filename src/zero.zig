@@ -5,13 +5,14 @@ pub const constants = @import("constants.zig");
 pub const zul = @import("zul");
 pub const pgz = @import("pg");
 pub const httpz = @import("httpz");
-pub const metriks = @import("metriks");
+// pub const metriks = @import("metricz");
 pub const rediz = @import("rediz");
 pub const dotenv = @import("dotenv");
 pub const zdt = @import("zdt");
 pub const regexp = @import("regexp");
 pub const mqttz = @import("mqttz");
 pub const jwt = @import("jwt");
+pub const natslib = @import("nats");
 
 pub const rdkafka = @import("cimport.zig").librdkafka;
 pub const sqlitez = @import("sqlite");
@@ -34,8 +35,12 @@ pub const AuthProvider = @import("mw/authProvider.zig");
 pub const jwtClaims = AuthProvider.jwtClaims;
 
 pub const rdz = @import("datasource/rdz.zig");
+
 pub const SQL = @import("datasource/SQL.zig");
 pub const SQLite = @import("datasource/SQLite.zig");
+pub const datasourceInterface = @import("datasource/interface.zig");
+pub const Datasource = datasourceInterface.Interface;
+
 pub const migration = @import("migration/migration.zig");
 pub const migrate = @import("migration/migrate.zig");
 
@@ -55,6 +60,14 @@ pub const MQTT = @import("pubsub/mqtt/MQTT.zig");
 pub const kafka = @import("pubsub/kafka/kafka.zig");
 pub const kafkaSubscriber = @import("pubsub/kafka/subscriber.zig");
 pub const kafkaMessage = @import("pubsub/kafka/message.zig").Message;
+
+pub const natsConfig = @import("pubsub/nats/config.zig").natsConfig;
+pub const natsSubscriber = @import("pubsub/nats/subscriber.zig").natsSubscriber;
+pub const natsMessage = @import("pubsub/nats/message.zig").natsMessage;
+pub const nats = @import("pubsub/nats/NATS.zig").NATS;
+
+pub const pubsubInterface = @import("pubsub/interface.zig");
+pub const PubSub = pubsubInterface.Interface;
 
 pub const WSHandler = @import("websocket.zig");
 pub const WSMiddleware = @import("mw/ws.zig");
@@ -81,15 +94,14 @@ pub const App = @import("app.zig");
 
 pub const std_options: std.Options = .{
     .logFn = logger.custom,
+    .panicFn = panic,
 };
 
-fn panic(_: []const u8, _: ?*std.builtin.StackTrace, _: ?usize) noreturn {
-    var it = std.debug.StackIterator.init(@returnAddress(), null);
-    var ix: usize = 0;
+fn panic(msg: []const u8, return_address: ?usize) noreturn {
+    _ = msg;
     std.log.err("=== Stack Trace ==============", .{});
-    while (it.next()) |frame| : (ix += 1) {
-        std.log.err("#{d:0>2}: 0x{X:0>16}", .{ ix, frame });
-    }
+    std.debug.dumpCurrentStackTrace(.{ .first_address = return_address });
+    std.process.exit(1);
 }
 
 pub fn main() !void {}
