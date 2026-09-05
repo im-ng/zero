@@ -490,8 +490,23 @@ pub fn runMigrations(self: *Self) !void {
     };
 }
 
-pub fn addHttpService(self: *Self, name: []const u8, address: []const u8) !void {
-    const service = try zeroClient.create(self.container, name, address);
+pub fn addHttpService(self: *Self, name: []const u8, address: []const u8, opts: zeroClient.ServiceOptions) !void {
+    var resolved = zeroClient.fromEnv(self.container, name);
+    if (opts.auth != null) {
+        resolved.auth = opts.auth;
+    }
+
+    if (opts.circuitBreaker != null) {
+        resolved.circuitBreaker = opts.circuitBreaker;
+    }
+
+    const service = try zeroClient.createWithConfig(
+        self.container,
+        name,
+        address,
+        resolved,
+    );
+
     try self.container.registerZeroClient(service);
 }
 
@@ -559,7 +574,7 @@ pub fn addOAuthKeyRefresher(self: *Self) anyerror!void {
                 self.container.log.info(schedule);
 
                 //register http client
-                try self.addHttpService("zero-jwks-service", provider.pathUrl);
+                try self.addHttpService("zero-jwks-service", provider.pathUrl, zeroClient.ServiceOptions{});
 
                 //register job to refresh
                 try self.addCronJob(schedule, "zero-jwks-refresher", AuthProvider.refreshKeys);

@@ -60,4 +60,7 @@ comptime {
     _ = natsSubscriber;
     _ = pubsub;
     _ = datasourceInterface;
+    _ = @import("service/circuit_breaker.zig");
+    _ = @import("service/outbound_auth.zig");
+    _ = @import("service/client.zig");
 }
