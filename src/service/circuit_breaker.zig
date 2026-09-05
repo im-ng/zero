@@ -4,11 +4,13 @@ const utils = @import("../utils.zig");
 pub const CircuitBreakerConfig = struct {
     failure_threshold: u32 = 5,
     cooldown_ms: u64 = 30_000,
+    half_open_trials: u32 = 1,
 };
 
 pub const CircuitState = enum {
     closed,
     open,
+    half_open,
 };
 
 pub const CircuitBreaker = struct {
@@ -51,6 +53,13 @@ pub const CircuitBreaker = struct {
                 }
                 return error.CircuitOpen;
             },
+            .half_open => {
+                if (self.trials_in_flight < self.cfg.half_open_trials) {
+                    self.trials_in_flight += 1;
+                    return;
+                }
+                return error.CircuitOpen;
+            },
         }
     }
 
@@ -59,6 +68,11 @@ pub const CircuitBreaker = struct {
         defer self.mutex.unlock(utils.io);
 
         switch (self.state) {
+            .half_open => {
+                self.state = .closed;
+                self.failures = 0;
+                self.trials_in_flight = 0;
+            },
             .closed => {
                 self.failures = 0;
             },
@@ -71,6 +85,11 @@ pub const CircuitBreaker = struct {
         defer self.mutex.unlock(utils.io);
 
         switch (self.state) {
+            .half_open => {
+                self.state = .open;
+                self.opened_at = nowNs();
+                self.trials_in_flight = 0;
+            },
             .closed => {
                 self.failures += 1;
                 if (self.failures >= self.cfg.failure_threshold) {
@@ -90,29 +109,41 @@ pub const CircuitBreaker = struct {
 test "circuit breaker stays closed then opens after threshold" {
     var cb = CircuitBreaker.init(.{});
     try cb.before();
-    for (0..5) |_| cb.recordFailure();
+    for (0..5) |_| {
+        cb.recordFailure();
+    }
+
     try std.testing.expectEqual(CircuitState.open, cb.snapshot());
     try std.testing.expectError(error.CircuitOpen, cb.before());
 }
 
 test "circuit breaker half-open recovers on success" {
     var cb = CircuitBreaker.init(.{ .cooldown_ms = 1 });
-    for (0..5) |_| cb.recordFailure();
+    for (0..5) |_| {
+        cb.recordFailure();
+    }
+
     try std.testing.expectEqual(CircuitState.open, cb.snapshot());
     cb.opened_at = 0;
     try cb.before(); // half-open trial allowed
+
     try std.testing.expectEqual(CircuitState.half_open, cb.snapshot());
     cb.recordSuccess();
+
     try std.testing.expectEqual(CircuitState.closed, cb.snapshot());
     try cb.before();
 }
 
 test "circuit breaker half-open reopens on failure" {
     var cb = CircuitBreaker.init(.{ .cooldown_ms = 1 });
-    for (0..5) |_| cb.recordFailure();
+    for (0..5) |_| {
+        cb.recordFailure();
+    }
     cb.opened_at = 0;
+
     try cb.before();
     cb.recordFailure();
+
     try std.testing.expectEqual(CircuitState.open, cb.snapshot());
     try std.testing.expectError(error.CircuitOpen, cb.before());
 }
@@ -120,8 +151,10 @@ test "circuit breaker half-open reopens on failure" {
 test "circuit breaker allows up to half_open_trials concurrent" {
     var cb = CircuitBreaker.init(.{ .failure_threshold = 1, .cooldown_ms = 1, .half_open_trials = 2 });
     cb.recordFailure();
+
     cb.opened_at = 0;
     try cb.before();
     try cb.before();
+
     try std.testing.expectError(error.CircuitOpen, cb.before());
 }

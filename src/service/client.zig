@@ -360,7 +360,7 @@ fn createAndSendRequest(
     }
 
     // attach outbound auth (api key / basic / oauth bearer)
-    try self.applyAuth(ctx, &req) catch |e| return switch (e) {
+    self.applyAuth(ctx, &req) catch |e| return switch (e) {
         error.OAuthTokenFetchFailed => ClientError.OAuthTokenFetchFailed,
         else => e,
     };
@@ -488,7 +488,7 @@ fn ensureOAuthToken(self: *Self) ![]const u8 {
     try req.header("authorization", authz);
     try req.header("content-type", "application/x-www-form-urlencoded");
 
-    var body = std.ArrayList(u8).init(self.container.allocator);
+    var body = std.array_list.Managed(u8).init(self.container.allocator);
     defer body.deinit();
 
     try body.appendSlice("grant_type=client_credentials");
