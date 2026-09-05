@@ -235,7 +235,7 @@ fn startShutdownHandler(_: Self) !void {
     }, null);
 }
 
-fn shutdown(_: std.os.linux.SIG) callconv(.c) void {
+fn shutdown(_: std.c.SIG) callconv(.c) void {
     // Signal shutdown only. Joining threads / tearing down from a signal
     // handler is undefined behavior (can deadlock), so we just stop the
     // scheduler loop and stop the http server. The actual thread join for
