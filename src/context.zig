@@ -184,6 +184,25 @@ pub const Context = struct {
         return try std.json.parseFromSliceLeaky(T, self.allocator, b, .{ .ignore_unknown_fields = true });
     }
 
+    /// transforms an incoming protobuf request body (application/x-protobuf) into
+    /// the comptime type `T` (a generated protobuf message exposing `decode`).
+    /// Decoding uses the per-request arena allocator, released at request end.
+    pub fn bindProto(self: *Context, comptime T: type) !?T {
+        const b = self.request.body() orelse return null;
+        var reader: std.Io.Reader = .fixed(b);
+        return try T.decode(&reader, self.allocator);
+    }
+
+    /// serializes `data` (a protobuf message exposing `encode`) into the response
+    /// body with `Content-Type: application/x-protobuf`.
+    pub fn protobuf(self: *Context, data: anytype) !void {
+        var w: std.Io.Writer.Allocating = .init(self.allocator);
+        try data.encode(&w.writer, self.allocator);
+        self.response.body = w.written();
+        self.response.header("content-type", "application/x-protobuf");
+        self.response.setStatus(.ok);
+    }
+
     /// returns if path param exist
     pub fn param(self: *Context, name: []const u8) []const u8 {
         const value = self.request.param(name);
@@ -194,3 +213,53 @@ pub const Context = struct {
         return value.?;
     }
 };
+
+test "context: protobuf bindProto and protobuf round-trip" {
+    const protobuf = @import("protobuf");
+    const t = httpz.testing;
+
+    // A minimal protobuf message described entirely via the generic
+    // protobuf.encode/decode primitives (no generated code needed here).
+    const TestMsg = struct {
+        value: []const u8 = &.{},
+
+        pub const _desc_table = .{
+            .value = protobuf.fd(1, .{ .scalar = .string }),
+        };
+
+        pub fn encode(self: @This(), writer: *std.Io.Writer, allocator: std.mem.Allocator) !void {
+            return protobuf.encode(writer, allocator, self);
+        }
+        pub fn decode(reader: *std.Io.Reader, allocator: std.mem.Allocator) !@This() {
+            return protobuf.decode(@This(), reader, allocator);
+        }
+    };
+
+    var testing = t.init(.{});
+    defer testing.deinit();
+
+    // Encode a TestMsg into protobuf bytes.
+    const msg = TestMsg{ .value = "hello protobuf" };
+    var w: std.Io.Writer.Allocating = .init(testing.arena);
+    try msg.encode(&w.writer, testing.arena);
+    const encoded = w.written();
+
+    // Put the encoded bytes on the request body.
+    testing.body(encoded);
+
+    // Build a Context over the mocked request/response.
+    var ctx: Context = undefined;
+    ctx.allocator = testing.arena;
+    ctx.request = testing.req;
+    ctx.response = testing.res;
+
+    // bindProto decodes the body.
+    const decoded = (try ctx.bindProto(TestMsg)).?;
+    try std.testing.expectEqualStrings("hello protobuf", decoded.value);
+
+    // protobuf serializes back into the response.
+    try ctx.protobuf(decoded);
+    try testing.expectStatusCode(.ok);
+    try testing.expectHeader("content-type", "application/x-protobuf");
+    try testing.expectBody(encoded);
+}

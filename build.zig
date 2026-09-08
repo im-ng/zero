@@ -44,6 +44,8 @@ pub fn build(b: *std.Build) void {
     const nats = b.dependency("nats", .{});
     module.addImport("nats", nats.module("nats"));
 
+    const protobuf = b.dependency("protobuf", .{});
+
     // if (b.option(
     //     bool,
     //     "kafka",
@@ -75,6 +77,7 @@ pub fn build(b: *std.Build) void {
     test_module.addImport("jwt", jwt.module("zig-jwt"));
     test_module.addImport("sqlite", sqlite.module("sqlite"));
     test_module.addImport("nats", nats.module("nats"));
+    test_module.addImport("protobuf", protobuf.module("protobuf"));
     test_module.addImport("zero", module);
 
     if (builtin.os.tag == .macos) {
@@ -106,6 +109,7 @@ pub fn build(b: *std.Build) void {
     integration_module.addImport("jwt", jwt.module("zig-jwt"));
     integration_module.addImport("sqlite", sqlite.module("sqlite"));
     integration_module.addImport("nats", nats.module("nats"));
+    integration_module.addImport("protobuf", protobuf.module("protobuf"));
     integration_module.addImport("zero", module);
 
     if (builtin.os.tag == .macos) {
@@ -141,6 +145,7 @@ pub fn build(b: *std.Build) void {
     validation_module.addImport("jwt", jwt.module("zig-jwt"));
     validation_module.addImport("sqlite", sqlite.module("sqlite"));
     validation_module.addImport("nats", nats.module("nats"));
+    validation_module.addImport("protobuf", protobuf.module("protobuf"));
     validation_module.addImport("zero", module);
 
     if (builtin.os.tag == .macos) {
@@ -179,6 +184,7 @@ pub fn build(b: *std.Build) void {
     bench_module.addImport("jwt", jwt.module("zig-jwt"));
     bench_module.addImport("sqlite", sqlite.module("sqlite"));
     bench_module.addImport("nats", nats.module("nats"));
+    bench_module.addImport("protobuf", protobuf.module("protobuf"));
     bench_module.addImport("zero", module);
 
     if (builtin.os.tag == .macos) {
@@ -222,6 +228,23 @@ pub fn build(b: *std.Build) void {
         .name = "zero",
         .root_module = module,
     });
+
+    // Protobuf code generation. `zig build gen-proto` compiles .proto files in
+    // `proto/` into Zig structs under `src/proto/`. The first run downloads
+    // Google's protoc (lazy dep in the protobuf package); pass a local binary
+    // via `.protoc = b.path("protoc")` to build fully offline.
+    const protobuf_mod = @import("protobuf");
+    const gen_proto = b.step("gen-proto", "Generate Zig structs from .proto definitions");
+    const protoc_step = protobuf_mod.RunProtocStep.create(protobuf.builder, target, .{
+        .destination_directory = b.path("src/proto"),
+        .source_files = &.{
+            b.path("proto/example.proto"),
+        },
+        .include_directories = &.{
+            b.path("."),
+        },
+    });
+    gen_proto.dependOn(&protoc_step.step);
 
     if (b.option(
         bool,

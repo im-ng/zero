@@ -79,8 +79,8 @@ Instead of developing and integrating with these boilerplates, an app developer 
 - ⬜ CLI Application
 - ✅ Memory leaks
 - ⬜ Interface 
-    - ⬜ Pubsub
-    - ⬜ SQL
+    - ✅ Pubsub
+    - ✅ SQL
     - ⬜ Cache
 - ⬜ Protobuf support
     - ⬜ Over HTTP

@@ -58,6 +58,10 @@
             .url = "git+https://github.com/nats-io/nats.zig#883d29c25db420f59133bc5098059191e6ac6b02",
             .hash = "nats-0.1.0-991asQCWHwBIwVHZJpXV_b7mll-5F78o_F_vunrfuBm7",
         },
+        .protobuf = .{
+            .url = "git+https://github.com/Arwalk/zig-protobuf#b794f99323cead7f1794ae68554d0311cc309857",
+            .hash = "protobuf-5.0.0-0e82ahZiKwC5Yrh4psANoUzrV_H4CQU1EsOIY9Zdyap_",
+        },
     },
     .paths = .{
         "build.zig",
