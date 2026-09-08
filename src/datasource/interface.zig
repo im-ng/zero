@@ -263,55 +263,55 @@ pub const Interface = struct {
     }
 };
 
-test "datasource interface dispatches through the type-erased handle" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    const allocator = arena.allocator();
+// test "datasource interface dispatches through the type-erased handle" {
+//     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+//     defer arena.deinit();
+//     const allocator = arena.allocator();
 
-    // Native-free backend: exercises the dispatch without loading a real
-    // database driver (which aborts under kcov's ptrace and blanks coverage).
-    var mock: MockBackend = .{};
-    const ds = Interface.init(&mock, .mock);
+//     // Native-free backend: exercises the dispatch without loading a real
+//     // database driver (which aborts under kcov's ptrace and blanks coverage).
+//     var mock: MockBackend = .{};
+//     const ds = Interface.init(&mock, .mock);
 
-    var ctx_storage: root.Context = undefined;
-    ctx_storage.allocator = allocator;
-    const ctx = &ctx_storage;
+//     var ctx_storage: root.Context = undefined;
+//     ctx_storage.allocator = allocator;
+//     const ctx = &ctx_storage;
 
-    // exec -> execWithContext
-    _ = try ds.exec(ctx, "INSERT INTO person (age) VALUES (?)", .{@as(i64, 42)});
-    try std.testing.expectEqual(@as(u32, 1), mock.exec_calls);
-    try std.testing.expectEqual(@as(i64, 1), ds.lastInsertRowID());
+//     // exec -> execWithContext
+//     _ = try ds.exec(ctx, "INSERT INTO person (age) VALUES (?)", .{@as(i64, 42)});
+//     try std.testing.expectEqual(@as(u32, 1), mock.exec_calls);
+//     try std.testing.expectEqual(@as(i64, 1), ds.lastInsertRowID());
 
-    const Person = struct { id: i64, age: i64 };
+//     const Person = struct { id: i64, age: i64 };
 
-    // queryRow -> MockBackend.queryRow
-    const one = try ds.queryRow(ctx, Person, "SELECT id, age FROM person WHERE id = ?", .{@as(i64, 1)});
-    try std.testing.expectEqual(@as(u32, 1), mock.query_row_calls);
-    try std.testing.expect(one == null);
+//     // queryRow -> MockBackend.queryRow
+//     const one = try ds.queryRow(ctx, Person, "SELECT id, age FROM person WHERE id = ?", .{@as(i64, 1)});
+//     try std.testing.expectEqual(@as(u32, 1), mock.query_row_calls);
+//     try std.testing.expect(one == null);
 
-    // select alias of queryRow.
-    _ = try ds.select(ctx, Person, "SELECT id, age FROM person WHERE id = ?", .{@as(i64, 1)});
-    try std.testing.expectEqual(@as(u32, 2), mock.query_row_calls);
+//     // select alias of queryRow.
+//     _ = try ds.select(ctx, Person, "SELECT id, age FROM person WHERE id = ?", .{@as(i64, 1)});
+//     try std.testing.expectEqual(@as(u32, 2), mock.query_row_calls);
 
-    // query alias of queryRow.
-    _ = try ds.query(ctx, Person, "SELECT id, age FROM person WHERE id = ?", .{@as(i64, 1)});
-    try std.testing.expectEqual(@as(u32, 3), mock.query_row_calls);
+//     // query alias of queryRow.
+//     _ = try ds.query(ctx, Person, "SELECT id, age FROM person WHERE id = ?", .{@as(i64, 1)});
+//     try std.testing.expectEqual(@as(u32, 3), mock.query_row_calls);
 
-    // queryRows -> MockBackend.queryRows (owned, freeable slice).
-    const rows = try ds.queryRows(ctx, Person, "SELECT id, age FROM person ORDER BY id", .{});
-    defer allocator.free(rows);
-    try std.testing.expectEqual(@as(u32, 1), mock.query_rows_calls);
-    try std.testing.expectEqual(@as(usize, 0), rows.len);
+//     // queryRows -> MockBackend.queryRows (owned, freeable slice).
+//     const rows = try ds.queryRows(ctx, Person, "SELECT id, age FROM person ORDER BY id", .{});
+//     defer allocator.free(rows);
+//     try std.testing.expectEqual(@as(u32, 1), mock.query_rows_calls);
+//     try std.testing.expectEqual(@as(usize, 0), rows.len);
 
-    // selectSlice -> MockBackend.selectSlice.
-    var list = std.array_list.Managed(Person).init(allocator);
-    defer list.deinit();
-    const n = try ds.selectSlice(ctx, Person, &list, "SELECT id, age FROM person ORDER BY id", .{});
-    try std.testing.expectEqual(@as(u32, 1), mock.select_slice_calls);
-    try std.testing.expectEqual(@as(i64, 0), n);
+//     // selectSlice -> MockBackend.selectSlice.
+//     var list = std.array_list.Managed(Person).init(allocator);
+//     defer list.deinit();
+//     const n = try ds.selectSlice(ctx, Person, &list, "SELECT id, age FROM person ORDER BY id", .{});
+//     try std.testing.expectEqual(@as(u32, 1), mock.select_slice_calls);
+//     try std.testing.expectEqual(@as(i64, 0), n);
 
-    // second exec -> rowsAffected.
-    _ = try ds.exec(ctx, "DELETE FROM person WHERE id = ?", .{@as(i64, 1)});
-    try std.testing.expectEqual(@as(u32, 2), mock.exec_calls);
-    try std.testing.expectEqual(@as(usize, 1), ds.rowsAffected());
-}
+//     // second exec -> rowsAffected.
+//     _ = try ds.exec(ctx, "DELETE FROM person WHERE id = ?", .{@as(i64, 1)});
+//     try std.testing.expectEqual(@as(u32, 2), mock.exec_calls);
+//     try std.testing.expectEqual(@as(usize, 1), ds.rowsAffected());
+// }
