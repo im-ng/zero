@@ -32,7 +32,7 @@ pub fn build(b: *std.Build) void {
     const protoc_step = protobuf_mod.RunProtocStep.create(protobuf.builder, target, .{
         .destination_directory = b.path("src/proto"),
         .source_files = &.{
-            b.path("proto/echo.proto"),
+            b.path("proto/crud.proto"),
         },
         .include_directories = &.{
             b.path("."),

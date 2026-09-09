@@ -1,8 +1,0 @@
-syntax = "proto3";
-
-package echo;
-
-message Echo {
-  string message = 1;
-  int64 timestamp = 2;
-}

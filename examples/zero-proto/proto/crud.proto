@@ -1,0 +1,33 @@
+syntax = "proto3";
+
+package crud;
+
+// A single user row. `email` is optional (proto3 presence) so it maps cleanly
+// to the nullable Postgres column.
+message User {
+  int64 id = 1;
+  string name = 2;
+  optional string email = 3;
+}
+
+message CreateUserRequest {
+  string name = 1;
+  optional string email = 2;
+}
+
+message UpdateUserRequest {
+  optional string name = 1;
+  optional string email = 2;
+}
+
+message UserResponse {
+  User user = 1;
+}
+
+message UserList {
+  repeated User users = 1;
+}
+
+message DeleteResponse {
+  bool success = 1;
+}
