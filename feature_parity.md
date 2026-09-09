@@ -75,6 +75,19 @@ Instead of developing and integrating with these boilerplates, an app developer 
     - ✅ `1-31` ranges support (day/hour/minute)
     - ✅ Support for multiple task executions
 - ✅ Websocket
+- ✅ GraphQL-over-HTTP
+    - ✅ POST with JSON body (`query`, `variables`, `operationName`)
+    - ✅ GET with URL query params (`?query=...&variables=...&operationName=...`)
+    - ✅ Schema-less resolver graph execution
+    - ✅ Constant field values
+    - ✅ Function resolvers (`fn (*Context, Args) anyerror!T`)
+    - ✅ Argument coercion (Int, Float, String, Boolean, Enum, Object)
+    - ✅ Nested objects & lists
+    - ✅ Fragments & inline fragments
+    - ✅ Per-field error collection (`data` + `errors`)
+    - ⬜ SDL schema definition & validation
+    - ⬜ Introspection (`__schema` / `__type`)
+    - ⬜ Subscriptions (WebSocket)
 - ⬜ TLS 
 - ⬜ CLI Application
 - ✅ Memory leaks
@@ -82,5 +95,9 @@ Instead of developing and integrating with these boilerplates, an app developer 
     - ✅ Pubsub
     - ✅ SQL
     - ⬜ Cache
-- ⬜ Protobuf support
-    - ⬜ Over HTTP
+- ✅ Protobuf support
+    - ✅ Decode request bodies (`ctx.bindProto(T)` for `application/x-protobuf`)
+    - ✅ Encode responses (`ctx.protobuf(data)`)
+    - ✅ Codegen from `.proto` via `zig build gen-proto` (protoc)
+    - ✅ Hand-written messages via the `protobuf` `encode`/`decode` primitives
+- ✅ Protocol Buffers over HTTP

@@ -48,6 +48,8 @@ _*An `experimental` support has been added to achieve the zig version 0.16 addit
 - [Project Structure](#project-structure)
 - [Configuration](#configuration)
 - [Examples](#examples)
+- [GraphQL](#graphql)
+- [Protobuf](#protobuf)
 - [Testing](#testing)
 - [Benchmark](#benchmark)
 - [Zig Version Compatibility](#zig-version-compatibility)
@@ -75,6 +77,8 @@ _*An `experimental` support has been added to achieve the zig version 0.16 addit
 | WebSockets      | ✅     | Built-in WebSocket support                 |
 | Static Files    | ✅     | Serve static assets + Swagger UI           |
 | Health Checks   | ✅     | Liveness + status endpoints                |
+| GraphQL         | ✅     | Schema-less resolvers over HTTP (POST/GET) |
+| Protobuf        | ✅     | proto3 codegen + bind/decode & encode over HTTP |
 
 See [feature_parity.md](./feature_parity.md) for the full roadmap and upcoming features.
 
@@ -236,13 +240,81 @@ LOG_LEVEL=debug
 
 All keys are commented out by default; features activate only when uncommented. See [config.md](./config.md) for the full list.
 
+## GraphQL
+
+`zero` ships a schema-less GraphQL-over-HTTP engine. You describe your schema as plain Zig
+structs: constant fields are returned as-is, and `*const fn (*Context, Args) anyerror!T` fields
+are invoked as resolvers (the `Args` struct is populated from the GraphQL arguments).
+
+```zig
+const zero = @import("zero");
+const App = zero.App;
+const Context = zero.Context;
+
+const User = struct { id: []const u8, name: []const u8 };
+const Query = struct {
+    hello: []const u8 = "world",
+    user: *const fn (*Context, struct { id: []const u8 }) anyerror!User,
+};
+
+fn userResolver(ctx: *Context, args: struct { id: []const u8 }) anyerror!User {
+    return .{ .id = args.id, .name = try std.fmt.allocPrint(ctx.allocator, "User {s}", .{args.id}) };
+}
+
+pub fn main(init: std.process.Init) !void {
+    // ... App.new(allocator, init.environ_map) ...
+    var query_root = Query{ .user = userResolver };
+    try app.graphql("/graphql", Query, null, &query_root, null);
+    try app.run();
+}
+```
+
+- `POST /graphql` with `{"query": "..."}` and optional `variables` / `operationName`
+- `GET  /graphql?query=...&variables=...&operationName=...` (URL-encoded)
+- Resolves nested objects, lists, arguments, inline/fragment spreads, and collects per-field
+  errors into `errors` while still returning the partial `data` payload.
+
+See [`examples/zero-graphql`](./examples/zero-graphql) for a runnable example.
+
+## Protobuf
+
+`zero` supports protobuf messages over HTTP. Define your schema in `proto/echo.proto`, generate
+Zig structs with `zig build gen-proto` (runs `protoc` via the `protobuf` dependency), then bind
+the request body and write the response:
+
+```zig
+const zero = @import("zero");
+const pb = @import("proto/echo.pb.zig"); // generated from proto/echo.proto
+
+pub fn echo(ctx: *zero.Context) !void {
+    const req = (try ctx.bindProto(pb.Echo)) orelse {
+        ctx.response.setStatus(.bad_request);
+        return;
+    };
+    var out = req;
+    out.timestamp = @intCast(std.Io.Timestamp.now(utils.io, .real).nanoseconds);
+    try ctx.protobuf(out); // Content-Type: application/x-protobuf
+}
+```
+
+- `ctx.bindProto(T)` — decodes an `application/x-protobuf` request body into `T` (any message
+  exposing `decode`).
+- `ctx.protobuf(data)` — serializes `data` (exposing `encode`) into the response with
+  `Content-Type: application/x-protobuf`.
+- Messages may also be described by hand using the `protobuf` `encode`/`decode` primitives plus a
+  `_desc_table`.
+
+See [`examples/zero-proto`](./examples/zero-proto) for a runnable example.
+
 ## Examples
 
-16 example applications are available in the `examples/` directory:
+18 example applications are available in the `examples/` directory:
 
 | Example                 | Description                            |
 | ----------------------- | -------------------------------------- |
 | `zero-basic`            | Minimal HTTP server                    |
+| `zero-graphql`          | GraphQL-over-HTTP engine               |
+| `zero-proto`            | Protobuf-over-HTTP (codegen + bind)    |
 | `zero-auth`             | Authentication (Basic, API Key, OAuth) |
 | `zero-cronz`            | Cron job scheduling                    |
 | `zero-kafka-publisher`  | Kafka message publishing               |
@@ -264,7 +336,7 @@ Each example has its own `build.zig` and `build.zig.zon`.
 ## Testing
 
 ```bash
-zig build test              # run all unit tests (52 tests)
+zig build test              # run unit tests (101 tests — framework + linked dependency suites)
 zig build --release=fast    # release build
 make clean                  # remove build artifacts
 ```
