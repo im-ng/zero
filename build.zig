@@ -46,6 +46,9 @@ pub fn build(b: *std.Build) void {
 
     const protobuf = b.dependency("protobuf", .{});
 
+    const graphql = b.dependency("graphql", .{});
+    module.addImport("graphql", graphql.module("graphql"));
+
     // if (b.option(
     //     bool,
     //     "kafka",
@@ -78,6 +81,7 @@ pub fn build(b: *std.Build) void {
     test_module.addImport("sqlite", sqlite.module("sqlite"));
     test_module.addImport("nats", nats.module("nats"));
     test_module.addImport("protobuf", protobuf.module("protobuf"));
+    test_module.addImport("graphql", graphql.module("graphql"));
     test_module.addImport("zero", module);
 
     if (builtin.os.tag == .macos) {
@@ -110,6 +114,7 @@ pub fn build(b: *std.Build) void {
     integration_module.addImport("sqlite", sqlite.module("sqlite"));
     integration_module.addImport("nats", nats.module("nats"));
     integration_module.addImport("protobuf", protobuf.module("protobuf"));
+    integration_module.addImport("graphql", graphql.module("graphql"));
     integration_module.addImport("zero", module);
 
     if (builtin.os.tag == .macos) {
@@ -146,6 +151,7 @@ pub fn build(b: *std.Build) void {
     validation_module.addImport("sqlite", sqlite.module("sqlite"));
     validation_module.addImport("nats", nats.module("nats"));
     validation_module.addImport("protobuf", protobuf.module("protobuf"));
+    validation_module.addImport("graphql", graphql.module("graphql"));
     validation_module.addImport("zero", module);
 
     if (builtin.os.tag == .macos) {
@@ -185,6 +191,7 @@ pub fn build(b: *std.Build) void {
     bench_module.addImport("sqlite", sqlite.module("sqlite"));
     bench_module.addImport("nats", nats.module("nats"));
     bench_module.addImport("protobuf", protobuf.module("protobuf"));
+    bench_module.addImport("graphql", graphql.module("graphql"));
     bench_module.addImport("zero", module);
 
     if (builtin.os.tag == .macos) {

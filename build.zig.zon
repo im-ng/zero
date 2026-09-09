@@ -62,6 +62,10 @@
             .url = "git+https://github.com/Arwalk/zig-protobuf#b794f99323cead7f1794ae68554d0311cc309857",
             .hash = "protobuf-5.0.0-0e82ahZiKwC5Yrh4psANoUzrV_H4CQU1EsOIY9Zdyap_",
         },
+        .graphql = .{
+            .url = "git+https://github.com/im-ng/graphql-zig#92ea2176b6f1945bde6acf35af0f9ca3ff770af3",
+            .hash = "graphql-0.2.0-13OEDvCaAgCb8FLxnOIW_63Zn8Yu-UVyLbZYP7R8g6MD",
+        },
     },
     .paths = .{
         "build.zig",

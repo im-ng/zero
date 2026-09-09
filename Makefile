@@ -25,6 +25,8 @@ clean:
 	rm -rf examples/zero-sqlite/.zig-cache examples/zero-sqlite/zig-out	examples/zero-sqlite/zig-pkg
 	rm -rf examples/zero-nats-publisher/.zig-cache examples/zero-nats-publisher/zig-out	examples/zero-nats-publisher/zig-pkg
 	rm -rf examples/zero-nats-subscriber/.zig-cache examples/zero-nats-subscriber/zig-out examples/zero-nats-subscriber/zig-pkg
+	rm -rf examples/zero-proto/.zig-cache examples/zero-proto/zig-out examples/zero-proto/zig-pkg
+	rm -rf examples/zero-graphql/.zig-cache examples/zero-graphql/zig-out examples/zero-graphql/zig-pkg
 
 release:
 	zig build --release=fast

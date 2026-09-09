@@ -14,6 +14,10 @@ pub const mqttz = @import("mqttz");
 pub const jwt = @import("jwt");
 pub const natslib = @import("nats");
 
+// GraphQL parser (graphql-zig) + zero's executor engine (src/graphql.zig).
+pub const graphql = @import("graphql");
+pub const gql = @import("graphql.zig");
+
 pub const rdkafka = @import("cimport.zig").librdkafka;
 pub const sqlitez = @import("sqlite");
 

@@ -11,6 +11,7 @@ const constants = root.constants;
 const jwtClaims = root.jwtClaims;
 const kafka = root.kafka;
 const kafkaMessage = root.kafkaMessage;
+const gql = @import("graphql.zig");
 
 pub const Context = struct {
     request: *httpz.Request = undefined,
@@ -201,6 +202,20 @@ pub const Context = struct {
         self.response.body = w.written();
         self.response.header("content-type", "application/x-protobuf");
         self.response.setStatus(.ok);
+    }
+
+    /// Executes a GraphQL query against the given resolver root(s) and writes a
+    /// `Content-Type: application/json` `{ data, errors }` response.
+    ///
+    /// `mutation_root` may be null when the operation is always a query.
+    pub fn graphql(
+        self: *Context,
+        comptime Query: type,
+        comptime Mutation: ?type,
+        query_root: *const Query,
+        mutation_root: ?*const anyopaque,
+    ) !void {
+        try gql.handle(self, Query, Mutation, query_root, mutation_root);
     }
 
     /// returns if path param exist

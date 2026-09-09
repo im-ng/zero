@@ -39,6 +39,10 @@ Kakfa: ?*root.kafka = null,
 Nats: ?*root.nats = null,
 pubSub: ?*root.PubSub = null,
 
+    // GraphQL resolver roots (set by App.graphql; read by the dispatch handler)
+    graphql_query: ?*const anyopaque = null,
+    graphql_mutation: ?*const anyopaque = null,
+
 pub fn create(self: Self) anyerror!*container {
     const c = try self.allocator.create(container);
     errdefer self.allocator.destroy(c);

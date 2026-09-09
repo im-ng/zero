@@ -469,6 +469,35 @@ pub fn delete(self: Self, path: []const u8, handler: *const fn (*root.Context) a
     self.httpServer.router.delete(path, handler, .{});
 }
 
+/// Registers a GraphQL-over-HTTP endpoint at `path`.
+///
+/// `query_root`/`mutation_root` are resolver instances (plain Zig structs whose
+/// fields are constant values or `fn(*Context, Args) !T` resolvers). They must
+/// outlive the request (e.g. global `var` instances).
+pub fn graphql(
+    self: *Self,
+    comptime path: []const u8,
+    comptime Query: type,
+    comptime Mutation: ?type,
+    query_root: *const Query,
+    mutation_root: ?*const anyopaque,
+) !void {
+    self.container.graphql_query = query_root;
+    self.container.graphql_mutation = mutation_root;
+    try self.post(path, makeGraphQLHandler(Query, Mutation));
+}
+
+fn makeGraphQLHandler(comptime Query: type, comptime Mutation: ?type) *const fn (*root.Context) anyerror!void {
+    const Impl = struct {
+        fn handle(c: *root.Context) !void {
+            const q: *const Query = @ptrCast(@alignCast(c.container.graphql_query orelse return error.GraphQLNoQuery));
+            const m: ?*const anyopaque = if (Mutation) |_| c.container.graphql_mutation else null;
+            try c.graphql(Query, Mutation, q, m);
+        }
+    };
+    return &Impl.handle;
+}
+
 pub fn addMigration(self: *Self, key: []const u8, m: *const migrate) !void {
     // add to migration map
     try self.migrations.map.put(key, m);
