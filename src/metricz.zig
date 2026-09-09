@@ -31,6 +31,28 @@ pub const PubSubPublisherSuccessLabel = struct { topic: []const u8 };
 pub const PubSubSubscriberTotalLabel = struct { topic: []const u8, consumer: []const u8 };
 pub const PubSubSubscriberSuccessLabel = struct { topic: []const u8, consumer: []const u8 };
 
+// Type-erased handle for an app-registered custom metric. The metrics library
+// has no global registry, so custom metrics are kept in a dynamic list and
+// written alongside the built-ins. `ptr` points at the heap-allocated metric
+// `Impl`; `write` casts it back and serializes it.
+pub const CustomMetric = struct {
+    ptr: *anyopaque,
+    write: *const fn (*anyopaque, *std.Io.Writer) anyerror!void,
+};
+
+// Returns a writer shim for a concrete metric `Impl` type.
+fn writeCustom(comptime ImplT: type) *const fn (*anyopaque, *std.Io.Writer) anyerror!void {
+    return struct {
+        fn f(ptr: *anyopaque, w: *std.Io.Writer) !void {
+            const m = @as(*ImplT, @ptrCast(@alignCast(ptr)));
+            try m.write(w);
+        }
+    }.f;
+}
+
+custom: std.array_list.Managed(CustomMetric) = undefined,
+mut: std.Io.Mutex = .init,
+
 Info: metrics.CounterVec(
     u32,
     AppInfoLabel,
@@ -199,6 +221,45 @@ pub fn SubscriberSuccess(self: *Self, labels: PubSubSubscriberSuccessLabel) !voi
     return self.PubSubSubscriberSuccess.incr(labels);
 }
 
+/// Registers a custom counter with label struct `L` and returns the handle so
+/// the caller can `incr(label)` / `incrBy(label, n)` from request handlers.
+/// Appears on `/metrics` automatically.
+pub fn Counter(self: *Self, comptime L: type, allocator: Allocator, comptime name: []const u8, comptime help: ?[]const u8) !*metrics.CounterVec(u64, L).Impl {
+    const T = metrics.CounterVec(u64, L).Impl;
+    const impl = try allocator.create(T);
+    errdefer allocator.destroy(impl);
+    impl.* = try T.init(allocator, utils.io, name, .{ .help = help });
+    try self.addCustom(impl, writeCustom(T));
+    return impl;
+}
+
+/// Registers a custom gauge. Caller uses `set(label, value)` / `incr` / `dec`.
+pub fn Gauge(self: *Self, comptime L: type, allocator: Allocator, comptime name: []const u8, comptime help: ?[]const u8) !*metrics.GaugeVec(u64, L).Impl {
+    const T = metrics.GaugeVec(u64, L).Impl;
+    const impl = try allocator.create(T);
+    errdefer allocator.destroy(impl);
+    impl.* = try T.init(allocator, name, .{ .help = help });
+    try self.addCustom(impl, writeCustom(T));
+    return impl;
+}
+
+/// Registers a custom histogram with the given bucket boundaries (seconds).
+/// Caller uses `observe(label, value)`.
+pub fn Histogram(self: *Self, comptime L: type, allocator: Allocator, comptime name: []const u8, comptime buckets: []const f64, comptime help: ?[]const u8) !*metrics.HistogramVec(f64, L, buckets).Impl {
+    const T = metrics.HistogramVec(f64, L, buckets).Impl;
+    const impl = try allocator.create(T);
+    errdefer allocator.destroy(impl);
+    impl.* = try T.init(allocator, utils.io, name, .{ .help = help });
+    try self.addCustom(impl, writeCustom(T));
+    return impl;
+}
+
+fn addCustom(self: *Self, ptr: *anyopaque, write_fn: *const fn (*anyopaque, *std.Io.Writer) anyerror!void) !void {
+    self.mut.lockUncancelable(utils.io);
+    defer self.mut.unlock(utils.io);
+    try self.custom.append(.{ .ptr = ptr, .write = write_fn });
+}
+
 pub fn initialize(allocator: Allocator, comptime _: metrics.RegistryOpts) !*metricz {
     metrics.setIo(utils.io);
     const m = try allocator.create(metricz);
@@ -239,6 +300,9 @@ pub fn initialize(allocator: Allocator, comptime _: metrics.RegistryOpts) !*metr
 
     m.PubSubSubscriberSuccess = try metrics.CounterVec(u64, PubSubSubscriberSuccessLabel).Impl
         .init(allocator, utils.io, "app_pubsub_subscriber_success_count", .{ .help = "Successful pubsub subscriber counter per topic per consumer group" });
+
+    m.custom = std.array_list.Managed(CustomMetric).init(allocator);
+
     return m;
 }
 
@@ -275,4 +339,10 @@ pub fn writeRaw(self: *Self, allocator: Allocator, writer: *std.Io.Writer) !void
     try self.PubSubPublisherSuccess.write(writer);
     try self.PubSubSubscriberTotal.write(writer);
     try self.PubSubSubscriberSuccess.write(writer);
+
+    self.mut.lockUncancelable(utils.io);
+    defer self.mut.unlock(utils.io);
+    for (self.custom.items) |c| {
+        try c.write(c.ptr, writer);
+    }
 }

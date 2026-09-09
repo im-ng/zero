@@ -111,6 +111,12 @@ pub fn onStartup(self: *Self, hook: fn (*root.Context) anyerror!void) void {
     self.startupHook = &hook;
 }
 
+/// Returns the metrics registry so apps can register custom counters, gauges,
+/// and histograms that are exposed on the `/metrics` endpoint.
+pub fn Metric(self: *Self) *root.metricz {
+    return self.container.metricz;
+}
+
 fn runStartupHooks(self: *Self) !void {
     if (self.startupHook == null) {
         return;

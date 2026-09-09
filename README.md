@@ -47,6 +47,7 @@ _*An `experimental` support has been added to achieve the zig version 0.16 addit
 - [Quick Start](#quick-start)
 - [Project Structure](#project-structure)
 - [Configuration](#configuration)
+- [Metrics](#metrics)
 - [Examples](#examples)
 - [GraphQL](#graphql)
 - [Protobuf](#protobuf)
@@ -239,6 +240,67 @@ LOG_LEVEL=debug
 ```
 
 All keys are commented out by default; features activate only when uncommented. See [config.md](./config.md) for the full list.
+
+## Metrics
+
+Zero collects app, HTTP, SQL, KV, and process/memory metrics out of the box and exposes them
+in Prometheus format on a **separate metrics port** (`METRICZ_PORT`, default `2121`) at
+`/metrics` — independent of the main HTTP server.
+
+You can also register your own **custom metrics** so applications can instrument domain-specific
+behavior. Use `app.Metric()` (which returns the shared `metricz` registry) to register a
+counter, gauge, or histogram, then update it from your handlers:
+
+```zig
+const std = @import("std");
+const zero = @import("zero");
+const App = zero.App;
+const Context = zero.Context;
+const metrics = zero.metricz;
+const utils = zero.utils;
+
+// module-level handles assigned once at startup
+var http_requests_total: *metrics.CounterVec(u64, struct { method: []const u8, path: []const u8 }).Impl = undefined;
+var queue_depth: *metrics.GaugeVec(u64, struct { name: []const u8 }).Impl = undefined;
+var request_latency_seconds: *metrics.HistogramVec(f64, struct { route: []const u8 }, &.{ 0.01, 0.05, 0.1, 0.5, 1.0 }).Impl = undefined;
+
+pub fn main(init: std.process.Init) !void {
+    utils.setIo(init.io);
+    var gpa: std.heap.DebugAllocator(.{}) = .init;
+    const allocator = gpa.allocator();
+    const app = try App.new(allocator, init.environ_map);
+
+    // register custom metrics (the label set is a plain struct)
+    http_requests_total = try app.Metric().Counter(struct { method: []const u8, path: []const u8 }, allocator, "http_requests_total", "Total HTTP requests.");
+    queue_depth = try app.Metric().Gauge(struct { name: []const u8 }, allocator, "queue_depth", "Current queue depth.");
+    request_latency_seconds = try app.Metric().Histogram(struct { route: []const u8 }, allocator, "request_latency_seconds", &.{ 0.01, 0.05, 0.1, 0.5, 1.0 }, "Request latency in seconds.");
+
+    try app.get("/work", workHandler);
+    try app.run();
+}
+
+fn workHandler(ctx: *Context) !void {
+    try http_requests_total.incr(.{ .method = "GET", .path = "/work" });
+    try queue_depth.set(.{ .name = "orders" }, 3);
+    try request_latency_seconds.observe(.{ .route = "/work" }, 0.042);
+    try ctx.json(.{ .ok = true });
+}
+```
+
+Scrape the metrics endpoint:
+
+```bash
+curl http://localhost:2121/metrics | grep http_requests_total
+# HELP http_requests_total Total HTTP requests.
+# TYPE http_requests_total counter
+# http_requests_total{method="GET",path="/work"} 1
+```
+
+Set the port via `configs/.env`:
+
+```bash
+METRICS_PORT=2121
+```
 
 ## GraphQL
 
