@@ -10,7 +10,7 @@ pub const ErrorObject = struct {
 };
 
 const GraphQLRequest = struct {
-    query: []const u8,
+    query: ?[]const u8 = null,
     variables: ?std.json.Value = null,
     operation_name: ?[]const u8 = null,
 };
@@ -33,17 +33,26 @@ pub fn handle(
     mutation_root: ?*const anyopaque,
 ) !void {
     const body = ctx.request.body() orelse "";
-    const req = std.json.parseFromSliceLeaky(GraphQLRequest, ctx.allocator, body, .{ .ignore_unknown_fields = true }) catch {
+    var req: GraphQLRequest = .{};
+    if (body.len > 0) {
+        req = std.json.parseFromSliceLeaky(GraphQLRequest, ctx.allocator, body, .{ .ignore_unknown_fields = true }) catch blk: {
+            break :blk try readFromQueryString(ctx);
+        };
+    } else {
+        req = try readFromQueryString(ctx);
+    }
+
+    const query_str = req.query orelse {
         ctx.response.setStatus(.bad_request);
         ctx.response.header("content-type", "application/json");
-        try ctx.response.json(.{ .errors = .{.{ .message = "invalid request body" }} }, .{});
+        try ctx.response.json(.{ .errors = .{.{ .message = "no query provided" }} }, .{});
         return;
     };
 
     var arena = std.heap.ArenaAllocator.init(ctx.allocator);
     defer arena.deinit();
 
-    const doc = parser.parse(arena.allocator(), req.query) catch {
+    const doc = parser.parse(arena.allocator(), query_str) catch {
         ctx.response.setStatus(.bad_request);
         ctx.response.header("content-type", "application/json");
         try ctx.response.json(.{ .errors = .{.{ .message = "query parse error" }} }, .{});
@@ -108,6 +117,19 @@ pub fn handle(
     ctx.response.setStatus(.ok);
     ctx.response.header("content-type", "application/json");
     try ctx.response.json(std.json.Value{ .object = out }, .{});
+}
+
+/// Fallback request source: GraphQL-over-HTTP GET uses URL query params
+/// (?query=...&variables=...&operationName=...). Values are URL-decoded by httpz.
+fn readFromQueryString(ctx: anytype) !GraphQLRequest {
+    const qs = ctx.request.query() catch return GraphQLRequest{};
+    const q = qs.get("query") orelse return GraphQLRequest{};
+    var gql_req: GraphQLRequest = .{ .query = q };
+    if (qs.get("operationName")) |op| gql_req.operation_name = op;
+    if (qs.get("variables")) |v| {
+        gql_req.variables = std.json.parseFromSliceLeaky(std.json.Value, ctx.allocator, v, .{}) catch null;
+    }
+    return gql_req;
 }
 
 fn findOperation(doc: ast.DocumentNode, operation_name: ?[]const u8) ?ast.OperationDefinitionNode {

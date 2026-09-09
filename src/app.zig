@@ -485,6 +485,7 @@ pub fn graphql(
     self.container.graphql_query = query_root;
     self.container.graphql_mutation = mutation_root;
     try self.post(path, makeGraphQLHandler(Query, Mutation));
+    try self.get(path, makeGraphQLHandler(Query, Mutation));
 }
 
 fn makeGraphQLHandler(comptime Query: type, comptime Mutation: ?type) *const fn (*root.Context) anyerror!void {
