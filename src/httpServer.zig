@@ -87,8 +87,6 @@ pub fn create(allocator: std.mem.Allocator, container: *root.container) !*server
         .middlewares = &.{ traczMW, corsMW, authMW, mwWS },
     });
 
-    hzs.router.get("/metrics", root.handler.metricz, .{});
-
     if (hzs.provider) |p| {
         container.authProvider = p;
         // hzs.registerRefresherThread(p);

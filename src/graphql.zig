@@ -25,13 +25,7 @@ fn ExecCtx(comptime Ctx: type) type {
     };
 }
 
-pub fn handle(
-    ctx: anytype,
-    comptime Query: type,
-    comptime Mutation: ?type,
-    query_root: *const Query,
-    mutation_root: ?*const anyopaque,
-) !void {
+pub fn handle(ctx: anytype, comptime Query: type, comptime Mutation: ?type, query_root: *const Query, mutation_root: ?*const anyopaque) !void {
     const body = ctx.request.body() orelse "";
     var req: GraphQLRequest = .{};
     if (body.len > 0) {
@@ -74,18 +68,6 @@ pub fn handle(
         return;
     }
 
-    const RootT = if (is_mutation) Mutation.? else Query;
-    const root_ptr: *const anyopaque = if (is_mutation)
-        mutation_root orelse {
-            ctx.response.setStatus(.bad_request);
-            ctx.response.header("content-type", "application/json");
-            try ctx.response.json(.{ .errors = .{.{ .message = "mutation root missing" }} }, .{});
-            return;
-        }
-    else
-        query_root;
-    const root_inst: *const RootT = @ptrCast(@alignCast(root_ptr));
-
     var ec: ExecCtx(@TypeOf(ctx)) = .{
         .ctx = ctx,
         .doc = doc,
@@ -94,7 +76,18 @@ pub fn handle(
         .errors = std.array_list.Managed(ErrorObject).init(arena.allocator()),
     };
 
-    const data = resolve(RootT, root_inst.*, op.selection_set.?, &ec) catch {
+    // Choose the root type at comptime (Mutation may be null); the actual root
+    // pointer is selected at runtime. `Mutation orelse Query` avoids the
+    // type-level `.?` that would fail to compile under a runtime `if`.
+    const data = (if (is_mutation)
+        dispatch(Mutation orelse Query, mutation_root orelse {
+            ctx.response.setStatus(.bad_request);
+            ctx.response.header("content-type", "application/json");
+            try ctx.response.json(.{ .errors = .{.{ .message = "mutation root missing" }} }, .{});
+            return;
+        }, op.selection_set.?, &ec)
+    else
+        dispatch(Query, query_root, op.selection_set.?, &ec)) catch {
         ctx.response.setStatus(.internal_server_error);
         ctx.response.header("content-type", "application/json");
         const o = std.json.ObjectMap.empty;
@@ -123,22 +116,41 @@ pub fn handle(
 /// (?query=...&variables=...&operationName=...). Values are URL-decoded by httpz.
 fn readFromQueryString(ctx: anytype) !GraphQLRequest {
     const qs = ctx.request.query() catch return GraphQLRequest{};
+
     const q = qs.get("query") orelse return GraphQLRequest{};
-    var gql_req: GraphQLRequest = .{ .query = q };
-    if (qs.get("operationName")) |op| gql_req.operation_name = op;
-    if (qs.get("variables")) |v| {
-        gql_req.variables = std.json.parseFromSliceLeaky(std.json.Value, ctx.allocator, v, .{}) catch null;
+
+    var gql_req: GraphQLRequest = .{
+        .query = q,
+    };
+
+    if (qs.get("operationName")) |op| {
+        gql_req.operation_name = op;
     }
+
+    if (qs.get("variables")) |v| {
+        gql_req.variables = std.json.parseFromSliceLeaky(
+            std.json.Value,
+            ctx.allocator,
+            v,
+            .{},
+        ) catch null;
+    }
+
     return gql_req;
 }
 
 fn findOperation(doc: ast.DocumentNode, operation_name: ?[]const u8) ?ast.OperationDefinitionNode {
     var fallback: ?ast.OperationDefinitionNode = null;
+
     for (doc.definitions) |def| {
         if (def != .ExecutableDefinition) continue;
+
         const ed = def.ExecutableDefinition;
+
         if (ed != .OperationDefinition) continue;
+
         const op = ed.OperationDefinition;
+
         if (operation_name) |name| {
             if (op.name) |n| {
                 if (std.mem.eql(u8, n.value, name)) return op;
@@ -148,22 +160,35 @@ fn findOperation(doc: ast.DocumentNode, operation_name: ?[]const u8) ?ast.Operat
             if (fallback == null) fallback = op;
         }
     }
+
     if (operation_name != null) return null;
+
     return fallback;
 }
 
 fn findFragment(doc: ast.DocumentNode, name: []const u8) ?ast.FragmentDefinitionNode {
     for (doc.definitions) |def| {
         if (def != .ExecutableDefinition) continue;
+
         const ed = def.ExecutableDefinition;
+
         if (ed != .FragmentDefinition) continue;
-        if (std.mem.eql(u8, ed.FragmentDefinition.name.value, name)) return ed.FragmentDefinition;
+
+        if (std.mem.eql(u8, ed.FragmentDefinition.name.value, name)) {
+            return ed.FragmentDefinition;
+        }
     }
     return null;
 }
 
+fn dispatch(comptime T: type, root: *const anyopaque, ss: ast.SelectionSetNode, ec: anytype) !std.json.Value {
+    const inst: *const T = @ptrCast(@alignCast(root));
+    return resolve(T, inst.*, ss, ec);
+}
+
 fn resolve(comptime T: type, instance: T, ss: ast.SelectionSetNode, ec: anytype) !std.json.Value {
     var obj = std.json.ObjectMap.empty;
+
     for (ss.selections) |sel| {
         switch (sel) {
             .Field => |f| {
@@ -261,41 +286,71 @@ fn resolveValue(value: anytype, ss: ?ast.SelectionSetNode, ec: anytype) !std.jso
 
 fn resolveList(comptime T: type, list: T, ss: ast.SelectionSetNode, ec: anytype) !std.json.Value {
     var arr = std.json.Array.init(ec.alloc);
+
     const ti = @typeInfo(T);
+
     if (ti == .pointer) {
         for (list) |item| try arr.append(try resolveValue(item, ss, ec));
     } else if (ti == .array) {
         for (list) |item| try arr.append(try resolveValue(item, ss, ec));
     }
+
     return .{ .array = arr };
 }
 
 fn sliceToJson(comptime T: type, list: T, alloc: std.mem.Allocator) !std.json.Value {
     var arr = std.json.Array.init(alloc);
+
     for (list) |item| try arr.append(try primitiveToJson(item, alloc));
-    return .{ .array = arr };
+
+    return .{
+        .array = arr,
+    };
 }
 
 fn primitiveToJson(value: anytype, alloc: std.mem.Allocator) !std.json.Value {
     const T = @TypeOf(value);
     switch (@typeInfo(T)) {
-        .int => return .{ .integer = @intCast(value) },
-        .float => return .{ .float = @floatCast(value) },
-        .bool => return .{ .bool = value },
-        .@"enum" => return .{ .string = @tagName(value) },
+        .int => return .{
+            .integer = @intCast(value),
+        },
+        .float => return .{
+            .float = @floatCast(value),
+        },
+        .bool => return .{
+            .bool = value,
+        },
+        .@"enum" => return .{
+            .string = @tagName(value),
+        },
         .pointer => |p| {
-            if (p.child == u8) return .{ .string = value };
+            if (p.child == u8) return .{
+                .string = value,
+            };
+
             if (@typeInfo(p.child) == .@"fn") return .null;
+
             if (p.size == .one) return primitiveToJson(value.*, alloc);
+
             var arr = std.json.Array.init(alloc);
-            for (value) |item| try arr.append(try primitiveToJson(item, alloc));
-            return .{ .array = arr };
+
+            for (value) |item| {
+                try arr.append(try primitiveToJson(item, alloc));
+            }
+
+            return .{
+                .array = arr,
+            };
         },
         .optional => if (value == null) return .null else return primitiveToJson(value.?, alloc),
         .array => {
             var arr = std.json.Array.init(alloc);
+
             for (value) |item| try arr.append(try primitiveToJson(item, alloc));
-            return .{ .array = arr };
+
+            return .{
+                .array = arr,
+            };
         },
         else => return .null,
     }
@@ -330,7 +385,11 @@ fn dequote(alloc: std.mem.Allocator, raw: []const u8) ![]u8 {
     return try alloc.dupe(u8, raw);
 }
 
-fn coerceArguments(arguments: ?[]const ast.ArgumentNode, comptime Args: type, ec: anytype) !Args {
+fn coerceArguments(
+    arguments: ?[]const ast.ArgumentNode,
+    comptime Args: type,
+    ec: anytype,
+) !Args {
     if (Args == void) return {};
     var args: Args = std.mem.zeroes(Args);
     if (arguments) |args_nodes| {
@@ -384,7 +443,14 @@ fn parseFloatT(comptime T: type, s: []const u8) !T {
 
 fn stringToT(comptime T: type, s: []const u8) !T {
     if (T == []const u8) return s;
+
+    if (@typeInfo(T) == .optional and @typeInfo(T).optional.child == []const u8) return s;
+
     if (@typeInfo(T) == .@"enum") return std.meta.stringToEnum(T, s) orelse error.TypeMismatch;
+
+    if (@typeInfo(T) == .optional and @typeInfo(T).optional.child == .@"enum") {
+        return std.meta.stringToEnum(@typeInfo(T).optional.child, s) orelse error.TypeMismatch;
+    }
     return error.TypeMismatch;
 }
 
@@ -481,7 +547,7 @@ fn testUserResolver(_: *TestCtx, args: TestArgs) anyerror!TestUser {
 const TestQuery = struct {
     hello: []const u8 = "world",
     pi: f64 = 3.14159,
-    user: *const fn(*TestCtx, TestArgs) anyerror!TestUser = testUserResolver,
+    user: *const fn (*TestCtx, TestArgs) anyerror!TestUser = testUserResolver,
 };
 
 test "graphql: resolve query with constant, resolver and arguments" {

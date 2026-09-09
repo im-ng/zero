@@ -31,6 +31,7 @@ config: *root.config = undefined,
 container: *root.container = undefined,
 metriczServer: *root.metriczServer = undefined,
 httpServer: *root.httpServer = undefined,
+metriczThread: ?std.Thread = null,
 migrations: *root.migration = undefined,
 cronz: ?*root.cronz = null,
 startupHook: ?*const fn (*root.Context) anyerror!void = null,
@@ -177,6 +178,8 @@ pub fn run(self: *Self) !void {
     try self.startShutdownHandler();
 
     // try self.startMetricsServer();
+    try self.startMetricsServer();
+
     try self.startHttpServer();
 
     // The http server has stopped (e.g. after a SIGINT/SIGTERM via the
@@ -184,6 +187,11 @@ pub fn run(self: *Self) !void {
     // from the signal handler itself, where joining threads or freeing client
     // state (while their background threads are still running) is UB/deadlock
     // and can leave the process hanging (e.g. the NATS io_task thread).
+    if (self.metriczThread) |mthread| {
+        self.metriczServer.stop();
+        mthread.join();
+        self.metriczServer.deinit();
+    }
     if (self.cronz) |cronz| {
         cronz.destroy();
     }
@@ -261,10 +269,9 @@ pub fn shutdownApp(_: Self) void {
     }
 }
 
-fn startMetricsServer(self: Self) !void {
+fn startMetricsServer(self: *Self) !void {
     self.log.debug("metrics server is initialized");
-    const thread = try self.metriczServer.Run();
-    thread.join();
+    self.metriczThread = try self.metriczServer.Run();
     self.log.debug("metrics server started");
 }
 
@@ -474,17 +481,13 @@ pub fn delete(self: Self, path: []const u8, handler: *const fn (*root.Context) a
 /// `query_root`/`mutation_root` are resolver instances (plain Zig structs whose
 /// fields are constant values or `fn(*Context, Args) !T` resolvers). They must
 /// outlive the request (e.g. global `var` instances).
-pub fn graphql(
-    self: *Self,
-    comptime path: []const u8,
-    comptime Query: type,
-    comptime Mutation: ?type,
-    query_root: *const Query,
-    mutation_root: ?*const anyopaque,
-) !void {
+pub fn graphql(self: *Self, comptime path: []const u8, comptime Query: type, comptime Mutation: ?type, query_root: *const Query, mutation_root: ?*const anyopaque) !void {
     self.container.graphql_query = query_root;
+
     self.container.graphql_mutation = mutation_root;
+
     try self.post(path, makeGraphQLHandler(Query, Mutation));
+
     try self.get(path, makeGraphQLHandler(Query, Mutation));
 }
 
@@ -496,6 +499,7 @@ fn makeGraphQLHandler(comptime Query: type, comptime Mutation: ?type) *const fn 
             try c.graphql(Query, Mutation, q, m);
         }
     };
+
     return &Impl.handle;
 }
 

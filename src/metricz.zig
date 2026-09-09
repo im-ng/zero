@@ -243,31 +243,36 @@ pub fn initialize(allocator: Allocator, comptime _: metrics.RegistryOpts) !*metr
 }
 
 pub fn write(self: *Self, ctx: *Context) !void {
-    // return httpz.writeMetrics(ctx.response.writer());
-    try self.Info.write(ctx.response.writer());
-    if (builtin.os.tag == .linux) {
-        const path = try utils.combine(ctx.allocator, "/proc/{d}/status", .{std.c.getpid()});
+    return self.writeRaw(ctx.allocator, ctx.response.writer());
+}
 
-        const ps = try Process.usage(ctx.allocator, path);
+/// Writes the full metric set (app + pg + pubsub) to an arbitrary writer.
+/// Used by the standalone metrics server, which has no `Context`.
+pub fn writeRaw(self: *Self, allocator: Allocator, writer: *std.Io.Writer) !void {
+    try self.Info.write(writer);
+    if (builtin.os.tag == .linux) {
+        const path = try utils.combine(allocator, "/proc/{d}/status", .{std.c.getpid()});
+
+        const ps = try Process.usage(allocator, path);
 
         try self.appThreads(.{ .label = "app_threads" }, ps.threads);
         try self.appMemoryUsage(.{ .label = "app_memory_usage" }, ps.rssAnon);
         try self.appMemoryTotal(.{ .label = "app_memory_total" }, ps.vmHWM);
 
-        try self.Threads.write(ctx.response.writer());
-        try self.MemoryUsage.write(ctx.response.writer());
-        try self.MemoryTotal.write(ctx.response.writer());
+        try self.Threads.write(writer);
+        try self.MemoryUsage.write(writer);
+        try self.MemoryTotal.write(writer);
     }
-    try self.ResponseBucketHits.write(ctx.response.writer());
-    try self.ResponseBucket.write(ctx.response.writer());
-    try self.ServiceResponseBucket.write(ctx.response.writer());
+    try self.ResponseBucketHits.write(writer);
+    try self.ResponseBucket.write(writer);
+    try self.ServiceResponseBucket.write(writer);
 
-    try self.SQLBucket.write(ctx.response.writer());
+    try self.SQLBucket.write(writer);
     //rewrite pg metrics labelling to match with default
-    try pgz.writeMetrics(ctx.response.writer());
+    try pgz.writeMetrics(writer);
 
-    try self.PubSubPublisherTotal.write(ctx.response.writer());
-    try self.PubSubPublisherSuccess.write(ctx.response.writer());
-    try self.PubSubSubscriberTotal.write(ctx.response.writer());
-    try self.PubSubSubscriberSuccess.write(ctx.response.writer());
+    try self.PubSubPublisherTotal.write(writer);
+    try self.PubSubPublisherSuccess.write(writer);
+    try self.PubSubSubscriberTotal.write(writer);
+    try self.PubSubSubscriberSuccess.write(writer);
 }
