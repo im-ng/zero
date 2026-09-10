@@ -21,6 +21,7 @@ pub const Context = struct {
 
     SQL: root.Datasource = undefined,
     KV: ?*root.KVStore = null,
+    FileStore: ?*root.FileStore = null,
     provider: *root.AuthProvider = undefined,
     MQ: *root.MQTT = undefined,
     KF: *root.kafka = undefined,
@@ -53,6 +54,10 @@ pub const Context = struct {
 
         if (container.defaultKV) |kv| {
             c.KV = kv;
+        }
+
+        if (container.defaultFileStore) |fs| {
+            c.FileStore = fs;
         }
 
         if (container.mqtt) |pb| {
@@ -149,6 +154,89 @@ pub const Context = struct {
     /// store (e.g. Redis when configured) is also available as `ctx.KV`.
     pub fn GetKVStore(self: *Context, name: []const u8) ?*root.KVStore {
         return self.container.kvStores.get(name);
+    }
+
+    /// Look up a named file store registered via `App.addFileStore`. The default
+    /// store (the `local` backend when `FILE_STORE_ROOT` is configured) is also
+    /// available as `ctx.FileStore`.
+    pub fn GetFileStore(self: *Context, name: []const u8) ?*root.FileStore {
+        return self.container.fileStores.get(name);
+    }
+
+    /// Returns an uploaded file from a `multipart/form-data` request, or `null`
+    /// if no field with that name was submitted. The `data` slice is valid only
+    /// for the lifetime of the request (arena-owned) — copy it to persist.
+    pub fn GetFile(self: *Context, field: []const u8) !?root.UploadedFile {
+        const form = try self.request.multiFormData();
+        const f = form.get(field) orelse return null;
+        return root.UploadedFile{
+            .data = f.value,
+            .filename = f.filename orelse "",
+            .size = f.value.len,
+        };
+    }
+
+    /// Streams a local file to the client as a download, setting
+    /// `Content-Type` (from the extension) and a `Content-Disposition`
+    /// attachment header. The file contents are allocated with `ctx.allocator`.
+    pub fn File(self: *Context, path: []const u8) !void {
+        const data = try std.Io.Dir.cwd().readFileAlloc(
+            root.utils.io,
+            path,
+            self.allocator,
+            std.Io.Limit.limited(100 * 1024 * 1024),
+        );
+        self.response.body = data;
+        self.response.header("content-type", mimeForPath(path));
+        const name = std.fs.path.basename(path);
+        const disp = try std.fmt.allocPrint(
+            self.allocator,
+            "attachment; filename=\"{s}\"",
+            .{name},
+        );
+        self.response.header("content-disposition", disp);
+        self.response.setStatus(.ok);
+    }
+
+    /// Reads a file from a named file store. The returned slice is owned by the
+    /// caller (free with `ctx.allocator.free`).
+    pub fn GetFileFromStore(self: *Context, name: []const u8, key: []const u8) !?[]const u8 {
+        const store = self.GetFileStore(name) orelse return error.FileStoreNotFound;
+        return try store.get(self, key);
+    }
+
+    /// Writes `data` to a named file store under `key`.
+    pub fn SaveFileToStore(self: *Context, name: []const u8, key: []const u8, data: []const u8) !void {
+        const store = self.GetFileStore(name) orelse return error.FileStoreNotFound;
+        try store.create(self, key, data);
+    }
+
+    fn mimeForPath(path: []const u8) []const u8 {
+        const ext = std.fs.path.extension(path);
+        if (ext.len == 0) return "application/octet-stream";
+        const map = [_]struct { ext: []const u8, mime: []const u8 }{
+            .{ .ext = ".txt", .mime = "text/plain" },
+            .{ .ext = ".html", .mime = "text/html" },
+            .{ .ext = ".htm", .mime = "text/html" },
+            .{ .ext = ".css", .mime = "text/css" },
+            .{ .ext = ".js", .mime = "application/javascript" },
+            .{ .ext = ".json", .mime = "application/json" },
+            .{ .ext = ".csv", .mime = "text/csv" },
+            .{ .ext = ".png", .mime = "image/png" },
+            .{ .ext = ".jpg", .mime = "image/jpeg" },
+            .{ .ext = ".jpeg", .mime = "image/jpeg" },
+            .{ .ext = ".gif", .mime = "image/gif" },
+            .{ .ext = ".webp", .mime = "image/webp" },
+            .{ .ext = ".svg", .mime = "image/svg+xml" },
+            .{ .ext = ".pdf", .mime = "application/pdf" },
+            .{ .ext = ".zip", .mime = "application/zip" },
+            .{ .ext = ".xml", .mime = "application/xml" },
+            .{ .ext = ".bin", .mime = "application/octet-stream" },
+        };
+        for (map) |m| {
+            if (std.ascii.eqlIgnoreCase(m.ext, ext)) return m.mime;
+        }
+        return "application/octet-stream";
     }
 
     /// checks availability of the pubsub service
@@ -295,3 +383,54 @@ test "context: protobuf bindProto and protobuf round-trip" {
     try testing.expectHeader("content-type", "application/x-protobuf");
     try testing.expectBody(encoded);
 }
+
+test "context: GetFile parses a multipart upload" {
+    const t = httpz.testing;
+    var testing = t.init(.{ .request = .{ .max_multiform_count = 5 } });
+    defer testing.deinit();
+
+    const body =
+        "--BOUND\r\n" ++
+        "Content-Disposition: form-data; name=\"file\"; filename=\"a.txt\"\r\n" ++
+        "\r\n" ++
+        "hello file\r\n" ++
+        "--BOUND--\r\n";
+    testing.header("content-type", "multipart/form-data; boundary=BOUND");
+    testing.body(body);
+
+    var ctx: Context = undefined;
+    ctx.allocator = testing.arena;
+    ctx.request = testing.req;
+    ctx.response = testing.res;
+
+    const f = (try ctx.GetFile("file")).?;
+    try std.testing.expectEqualStrings("a.txt", f.filename);
+    try std.testing.expectEqualStrings("hello file", f.data);
+    try std.testing.expectEqual(@as(usize, 10), f.size);
+}
+
+test "context: File serves a local file as a download" {
+    const t = httpz.testing;
+    var testing = t.init(.{});
+    defer testing.deinit();
+
+    const dir = ".ztmp-filestore-ctx";
+    defer std.Io.Dir.cwd().deleteTree(root.utils.io, dir) catch {};
+    try std.Io.Dir.cwd().createDirPath(root.utils.io, dir);
+    const path = try std.fmt.allocPrint(testing.arena, "{s}/serve.txt", .{dir});
+    const fh = try std.Io.Dir.cwd().createFile(root.utils.io, path, .{});
+    defer fh.close(root.utils.io);
+    try fh.writeStreamingAll(root.utils.io, "download me");
+
+    var ctx: Context = undefined;
+    ctx.allocator = testing.arena;
+    ctx.request = testing.req;
+    ctx.response = testing.res;
+
+    try ctx.File(path);
+    try testing.expectStatusCode(.ok);
+    try testing.expectHeader("content-disposition", "attachment; filename=\"serve.txt\"");
+    try testing.expectHeader("content-type", "text/plain");
+    try testing.expectBody("download me");
+}
+

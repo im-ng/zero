@@ -59,6 +59,10 @@ pub fn create(allocator: std.mem.Allocator, container: *root.container) !*server
         hzs.container.allocator,
         .{
             .address = httpz.Config.Address.all(hzs.port),
+            .request = .{
+                .max_multiform_count = 32,
+                .max_body_size = 32 * 1024 * 1024,
+            },
         },
         &hzs.handler,
     );

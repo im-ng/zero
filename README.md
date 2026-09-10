@@ -275,6 +275,39 @@ dependencies, handy for tests), and **SQLite** (reuses the `SQLite`
 datasource, `kv(k,v,exp)` table). `Badger` is intentionally not provided — it
 is a Go library and cannot be used from pure Zig without cgo.
 
+## File Store
+
+`zero` exposes a unified `FileStore` interface for blob storage, plus helpers
+for handling `multipart/form-data` uploads and serving downloads. The `local`
+backend (rooted at `FILE_STORE_ROOT`, with `..` traversal protection) is
+implemented; `FTP`/`SFTP` backends are **deferred** (no vendored Zig libs; SFTP
+needs libssh). The `local` store auto-registers as the default when
+`FILE_STORE_ROOT` is set, and additional stores are registered at startup:
+
+```zig
+try app.addFileStore("avatars", .local, .{ .root = "./data/avatars" });
+```
+
+In a handler:
+
+```zig
+// uploaded multipart file (data valid for the request lifetime)
+if (try ctx.GetFile("avatar")) |f| {
+    try ctx.SaveFileToStore("avatars", f.filename, f.data);
+}
+
+// read back from a store
+const bytes = (try ctx.GetFileFromStore("avatars", "user1.png")) orelse return error.NotFound;
+defer ctx.allocator.free(bytes);
+
+// serve a file from disk as a download (Content-Type + Content-Disposition)
+try ctx.File("./public/report.pdf");
+```
+
+`ctx.FileStore` is the default store; `ctx.GetFileStore(name)` looks up a named
+one. `GetFileFromStore`/`SaveFileToStore` return/accept caller-owned slices
+(free with `ctx.allocator.free`).
+
 ## Metrics
 
 Zero collects app, HTTP, SQL, KV, and process/memory metrics out of the box and exposes them

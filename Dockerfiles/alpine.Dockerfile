@@ -59,6 +59,8 @@ RUN apk add --no-cache \
     git \
     bash \
     jq \
+    openssh \
+    libssh libssh2 libssh2-dev \
     ca-certificates \
     librdkafka librdkafka-dev \
     binutils-dev curl-dev elfutils-dev

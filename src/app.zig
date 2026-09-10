@@ -674,6 +674,12 @@ pub fn addKVStore(self: *Self, name: []const u8, backend: root.kvstore.Backend, 
     if (self.container.defaultKV == null) self.container.defaultKV = store;
 }
 
+pub fn addFileStore(self: *Self, name: []const u8, backend: root.filestore.Backend, opts: root.filestore.Options) !void {
+    const store = try root.filestore.build(self.container, backend, opts);
+    try self.container.fileStores.put(name, store);
+    if (self.container.defaultFileStore == null) self.container.defaultFileStore = store;
+}
+
 pub fn addKafkaSubscription(self: *Self, topic: []const u8, hook: fn (*root.Context) anyerror!void) !void {
     if (self.container.Kakfa == null) {
         self.container.log.err("pubsub is disabled, topic subscription is not available.");

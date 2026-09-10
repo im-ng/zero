@@ -36,6 +36,8 @@ datasource: root.Datasource = undefined,
     services: ?std.StringHashMap(*zeroClient) = undefined,
     kvStores: std.StringHashMap(*root.KVStore) = undefined,
     defaultKV: ?*root.KVStore = null,
+    fileStores: std.StringHashMap(*root.FileStore) = undefined,
+    defaultFileStore: ?*root.FileStore = null,
     mqtt: ?*root.MQTT = null,
 Kakfa: ?*root.kafka = null,
 Nats: ?*root.nats = null,
@@ -64,6 +66,9 @@ pub fn create(self: Self) anyerror!*container {
     // initialize kv stores (backends registered via App.addKVStore / loadRedis)
     c.kvStores = std.StringHashMap(*root.KVStore).init(self.allocator);
 
+    // initialize file stores (backends registered via App.addFileStore / loadFileStore)
+    c.fileStores = std.StringHashMap(*root.FileStore).init(self.allocator);
+
     // initialize metricz
     try c.loadMetricz();
 
@@ -72,6 +77,9 @@ pub fn create(self: Self) anyerror!*container {
 
     // initialize kv
     try c.loadRedis();
+
+    // initialize file store (local backend auto-registered from FILE_STORE_ROOT)
+    try c.loadFileStore();
 
     // initialize sqlite
     try c.loadSQLite();
@@ -752,4 +760,23 @@ fn loadSQLite(self: *Self) !void {
 
 pub fn registerZeroClient(self: *Self, service: *zeroClient) !void {
     try self.services.?.put(service.name, service);
+}
+
+fn loadFileStore(self: *Self) !void {
+    const root_dir = self.config.getOrDefault("FILE_STORE_ROOT", "");
+    if (std.mem.eql(u8, root_dir, "")) {
+        self.log.debug("file store is disabled, as FILE_STORE_ROOT is not provided.");
+        return;
+    }
+
+    const store = root.filestore.build(self, .local, .{ .root = root_dir }) catch |err| {
+        self.log.err("could not initialize local file store");
+        self.log.any(err);
+        return;
+    };
+
+    try self.fileStores.put("local", store);
+    if (self.defaultFileStore == null) self.defaultFileStore = store;
+
+    self.log.info("connected to local file store");
 }
