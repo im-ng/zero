@@ -202,6 +202,70 @@ test "parseLogLevel / logLevelName round-trip" {
     try std.testing.expectEqualStrings("none", logLevelName(7));
 }
 
+test "app: health aggregates custom checks and reports 503 on failure" {
+    const t = httpz.testing;
+    var testing = t.init(.{});
+    defer testing.deinit();
+
+    var c: root.container = .{ .allocator = testing.arena };
+    c.appName = "demo";
+    c.appVersion = "9.9";
+    c.healthChecks = std.array_list.Managed(root.container.HealthCheck).init(testing.arena);
+
+    const ok: *const fn (*root.container) anyerror!void = struct {
+        fn f(_: *root.container) anyerror!void {}
+    }.f;
+    const bad: *const fn (*root.container) anyerror!void = struct {
+        fn f(_: *root.container) anyerror!void {
+            return error.Sick;
+        }
+    }.f;
+
+    try c.healthChecks.append(.{ .name = "cache", .check = ok });
+    try c.healthChecks.append(.{ .name = "billing", .check = bad });
+
+    var ctx: Context = undefined;
+    ctx.allocator = testing.arena;
+    ctx.container = &c;
+    ctx.request = testing.req;
+    ctx.response = testing.res;
+
+    try health(&ctx);
+    const pr = try testing.parseResponse();
+    try std.testing.expectEqual(@as(u16, 503), pr.status);
+    try std.testing.expect(std.mem.indexOf(u8, pr.body, "DOWN") != null);
+    try std.testing.expect(std.mem.indexOf(u8, pr.body, "billing") != null);
+    try std.testing.expect(std.mem.indexOf(u8, pr.body, "cache") != null);
+}
+
+test "app: health reports 200 UP when all custom checks pass" {
+    const t = httpz.testing;
+    var testing = t.init(.{});
+    defer testing.deinit();
+
+    var c: root.container = .{ .allocator = testing.arena };
+    c.appName = "demo";
+    c.appVersion = "9.9";
+    c.healthChecks = std.array_list.Managed(root.container.HealthCheck).init(testing.arena);
+
+    const ok: *const fn (*root.container) anyerror!void = struct {
+        fn f(_: *root.container) anyerror!void {}
+    }.f;
+    try c.healthChecks.append(.{ .name = "cache", .check = ok });
+
+    var ctx: Context = undefined;
+    ctx.allocator = testing.arena;
+    ctx.container = &c;
+    ctx.request = testing.req;
+    ctx.response = testing.res;
+
+    try health(&ctx);
+    const pr = try testing.parseResponse();
+    try std.testing.expectEqual(@as(u16, 200), pr.status);
+    try std.testing.expect(std.mem.indexOf(u8, pr.body, "UP") != null);
+    try std.testing.expect(std.mem.indexOf(u8, pr.body, "cache") != null);
+}
+
 pub fn onStartup(self: *Self, hook: fn (*root.Context) anyerror!void) void {
     self.startupHook = &hook;
 }
@@ -537,23 +601,44 @@ fn staticDirectory(ctx: *Context) !void {
 }
 
 pub fn health(ctx: *Context) !void {
-    ctx.response.setStatus(.ok);
+    const up: []const u8 = constants.STATUS_UP;
+    const down: []const u8 = constants.STATUS_DOWN;
+    var all_up = true;
 
-    // recursively check all resources
-    // ctx.container.sql.health();
+    var components = std.json.ObjectMap.empty;
+    defer components.deinit(ctx.allocator);
+
+    // Run user-registered health checks; any failure flips the overall status.
+    for (ctx.container.healthChecks.items) |hc| {
+        if (hc.check(ctx.container)) {
+            try components.put(ctx.allocator, hc.name, std.json.Value{ .string = up });
+        } else |_| {
+            all_up = false;
+            try components.put(ctx.allocator, hc.name, std.json.Value{ .string = down });
+        }
+    }
 
     const services = .{
         .name = ctx.container.appName,
         .version = ctx.container.appVersion,
-        .status = constants.STATUS_UP,
+        .status = if (all_up) up else down,
+        .components = std.json.Value{ .object = components },
     };
 
+    ctx.response.setStatus(if (all_up) .ok else .service_unavailable);
     try ctx.response.json(services, .{});
 }
 
 pub fn live(ctx: *Context) !void {
     ctx.response.setStatus(.ok);
     try ctx.response.json(.{ .status = constants.STATUS_UP }, .{});
+}
+
+/// Registers a custom health check surfaced by `GET /.well-known/health`.
+/// `check` must return normally when the component is healthy and error
+/// otherwise; it receives the app `container` so it can probe datasources.
+pub fn addHealthCheck(self: Self, name: []const u8, check: *const fn (*root.container) anyerror!void) !void {
+    try self.container.healthChecks.append(.{ .name = name, .check = check });
 }
 
 pub fn addWebsocket(self: Self, handler: *const fn (*root.Context) anyerror!void) !void {
@@ -678,6 +763,12 @@ pub fn addFileStore(self: *Self, name: []const u8, backend: root.filestore.Backe
     const store = try root.filestore.build(self.container, backend, opts);
     try self.container.fileStores.put(name, store);
     if (self.container.defaultFileStore == null) self.container.defaultFileStore = store;
+}
+
+/// Registers list/get/create/update/delete REST handlers for struct `T`
+/// (see `zero.autocrud`). Mirrors GoFr's `AddRESTHandlers`.
+pub fn addRestHandlers(self: *Self, comptime T: type, comptime opts: root.AutoCrudOptions) !void {
+    return root.addRestHandlers(self, T, opts);
 }
 
 pub fn addKafkaSubscription(self: *Self, topic: []const u8, hook: fn (*root.Context) anyerror!void) !void {

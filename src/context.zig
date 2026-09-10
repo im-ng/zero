@@ -190,7 +190,6 @@ pub const Context = struct {
             std.mem.Alignment.@"1",
             null,
         );
-        self.response.body = data;
         self.response.header("content-type", mimeForPath(path));
         const name = std.fs.path.basename(path);
         const disp = try std.fmt.allocPrint(
@@ -200,6 +199,11 @@ pub const Context = struct {
         );
         self.response.header("content-disposition", disp);
         self.response.setStatus(.ok);
+        // Write the body through the response writer (not `response.body`): the
+        // returned slice is request-arena owned and would be freed before httpz
+        // flushes `response.body` to the socket.
+        const w = self.response.writer();
+        try w.writeAll(data);
     }
 
     /// Reads a file from a named file store. The returned slice is allocated
@@ -315,6 +319,16 @@ pub const Context = struct {
         self.response.setStatus(.ok);
     }
 
+    /// writes a raw, already-serialized XML string to the response with
+    /// `Content-Type: application/xml`. The caller owns `body` (it is copied
+    /// into the response buffer immediately via the writer, so arena-backed
+    /// memory is safe to pass).
+    pub fn xml(self: *Context, body: []const u8) !void {
+        self.response.setStatus(.ok);
+        self.response.header("content-type", "application/xml");
+        try self.response.writer().writeAll(body);
+    }
+
     /// Executes a GraphQL query against the given resolver root(s) and writes a
     /// `Content-Type: application/json` `{ data, errors }` response.
     ///
@@ -388,6 +402,22 @@ test "context: protobuf bindProto and protobuf round-trip" {
     try testing.expectStatusCode(.ok);
     try testing.expectHeader("content-type", "application/x-protobuf");
     try testing.expectBody(encoded);
+}
+
+test "context: xml writes application/xml body" {
+    const t = httpz.testing;
+    var testing = t.init(.{});
+    defer testing.deinit();
+
+    var ctx: Context = undefined;
+    ctx.allocator = testing.arena;
+    ctx.request = testing.req;
+    ctx.response = testing.res;
+
+    try ctx.xml("<note><to>Zero</to></note>");
+    try testing.expectStatusCode(.ok);
+    try testing.expectHeader("content-type", "application/xml");
+    try testing.expectBody("<note><to>Zero</to></note>");
 }
 
 test "context: GetFile parses a multipart upload" {

@@ -291,22 +291,64 @@ try app.addFileStore("avatars", .local, .{ .root = "./data/avatars" });
 In a handler:
 
 ```zig
-// uploaded multipart file (data valid for the request lifetime)
+// 1) handle a multipart upload — `f.data` is arena-owned and valid only for
+//    the duration of the request, so copy it into a store to persist it.
 if (try ctx.GetFile("avatar")) |f| {
     try ctx.SaveFileToStore("avatars", f.filename, f.data);
 }
 
-// read back from a store
-const bytes = (try ctx.GetFileFromStore("avatars", "user1.png")) orelse return error.NotFound;
-defer ctx.allocator.free(bytes);
+// 2) read a file back from a named store. The returned slice is request-arena
+//    owned (valid through the response write) — do NOT free it yourself.
+const bytes = (try ctx.GetFileFromStore("avatars", "user1.png")) orelse
+    return error.NotFound;
+// use `bytes` (e.g. ctx.response.writer().writeAll(bytes)) …
 
-// serve a file from disk as a download (Content-Type + Content-Disposition)
+// 3) serve a file from local disk as a download (Content-Type by extension +
+//    Content-Disposition: attachment).
 try ctx.File("./public/report.pdf");
 ```
 
 `ctx.FileStore` is the default store; `ctx.GetFileStore(name)` looks up a named
-one. `GetFileFromStore` returns a request-arena slice (valid through the response
-write, not freed by the caller); `SaveFileToStore` accepts caller-owned `data`.
+one. `SaveFileToStore` accepts caller-owned `data`. `GetFileFromStore` returns a
+request-arena slice (freed when the request ends) — stream it to the client with
+`ctx.response.writer().writeAll(...)` rather than assigning it to
+`ctx.response.body` (the arena is reset before `response.body` is flushed).
+
+The HTTP server enables `multipart/form-data` parsing by default (32 MB body /
+32 fields), so `ctx.GetFile` works without extra configuration.
+
+## Auto CRUD
+
+`zero` can scaffold REST handlers for a struct in one line, mirroring GoFr's
+`AddRESTHandlers`:
+
+```zig
+const User = struct { id: i64, name: []const u8, email: []const u8 };
+
+try app.addRestHandlers(User, .{ .resource = "users" });
+// GET    /users        list   (LIMIT 100)
+// GET    /users/:id    get one
+// POST   /users        create (body -> struct, 201)
+// PUT    /users/:id    update (re-selects and returns the row)
+// DELETE /users/:id    delete (204-style {deleted: n})
+```
+
+The generated SQL is emitted for **both** Postgres (`$N` placeholders) and
+SQLite (`?`) and dispatched at runtime on `ctx.SQL.dialect`, so the same struct
+works against either backend. Rules:
+
+- `resource` is the URL segment. `table` defaults to `resource` (override via
+  `opts.table`).
+- The primary key is auto-detected as the field named `id`; override with
+  `opts.id_field`. The struct must have that field or it fails to compile.
+- Struct **field names map to column names exactly** (the `pgz` mapper is
+  reused), so name your columns to match. `POST`/`PUT` bind the request JSON into
+  the struct.
+- The primary key is taken from the request body on create (supply it) and from
+  the `:id` path param on get/update/delete.
+
+Auto CRUD does not create the table — run your migration (or `ctx.SQL.exec`)
+first, as the `examples/zero-autocrud` demo does with a `/init` handler.
 
 ## Metrics
 

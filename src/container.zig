@@ -19,6 +19,11 @@ const rdkafka = root.rdkafka;
 const kafka = root.kafka;
 const utils = root.utils;
 
+pub const HealthCheck = struct {
+    name: []const u8,
+    check: *const fn (*container) anyerror!void,
+};
+
 appName: []const u8 = undefined,
 appVersion: []const u8 = undefined,
 allocator: std.mem.Allocator,
@@ -47,6 +52,9 @@ pubSub: ?*root.PubSub = null,
     graphql_query: ?*const anyopaque = null,
     graphql_mutation: ?*const anyopaque = null,
 
+    // user-registered health checks surfaced by GET /.well-known/health
+    healthChecks: std.array_list.Managed(HealthCheck) = undefined,
+
 pub fn create(self: Self) anyerror!*container {
     const c = try self.allocator.create(container);
     errdefer self.allocator.destroy(c);
@@ -68,6 +76,9 @@ pub fn create(self: Self) anyerror!*container {
 
     // initialize file stores (backends registered via App.addFileStore / loadFileStore)
     c.fileStores = std.StringHashMap(*root.FileStore).init(self.allocator);
+
+    // initialize user-registered health checks
+    c.healthChecks = std.array_list.Managed(container.HealthCheck).init(self.allocator);
 
     // initialize metricz
     try c.loadMetricz();

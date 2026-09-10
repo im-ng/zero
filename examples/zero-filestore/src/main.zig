@@ -56,16 +56,16 @@ fn uploadHandler(ctx: *Context) !void {
 
 fn downloadHandler(ctx: *Context) !void {
     const name = ctx.param("name");
-    // `data` is request-arena owned and valid through the response write, so it
-    // must not be freed inside the handler.
+    // `data` is request-arena owned; write it via the response writer (not
+    // `response.body`) so it is flushed before the arena is reset.
     const data = (try ctx.GetFileFromStore("uploads", name)) orelse {
         ctx.response.setStatus(.not_found);
         return;
     };
 
-    ctx.response.body = data;
     ctx.response.header("content-type", "application/octet-stream");
     const disp = try std.fmt.allocPrint(ctx.allocator, "attachment; filename=\"{s}\"", .{name});
     ctx.response.header("content-disposition", disp);
     ctx.response.setStatus(.ok);
+    try ctx.response.writer().writeAll(data);
 }

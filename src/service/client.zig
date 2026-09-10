@@ -1,4 +1,5 @@
 const std = @import("std");
+const httpz = @import("httpz");
 const root = @import("../zero.zig");
 const Self = @This();
 const Client = @This();
@@ -14,6 +15,8 @@ const zul = root.zul;
 
 const CircuitBreaker = @import("circuit_breaker.zig").CircuitBreaker;
 const CircuitBreakerConfig = @import("circuit_breaker.zig").CircuitBreakerConfig;
+pub const RateLimiter = @import("rateLimiter.zig").RateLimiter;
+pub const RateLimiterConfig = @import("rateLimiter.zig").RateLimiterConfig;
 const outbound_auth = @import("outbound_auth.zig");
 
 pub const OutboundAuth = outbound_auth.OutboundAuth;
@@ -27,6 +30,7 @@ pub const OAuthConfig = outbound_auth.OAuthConfig;
 pub const ServiceOptions = struct {
     auth: ?OutboundAuth = null,
     circuitBreaker: ?CircuitBreakerConfig = null,
+    rateLimiter: ?RateLimiterConfig = null,
 };
 
 container: *root.container = undefined,
@@ -39,6 +43,8 @@ name: []const u8 = undefined,
 auth: ?OutboundAuth = null,
 /// Circuit breaker guarding this downstream (null = disabled).
 breaker: ?CircuitBreaker = null,
+/// Per-service fixed-window rate limiter (null = disabled).
+limiter: ?RateLimiter = null,
 
 /// OAuth token cache (runtime, managed by `ensureOAuthToken`).
 oauth_token: ?[]const u8 = null,
@@ -75,6 +81,10 @@ pub fn createWithConfig(
 
     if (opts.circuitBreaker) |cb| {
         c.breaker = CircuitBreaker.init(cb);
+    }
+
+    if (opts.rateLimiter) |rl| {
+        c.limiter = RateLimiter.init(rl);
     }
 
     return c;
@@ -162,6 +172,18 @@ pub fn fromEnv(ct: *root.container, name: []const u8) ServiceOptions {
     }
 
     opts.circuitBreaker = cb;
+
+    const rl_limit = cfgGet(ct, prefix, "RATE_LIMIT");
+    const rl_window = cfgGet(ct, prefix, "RATE_LIMIT_WINDOW_MS");
+
+    if (!std.mem.eql(u8, rl_limit, "")) {
+        var rc: RateLimiterConfig = .{ .allocator = ct.allocator, .enabled = true };
+        rc.limit = std.fmt.parseUnsigned(u64, rl_limit, 10) catch rc.limit;
+        if (!std.mem.eql(u8, rl_window, "")) {
+            rc.window_ms = std.fmt.parseInt(i64, rl_window, 10) catch rc.window_ms;
+        }
+        opts.rateLimiter = rc;
+    }
 
     return opts;
 }
@@ -366,6 +388,11 @@ fn createAndSendRequest(
         b.before() catch return ClientError.CircuitOpen;
     }
 
+    // downstream rate limiter: fail fast if the per-service window is exhausted
+    if (self.limiter) |*rl| {
+        rl.before() catch return ClientError.RateLimited;
+    }
+
     // attach outbound auth (api key / basic / oauth bearer)
     self.applyAuth(ctx, &req) catch |e| return switch (e) {
         error.OAuthTokenFetchFailed => ClientError.OAuthTokenFetchFailed,
@@ -553,4 +580,29 @@ fn ensureOAuthToken(self: *Self) ![]const u8 {
 
 fn getResponseTraceIDBuffer(_: *Self, allocator: std.mem.Allocator) ![]const u8 {
     return try std.fmt.allocPrint(allocator, "{s:>36}", .{" "});
+}
+
+test "client: downstream rate limiter is created from options and trips" {
+    // Allocate everything in an arena and free the arena afterwards: a full
+    // zul.Client.deinit() needs a live Io loop that unit tests don't provide,
+    // so we avoid it and just release the arena (no leak, no crash).
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const alloc = arena.allocator();
+
+    var c: root.container = .{ .allocator = alloc };
+    const cli = try Client.createWithConfig(
+        &c,
+        "svc",
+        "http://localhost",
+        .{ .rateLimiter = .{ .allocator = alloc, .enabled = true, .limit = 1, .window_ms = 60_000 } },
+    );
+
+    // Limiter instance is wired from ServiceOptions.
+    try std.testing.expect(cli.limiter != null);
+
+    // First call allowed, second exceeds the per-service window. Exercises the
+    // same gate used by createAndSendRequest (no network involved here).
+    try cli.limiter.?.before();
+    try std.testing.expectError(error.RateLimited, cli.limiter.?.before());
 }

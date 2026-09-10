@@ -19,6 +19,7 @@ pub const authz = @import("mw/authz.zig");
 pub const tracz = @import("mw/tracz.zig");
 pub const ws = @import("mw/ws.zig");
 pub const logger = @import("logger.zig");
+pub const app = @import("app.zig");
 pub const datasourceError = @import("datasource/error.zig");
 pub const migrate = @import("migration/migrate.zig");
 pub const kafkaConfig = @import("pubsub/kafka/config.zig");
@@ -50,6 +51,7 @@ comptime {
     _ = tracz;
     _ = ws;
     _ = logger;
+    _ = app;
     _ = datasourceError;
     _ = migrate;
     _ = kafkaConfig;

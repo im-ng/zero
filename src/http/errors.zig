@@ -22,6 +22,7 @@ pub const ErrData = struct {
 pub const ClientError = error{
     ServiceNotReachable,
     CircuitOpen,
+    RateLimited,
     OAuthTokenFetchFailed,
 } || std.http.Client.FetchError || HttpError;
 

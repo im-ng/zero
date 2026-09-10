@@ -40,6 +40,10 @@ pub const KVStore = kvstore.KVStore;
 pub const filestore = @import("filestore/interface.zig");
 pub const FileStore = filestore.FileStore;
 pub const UploadedFile = filestore.UploadedFile;
+
+pub const autocrud = @import("autocrud.zig");
+pub const AutoCrudOptions = autocrud.AutoCrudOptions;
+pub const addRestHandlers = autocrud.addRestHandlers;
 pub const authz = @import("mw/authz.zig");
 pub const AuthProvider = @import("mw/authProvider.zig");
 pub const jwtClaims = AuthProvider.jwtClaims;
