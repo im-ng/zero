@@ -33,8 +33,10 @@ rdz: ?*root.rdz = undefined,
 SQL: ?*root.SQL = undefined,
 SQLite: ?*root.SQLite = undefined,
 datasource: root.Datasource = undefined,
-services: ?std.StringHashMap(*zeroClient) = undefined,
-mqtt: ?*root.MQTT = null,
+    services: ?std.StringHashMap(*zeroClient) = undefined,
+    kvStores: std.StringHashMap(*root.KVStore) = undefined,
+    defaultKV: ?*root.KVStore = null,
+    mqtt: ?*root.MQTT = null,
 Kakfa: ?*root.kafka = null,
 Nats: ?*root.nats = null,
 pubSub: ?*root.PubSub = null,
@@ -58,6 +60,9 @@ pub fn create(self: Self) anyerror!*container {
 
     // initialize service client handler maps
     c.services = std.StringHashMap(*zeroClient).init(self.allocator);
+
+    // initialize kv stores (backends registered via App.addKVStore / loadRedis)
+    c.kvStores = std.StringHashMap(*root.KVStore).init(self.allocator);
 
     // initialize metricz
     try c.loadMetricz();
@@ -572,6 +577,11 @@ fn loadRedis(self: *Self) !void {
     buffer = try self.allocator.alloc(u8, 256);
     buffer = try std.fmt.bufPrint(buffer, "connected to redis at '{s}:{d}' on database {d}", .{ hostname, portInt, dbInt });
     self.log.info(buffer);
+
+    // expose Redis through the unified KV store interface (default store)
+    const redisStore = try root.kvstore.build(self, .redis, .{});
+    try self.kvStores.put("cache", redisStore);
+    if (self.defaultKV == null) self.defaultKV = redisStore;
 }
 
 fn loadSQL(self: *Self) !void {
@@ -632,6 +642,7 @@ fn loadSQL(self: *Self) !void {
         .port = port,
         .username = user,
         .password = password,
+        .sslMode = self.config.getOrDefault("DB_SSL_MODE", "disable"),
     };
 
     self.SQL = try root.SQL.create(
@@ -644,11 +655,31 @@ fn loadSQL(self: *Self) !void {
     self.SQL.?.allocator = self.allocator;
 
     const portInt = try self.config.getAsInt("DB_PORT");
+
+    const sslMode = self.config.getOrDefault("DB_SSL_MODE", "disable");
+    var tlsMode: pgz.Conn.Opts.TLS = .off;
+    if (std.mem.eql(u8, sslMode, "require")) {
+        tlsMode = .require;
+    } else if (std.mem.eql(u8, sslMode, "verify-ca") or
+        std.mem.eql(u8, sslMode, "verify-full") or
+        std.mem.eql(u8, sslMode, "verify_full") or
+        std.mem.eql(u8, sslMode, "verifyca") or
+        std.mem.eql(u8, sslMode, "verifyfull"))
+    {
+        const rootCa = self.config.get("DB_TLS_ROOT_CA");
+        if (std.mem.eql(u8, rootCa, "")) {
+            tlsMode = .{ .verify_full = null };
+        } else {
+            tlsMode = .{ .verify_full = rootCa };
+        }
+    }
+
     var options: pgz.Pool.Opts = .{
         .size = 10,
         .connect = .{
             .host = hostname,
             .port = portInt,
+            .tls = tlsMode,
         },
         .auth = .{
             .application_name = self.config.get("APP_NAME"),

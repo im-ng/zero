@@ -664,6 +664,16 @@ pub fn addSubscription(self: *Self, topic: []const u8, hook: fn (*root.Context) 
     try self.container.pubsub.?.addSubscriber(topic, hook);
 }
 
+/// Register a named KV store backend (redis / nats_kv / memory / sqlite) and
+/// expose it on the request context via `ctx.GetKVStore(name)`. The first store
+/// registered (or the Redis client auto-registered on connect) becomes the
+/// default `ctx.KV`.
+pub fn addKVStore(self: *Self, name: []const u8, backend: root.kvstore.Backend, opts: root.kvstore.Options) !void {
+    const store = try root.kvstore.build(self.container, backend, opts);
+    try self.container.kvStores.put(name, store);
+    if (self.container.defaultKV == null) self.container.defaultKV = store;
+}
+
 pub fn addKafkaSubscription(self: *Self, topic: []const u8, hook: fn (*root.Context) anyerror!void) !void {
     if (self.container.Kakfa == null) {
         self.container.log.err("pubsub is disabled, topic subscription is not available.");

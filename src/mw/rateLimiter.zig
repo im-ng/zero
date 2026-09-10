@@ -48,7 +48,7 @@ pub fn init(c: Config) !rateLimiter {
     };
 }
 
-pub fn execute(self: *const rateLimiter, req: *httpz.Request, res: *httpz.Response, executor: anytype) !void {
+pub fn execute(self: *rateLimiter, req: *httpz.Request, res: *httpz.Response, executor: anytype) !void {
     if (!self.enabled) return executor.next();
     if (std.mem.startsWith(u8, req.url.path, "/.well-known")) return executor.next();
 
@@ -56,7 +56,7 @@ pub fn execute(self: *const rateLimiter, req: *httpz.Request, res: *httpz.Respon
     const now = utils.nowMonotonic().nanoseconds;
 
     self.mu.lockUncancelable(utils.io);
-    if (self.buckets.count >= max_entries) {
+    if (self.buckets.count() >= max_entries) {
         self.mu.unlock(utils.io);
         return executor.next();
     }

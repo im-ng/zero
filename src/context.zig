@@ -20,7 +20,7 @@ pub const Context = struct {
     container: *root.container = undefined,
 
     SQL: root.Datasource = undefined,
-    Cache: root.rediz.Client = undefined,
+    KV: ?*root.KVStore = null,
     provider: *root.AuthProvider = undefined,
     MQ: *root.MQTT = undefined,
     KF: *root.kafka = undefined,
@@ -51,8 +51,8 @@ pub const Context = struct {
             c.SQL = container.datasource;
         }
 
-        if (container.redis) |rdz| {
-            c.Cache = rdz;
+        if (container.defaultKV) |kv| {
+            c.KV = kv;
         }
 
         if (container.mqtt) |pb| {
@@ -145,6 +145,12 @@ pub const Context = struct {
         return self.container.services.?.get(svc);
     }
 
+    /// Look up a named KV store registered via `App.addKVStore`. The default
+    /// store (e.g. Redis when configured) is also available as `ctx.KV`.
+    pub fn GetKVStore(self: *Context, name: []const u8) ?*root.KVStore {
+        return self.container.kvStores.get(name);
+    }
+
     /// checks availability of the pubsub service
     pub fn getPubSubAvailability(self: *Context) bool {
         if (self.container.pubsub == null) {
@@ -177,6 +183,17 @@ pub const Context = struct {
         try self.response.json(.{
             .data = data,
         }, .{});
+    }
+
+    /// Issues a 3xx redirect. Defaults to 302 Found; use redirectWith for an
+    /// explicit status (e.g. .moved_permanently / .see_other / .temporary_redirect).
+    pub fn redirect(self: *Context, url: []const u8) void {
+        self.redirectWith(std.http.Status.found, url);
+    }
+
+    pub fn redirectWith(self: *Context, status: std.http.Status, url: []const u8) void {
+        self.response.setStatus(status);
+        self.response.header("Location", url);
     }
 
     /// transforms incoming request json to comptime type

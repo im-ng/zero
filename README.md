@@ -219,6 +219,8 @@ LOG_LEVEL=debug
 # DB_NAME=mydb
 # DB_PORT=5432
 # DB_DIALECT=postgres
+# DB_SSL_MODE=disable            # disable | require | verify-ca | verify-full
+# DB_TLS_ROOT_CA=               # CA cert path for verify-* modes (empty = system trust store)
 
 # Redis
 # REDIS_HOST=127.0.0.1
@@ -240,6 +242,38 @@ LOG_LEVEL=debug
 ```
 
 All keys are commented out by default; features activate only when uncommented. See [config.md](./config.md) for the full list.
+
+## KV Store
+
+`zero` exposes a unified, type-erased KV store so handlers don't depend on a
+specific backend. The Redis client (when configured) is auto-registered as the
+default store; additional stores are registered at startup:
+
+```zig
+// backend: .redis | .nats_kv | .memory | .sqlite
+try app.addKVStore("feature-flags", .memory, .{});
+try app.addKVStore("sessions", .nats_kv, .{ .bucket = "sessions" });
+```
+
+In a handler:
+
+```zig
+// default store (Redis when configured), or a named store
+const kv = ctx.KV orelse ctx.GetKVStore("sessions") orelse return error.NoKV;
+
+try kv.set(ctx, "user:1", "active");
+const v = try kv.get(ctx, "user:1");      // ?[]const u8, caller-owned (free with ctx.allocator)
+defer if (v) |s| ctx.allocator.free(s);
+const has = try kv.exists(ctx, "user:1");
+try kv.delete(ctx, "user:1");
+try kv.expire(ctx, "user:1", 60_000);     // ms; unsupported on nats_kv
+```
+
+Backends: **Redis** (okredis), **NATS JetStream KV** (reuses the `nats`
+dependency; needs a JetStream-enabled connection), **in-memory** (zero
+dependencies, handy for tests), and **SQLite** (reuses the `SQLite`
+datasource, `kv(k,v,exp)` table). `Badger` is intentionally not provided — it
+is a Go library and cannot be used from pure Zig without cgo.
 
 ## Metrics
 
@@ -353,6 +387,19 @@ configured header) and reset at the start of each window; an internal cap bounds
 of tracked clients. Future options — token bucket, sliding window, per-route limits,
 Redis-backed distributed limiting, and `X-RateLimit-*` / `Retry-After` headers — are tracked
 in `parity_check.md`.
+
+### Redirect
+
+Handlers can issue a 3xx redirect via the context — useful for OAuth callbacks and canonical
+URLs:
+
+```zig
+// 302 Found by default
+ctx.redirect("/login");
+
+// explicit status (e.g. 301, 303, 307, 308)
+ctx.redirectWith(std.http.Status.moved_permanently, "https://example.com/new");
+```
 
 ## GraphQL
 

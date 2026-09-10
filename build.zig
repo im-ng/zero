@@ -11,7 +11,7 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
-    const pgz = b.dependency("pg", .{});
+    const pgz = b.dependency("pg", .{ .openssl = true });
     module.addImport("pg", pgz.module("pg"));
 
     const httpz = b.dependency("httpz", .{});

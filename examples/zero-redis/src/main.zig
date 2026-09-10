@@ -3,7 +3,6 @@ const zero = @import("zero");
 
 const App = zero.App;
 const Context = zero.Context;
-const redis = zero.rediz;
 const utils = zero.utils;
 
 pub const std_options: std.Options = .{
@@ -19,7 +18,7 @@ pub fn main(init: std.process.Init) !void {
 
     const app = try App.new(allocator, init.environ_map);
 
-    app.onStatup(prepareCache);
+    app.onStartup(prepareCache);
 
     try app.get("/redis", cacheResponse);
 
@@ -29,12 +28,12 @@ pub fn main(init: std.process.Init) !void {
 fn prepareCache(ctx: *Context) !void {
     ctx.info("warming up the cache entries");
 
-    _ = ctx.Cache.send(void, .{ "SET", "msg", "zero redis message" }) catch |err| {
-        ctx.any(err);
-    };
+    if (ctx.KV) |kv| {
+        kv.set(ctx, "msg", "zero redis message") catch |err| ctx.any(err);
+    }
 
     // intentional delay to mimic cache preparation
-    std.Thread.sleep(std.time.ns_per_s);
+    try std.Io.sleep(utils.io, .{ .nanoseconds = std.time.ns_per_s }, .awake);
 
     ctx.info("cache prepared");
 }
@@ -44,9 +43,8 @@ const Data = struct {
 };
 
 fn cacheResponse(ctx: *Context) !void {
-    // const FixBuf = redis.types.FixBuf;
-    const reply = try ctx.Cache.sendAlloc([]u8, ctx.allocator, .{ "GET", "msg" });
-    defer ctx.allocator.free(reply);
+    const reply = try ctx.KV.?.get(ctx, "msg");
+    defer if (reply) |r| ctx.allocator.free(r);
 
-    try ctx.json(reply);
+    try ctx.json(reply orelse "");
 }
