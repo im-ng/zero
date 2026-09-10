@@ -34,6 +34,7 @@ pub const httpServer = @import("httpServer.zig");
 pub const handler = @import("handler.zig");
 pub const responder = @import("responder.zig");
 pub const tracz = @import("mw/tracz.zig");
+pub const rateLimiter = @import("mw/rateLimiter.zig");
 pub const authz = @import("mw/authz.zig");
 pub const AuthProvider = @import("mw/authProvider.zig");
 pub const jwtClaims = AuthProvider.jwtClaims;

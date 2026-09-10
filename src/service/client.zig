@@ -336,6 +336,13 @@ fn createAndSendRequest(
 
     req.method = method;
 
+    // Propagate the inbound correlation id onto the outbound request so the call
+    // chain stays traceable across services. No-op when none is present (e.g. a
+    // cron-driven or standalone call).
+    if (ctx.request.header("X-Correlation-ID")) |cid| {
+        try req.header("X-Correlation-ID", cid);
+    }
+
     if (queryParams) |params| {
         var iterator = params.iterator();
         while (iterator.next()) |param| {

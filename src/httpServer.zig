@@ -9,6 +9,7 @@ const cors_mw = root.httpz.middleware.Cors;
 const auth_mw = root.authz;
 const utils = root.utils;
 const ws_mw = root.WSMiddleware;
+const rateLimiter_mw = root.rateLimiter;
 
 const server = @This();
 const Self = @This();
@@ -83,8 +84,27 @@ pub fn create(allocator: std.mem.Allocator, container: *root.container) !*server
         .container = container,
     });
 
+    const rlEnabled = hzs.container.config.getAsBool("RATE_LIMIT_ENABLE");
+    var rlKeyMode: rateLimiter_mw.KeyMode = .ip;
+    var rlHeaderName: []const u8 = "X-Forwarded-For";
+    const rlKey = hzs.container.config.getOrDefault("RATE_LIMIT_KEY", "ip");
+    if (std.mem.startsWith(u8, rlKey, "header:")) {
+        rlKeyMode = .header;
+        rlHeaderName = rlKey["header:".len..];
+    }
+    const rlMax = hzs.container.config.getAsInt("RATE_LIMIT_MAX") catch 100;
+    const rlWindowS = hzs.container.config.getAsInt("RATE_LIMIT_WINDOW") catch 60;
+    const rateLimitMW = try hzs.http.middleware(rateLimiter_mw, .{
+        .allocator = allocator,
+        .enabled = rlEnabled,
+        .limit = rlMax,
+        .window_ms = @as(i64, rlWindowS) * 1000,
+        .key_mode = rlKeyMode,
+        .header_name = rlHeaderName,
+    });
+
     hzs.router = try hzs.http.router(.{
-        .middlewares = &.{ traczMW, corsMW, authMW, mwWS },
+        .middlewares = &.{ rateLimitMW, traczMW, corsMW, authMW, mwWS },
     });
 
     if (hzs.provider) |p| {

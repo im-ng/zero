@@ -150,16 +150,37 @@ pub fn publish(self: *Self, ctx: *Context, topic: *kafkaTopic, key: []const u8, 
     const message_ptr: ?*anyopaque = @constCast(payload.ptr);
     const key_ptr: ?*anyopaque = @constCast(key.ptr);
 
-    const err_code: c_int = rdkafka.rd_kafka_produce(
-        topic,
-        rdkafka.RD_KAFKA_PARTITION_UA,
-        rdkafka.RD_KAFKA_MSG_F_COPY,
-        message_ptr,
-        payload.len,
-        key_ptr,
-        key.len,
-        null,
-    );
+    // Propagate the inbound correlation id as a Kafka record header when present.
+    const cid = ctx.request.header("X-Correlation-ID");
+
+    const err_code: c_int = blk: {
+        if (cid) |id| {
+            const hdrs = rdkafka.rd_kafka_headers_new(1);
+            _ = rdkafka.rd_kafka_header_add(hdrs, "X-Correlation-ID", -1, id.ptr, @intCast(id.len));
+            const rc = rdkafka.rd_kafka_producev(
+                self.client.?,
+                topic,
+                rdkafka.RD_KAFKA_PARTITION_UA,
+                rdkafka.RD_KAFKA_MSG_F_COPY,
+                rdkafka.RD_KAFKA_VTYPE_VALUE, message_ptr, payload.len,
+                rdkafka.RD_KAFKA_VTYPE_KEY, key_ptr, key.len,
+                rdkafka.RD_KAFKA_VTYPE_HEADERS, hdrs,
+                rdkafka.RD_KAFKA_VTYPE_END,
+            );
+            rdkafka.rd_kafka_headers_destroy(hdrs);
+            break :blk rc;
+        }
+        break :blk rdkafka.rd_kafka_produce(
+            topic,
+            rdkafka.RD_KAFKA_PARTITION_UA,
+            rdkafka.RD_KAFKA_MSG_F_COPY,
+            message_ptr,
+            payload.len,
+            key_ptr,
+            key.len,
+            null,
+        );
+    };
     if (err_code == rdkafka.RD_KAFKA_RESP_ERR_NO_ERROR) {
         const msg = try utils.combine(
             ctx.allocator,
