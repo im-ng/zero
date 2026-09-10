@@ -107,6 +107,101 @@ fn getLogLevel(_: *Self, level: []const u8) u8 {
     return 1;
 }
 
+/// Parses a log-level name into its numeric value. Returns `null` for unknown
+/// names. Mirrors `getLogLevel` but errors instead of defaulting to `info`.
+pub fn parseLogLevel(level: []const u8) ?u8 {
+    if (std.mem.eql(u8, level, "debug")) {
+        return 0;
+    } else if (std.mem.eql(u8, level, "info")) {
+        return 1;
+    } else if (std.mem.eql(u8, level, "warn")) {
+        return 2;
+    } else if (std.mem.eql(u8, level, "error")) {
+        return 3;
+    } else if (std.mem.eql(u8, level, "fatal")) {
+        return 4;
+    } else if (std.mem.eql(u8, level, "none")) {
+        return 99;
+    }
+    return null;
+}
+
+/// Maps a numeric log level back to its name.
+pub fn logLevelName(level: u8) []const u8 {
+    return switch (level) {
+        0 => "debug",
+        1 => "info",
+        2 => "warn",
+        3 => "error",
+        4 => "fatal",
+        else => "none",
+    };
+}
+
+/// Hot-reloads the log level at runtime without a restart. Returns `false` if
+/// `level` is not a recognized name (the current level is left unchanged).
+pub fn setLogLevel(self: *Self, level: []const u8) bool {
+    const v = parseLogLevel(level) orelse return false;
+    self.log.logLevel = v;
+    return true;
+}
+
+/// Service name used for the outbound HTTP client registered from `REMOTE_LOG_URL`.
+const remoteLogLevelService = "zero-remote-log";
+
+/// JSON response shape expected from the remote log-level endpoint.
+const remoteLogLevelResponse = struct { level: []const u8 };
+
+/// Cron hook that pulls the current log level from the configured remote endpoint
+/// and applies it internally via `parseLogLevel`. Registered by `startRemoteLogLevel`
+/// when `REMOTE_LOG_URL` is set.
+fn remoteLogLevelSync(ctx: *root.Context) !void {
+    const client = ctx.getService(remoteLogLevelService) orelse return;
+    const resp = try client.get(ctx, remoteLogLevelResponse, "", null, null);
+    if (resp) |r| {
+        if (parseLogLevel(r.level)) |v| {
+            ctx.container.log.logLevel = v;
+        }
+    }
+}
+
+/// When `REMOTE_LOG_URL` is configured, registers an outbound HTTP client for it and
+/// a cron job that fetches the remote level every `REMOTE_LOG_FETCH_INTERVAL` seconds
+/// (default 15) and adjusts the in-process log level. No-op when the URL is unset, so
+/// the feature is opt-in via config and never exposes an endpoint on this service.
+pub fn startRemoteLogLevel(self: *Self) !void {
+    const url = self.config.getOrDefault("REMOTE_LOG_URL", "");
+    if (url.len == 0) return;
+
+    const interval = std.fmt.parseInt(u64, self.config.getOrDefault("REMOTE_LOG_FETCH_INTERVAL", "15"), 10) catch 15;
+    const step = if (interval == 0) @as(u64, 15) else interval;
+
+    try self.addHttpService(remoteLogLevelService, url, .{});
+
+    const schedule = try std.fmt.allocPrint(self.config.allocator, "*/{d} * * * * *", .{step});
+    defer self.config.allocator.free(schedule);
+    try self.addCronJob(schedule, "remote-log-level-sync", remoteLogLevelSync);
+}
+
+test "parseLogLevel / logLevelName round-trip" {
+    try std.testing.expectEqual(@as(?u8, 0), parseLogLevel("debug"));
+    try std.testing.expectEqual(@as(?u8, 1), parseLogLevel("info"));
+    try std.testing.expectEqual(@as(?u8, 2), parseLogLevel("warn"));
+    try std.testing.expectEqual(@as(?u8, 3), parseLogLevel("error"));
+    try std.testing.expectEqual(@as(?u8, 4), parseLogLevel("fatal"));
+    try std.testing.expectEqual(@as(?u8, 99), parseLogLevel("none"));
+    try std.testing.expectEqual(@as(?u8, null), parseLogLevel("verbose"));
+    try std.testing.expectEqual(@as(?u8, null), parseLogLevel(""));
+
+    try std.testing.expectEqualStrings("debug", logLevelName(0));
+    try std.testing.expectEqualStrings("info", logLevelName(1));
+    try std.testing.expectEqualStrings("warn", logLevelName(2));
+    try std.testing.expectEqualStrings("error", logLevelName(3));
+    try std.testing.expectEqualStrings("fatal", logLevelName(4));
+    try std.testing.expectEqualStrings("none", logLevelName(99));
+    try std.testing.expectEqualStrings("none", logLevelName(7));
+}
+
 pub fn onStartup(self: *Self, hook: fn (*root.Context) anyerror!void) void {
     self.startupHook = &hook;
 }
@@ -182,6 +277,9 @@ pub fn run(self: *Self) !void {
 
     // inject graceful shutdown handler for both servers
     try self.startShutdownHandler();
+
+    // opt-in: pull log level from a remote endpoint on a cron schedule
+    try self.startRemoteLogLevel();
 
     // try self.startMetricsServer();
     try self.startMetricsServer();

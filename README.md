@@ -302,6 +302,30 @@ Set the port via `configs/.env`:
 METRICS_PORT=2121
 ```
 
+### Remote log level (pull from a central service)
+
+Instead of exposing an endpoint, the service can *pull* its log level from a remote
+log-level service. Set `REMOTE_LOG_URL` (and optionally `REMOTE_LOG_FETCH_INTERVAL`) in
+`configs/.env`; on startup zero registers an outbound HTTP client for that URL and a cron job
+that fetches the level every `REMOTE_LOG_FETCH_INTERVAL` seconds (default 15) and applies it
+in-process. Nothing is exposed on this service, and the feature is entirely opt-in.
+
+```bash
+# configs/.env
+REMOTE_LOG_URL=https://log-service.com/log-levels
+REMOTE_LOG_FETCH_INTERVAL=15
+```
+
+The remote endpoint must return the level as JSON:
+
+```json
+{ "level": "debug" }
+```
+
+Valid levels: `debug`, `info`, `warn`, `error`, `fatal`, `none`. An unrecognized value in the
+response is ignored (the current level is left unchanged). The fetch rides the framework's
+outbound client, so auth and the circuit breaker apply automatically.
+
 ## GraphQL
 
 `zero` ships a schema-less GraphQL-over-HTTP engine. You describe your schema as plain Zig
