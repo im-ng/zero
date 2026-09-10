@@ -180,11 +180,15 @@ pub const Context = struct {
     /// `Content-Type` (from the extension) and a `Content-Disposition`
     /// attachment header. The file contents are allocated with `ctx.allocator`.
     pub fn File(self: *Context, path: []const u8) !void {
-        const data = try std.Io.Dir.cwd().readFileAlloc(
-            root.utils.io,
-            path,
+        const file = try std.Io.Dir.cwd().openFile(root.utils.io, path, .{});
+        defer file.close(root.utils.io);
+        var rbuf: [8192]u8 = undefined;
+        var reader = file.reader(root.utils.io, &rbuf);
+        const data = try reader.interface.allocRemainingAlignedSentinel(
             self.allocator,
             std.Io.Limit.limited(100 * 1024 * 1024),
+            std.mem.Alignment.@"1",
+            null,
         );
         self.response.body = data;
         self.response.header("content-type", mimeForPath(path));
@@ -198,8 +202,10 @@ pub const Context = struct {
         self.response.setStatus(.ok);
     }
 
-    /// Reads a file from a named file store. The returned slice is owned by the
-    /// caller (free with `ctx.allocator.free`).
+    /// Reads a file from a named file store. The returned slice is allocated
+    /// from the request arena and is valid for the lifetime of the handler (it is
+    /// freed when the request ends) — assign it to `ctx.response.body` directly
+    /// rather than freeing it yourself.
     pub fn GetFileFromStore(self: *Context, name: []const u8, key: []const u8) !?[]const u8 {
         const store = self.GetFileStore(name) orelse return error.FileStoreNotFound;
         return try store.get(self, key);

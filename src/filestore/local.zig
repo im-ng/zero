@@ -57,16 +57,21 @@ pub const FileStoreLocal = struct {
         const path = try self.resolve(ctx, key);
         defer ctx.allocator.free(path);
 
-        const buf = std.Io.Dir.cwd().readFileAlloc(
-            root.utils.io,
-            path,
-            ctx.allocator,
-            Io.Limit.limited(self.max_bytes),
-        ) catch |err| {
+        const file = std.Io.Dir.cwd().openFile(root.utils.io, path, .{}) catch |err| {
             if (err == error.FileNotFound) return null;
             return err;
         };
-        return buf;
+        defer file.close(root.utils.io);
+
+        var rbuf: [8192]u8 = undefined;
+        var reader = file.reader(root.utils.io, &rbuf);
+        const data = try reader.interface.allocRemainingAlignedSentinel(
+            ctx.allocator,
+            Io.Limit.limited(self.max_bytes),
+            std.mem.Alignment.@"1",
+            null,
+        );
+        return data;
     }
 
     pub fn create(self: *FileStoreLocal, ctx: *root.Context, key: []const u8, data: []const u8) !void {

@@ -305,8 +305,8 @@ try ctx.File("./public/report.pdf");
 ```
 
 `ctx.FileStore` is the default store; `ctx.GetFileStore(name)` looks up a named
-one. `GetFileFromStore`/`SaveFileToStore` return/accept caller-owned slices
-(free with `ctx.allocator.free`).
+one. `GetFileFromStore` returns a request-arena slice (valid through the response
+write, not freed by the caller); `SaveFileToStore` accepts caller-owned `data`.
 
 ## Metrics
 
