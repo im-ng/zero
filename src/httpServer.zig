@@ -7,6 +7,7 @@ const Context = root.Context;
 const tracz_mw = root.tracz;
 const cors_mw = root.httpz.middleware.Cors;
 const auth_mw = root.authz;
+const rbac_mw = root.rbac;
 const utils = root.utils;
 const ws_mw = root.WSMiddleware;
 const rateLimiter_mw = root.rateLimiter;
@@ -83,6 +84,12 @@ pub fn create(allocator: std.mem.Allocator, container: *root.container) !*server
         .provider = hzs.provider,
     });
 
+    const rbacMW = try hzs.http.middleware(rbac_mw, .{
+        .allocator = allocator,
+        .container = hzs.container,
+        .rbac = hzs.container.rbac,
+    });
+
     const mwWS = try hzs.http.middleware(ws_mw, .{
         .allocator = allocator,
         .container = container,
@@ -108,7 +115,7 @@ pub fn create(allocator: std.mem.Allocator, container: *root.container) !*server
     });
 
     hzs.router = try hzs.http.router(.{
-        .middlewares = &.{ rateLimitMW, traczMW, corsMW, authMW, mwWS },
+        .middlewares = &.{ rateLimitMW, traczMW, corsMW, authMW, rbacMW, mwWS },
     });
 
     if (hzs.provider) |p| {

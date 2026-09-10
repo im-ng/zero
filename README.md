@@ -60,25 +60,25 @@ _*An `experimental` support has been added to achieve the zig version 0.16 addit
 
 ## Features
 
-| Category        | Status | Details                                    |
-| --------------- | ------ | ------------------------------------------ |
-| REST / CRUD     | ✅     | Build standard REST endpoints out-of-box   |
-| Configuration   | ✅     | `.env` with per-environment overrides      |
-| Logging         | ✅     | Structured, UTC timestamps                 |
-| Metrics         | ✅     | App, HTTP, SQL, KV + process/memory stats  |
-| Tracing         | ✅     | TraceID middleware, request-level tracing  |
-| Auth Middleware | ✅     | Basic, API Key, OAuth 2.0                  |
-| CORS            | ✅     | Configurable CORS middleware               |
-| Panic Recovery  | ✅     | Automatic panic recovery                   |
-| Databases       | ✅     | PostgreSQL, SQLite, Redis                  |
-| Pub/Sub         | ✅     | MQTT, NATS, Kafka (via librdkafka)         |
-| Migrations      | ✅     | DB migrations + seed on startup            |
-| HTTP Client     | ✅     | Register multiple external services        |
-| Cron Jobs       | ✅     | `* * * * *` + second-level + range support |
-| WebSockets      | ✅     | Built-in WebSocket support                 |
-| Static Files    | ✅     | Serve static assets + Swagger UI           |
-| Health Checks   | ✅     | Liveness + status endpoints                |
-| GraphQL         | ✅     | Schema-less resolvers over HTTP (POST/GET) |
+| Category        | Status | Details                                         |
+| --------------- | ------ | ----------------------------------------------- |
+| REST / CRUD     | ✅     | Build standard REST endpoints out-of-box        |
+| Configuration   | ✅     | `.env` with per-environment overrides           |
+| Logging         | ✅     | Structured, UTC timestamps                      |
+| Metrics         | ✅     | App, HTTP, SQL, KV + process/memory stats       |
+| Tracing         | ✅     | TraceID middleware, request-level tracing       |
+| Auth Middleware | ✅     | Basic, API Key, OAuth 2.0                       |
+| CORS            | ✅     | Configurable CORS middleware                    |
+| Panic Recovery  | ✅     | Automatic panic recovery                        |
+| Databases       | ✅     | PostgreSQL, SQLite, Redis                       |
+| Pub/Sub         | ✅     | MQTT, NATS, Kafka (via librdkafka)              |
+| Migrations      | ✅     | DB migrations + seed on startup                 |
+| HTTP Client     | ✅     | Register multiple external services             |
+| Cron Jobs       | ✅     | `* * * * *` + second-level + range support      |
+| WebSockets      | ✅     | Built-in WebSocket support                      |
+| Static Files    | ✅     | Serve static assets + Swagger UI                |
+| Health Checks   | ✅     | Liveness + status endpoints                     |
+| GraphQL         | ✅     | Schema-less resolvers over HTTP (POST/GET)      |
 | Protobuf        | ✅     | proto3 codegen + bind/decode & encode over HTTP |
 
 See [feature_parity.md](./feature_parity.md) for the full roadmap and upcoming features.
@@ -413,7 +413,7 @@ METRICS_PORT=2121
 
 ### Remote log level (pull from a central service)
 
-Instead of exposing an endpoint, the service can *pull* its log level from a remote
+Instead of exposing an endpoint, the service can _pull_ its log level from a remote
 log-level service. Set `REMOTE_LOG_URL` (and optionally `REMOTE_LOG_FETCH_INTERVAL`) in
 `configs/.env`; on startup zero registers an outbound HTTP client for that URL and a cron job
 that fetches the level every `REMOTE_LOG_FETCH_INTERVAL` seconds (default 15) and applies it
@@ -462,6 +462,102 @@ configured header) and reset at the start of each window; an internal cap bounds
 of tracked clients. Future options — token bucket, sliding window, per-route limits,
 Redis-backed distributed limiting, and `X-RateLimit-*` / `Retry-After` headers — are tracked
 in `parity_check.md`.
+
+#### Outbound (downstream service) rate limiter
+
+Each registered HTTP service (`app.addHttpService`) can carry its own fixed-window limiter
+that guards every `get`/`post`/`put`/`delete` call to that downstream. It fails fast — when
+the per-service window is exhausted the call returns `error.RateLimited` (surfaced as
+`ClientError.RateLimited`) before any socket is opened, so it composes with the circuit
+breaker and outbound auth.
+
+Configure it explicitly via `ServiceOptions`:
+
+```zig
+const svc = app.addHttpService(
+    "payments",
+    "https://payments.internal",
+    .{ .rateLimiter = .{ .allocator = app.container.allocator, .enabled = true, .limit = 50, .window_ms = 60_000 } },
+);
+```
+
+Or per-service env defaults (service name uppercased, non-alphanumeric → `_`):
+
+```bash
+SERVICE_PAYMENTS_RATE_LIMIT=50              # max requests per window (default 100)
+SERVICE_PAYMENTS_RATE_LIMIT_WINDOW_MS=60000  # window length in ms (default 60000)
+```
+
+`SERVICE_<NAME>_RATE_LIMIT` is resolved independently of the other `SERVICE_<NAME>_*` keys
+(auth/circuit-breaker); explicit `ServiceOptions.rateLimiter` always wins.
+
+### RBAC (role-based access control)
+
+A config-driven RBAC middleware runs *after* authentication. It reads the `role` claim from the
+verified JWT and allows the request only when that role is granted the current `method`+`path`
+by a registered rule. Routes with no matching rule are public; a route with at least one rule
+requires the caller's role to match one of them. A request without a `role` claim (or without an
+auth header) is denied with `403 Forbidden` on protected routes. `*.well-known/*`, `/metrics`,
+health and liveness are always exempt.
+
+`method` may be `*` to match any verb; `path` may end with `*` as a prefix wildcard
+(e.g. `/api/*` covers `/api/users/1`).
+
+Register rules programmatically:
+
+```zig
+// role "ADMIN" may do anything under /api; "USER" may only GET /api/resource
+app.rbac("ADMIN", "*", "/api/*");
+app.rbac("USER", "GET", "/api/resource");
+```
+
+Or load them from the environment, where each `RBAC_ROLE_<NAME>` key lists comma-separated
+`METHOD:/path` rules:
+
+```bash
+RBAC_ROLE_ADMIN=GET:/api/*,POST:/api/*,PUT:/api/*,DELETE:/api/*
+RBAC_ROLE_USER=GET:/api/resource
+```
+
+```zig
+try app.rbacFromEnv();
+```
+
+The role is taken from the JWT `role` claim, so the issuer must embed a `role` field in the
+token (the claim is optional — tokens without it carry no role and are denied on protected
+routes). RBAC is intended for OAuth/JWT auth; Basic/API-key auth has no role claim.
+
+#### JSON config (env file or `config.json`)
+
+Rules can also be supplied as a JSON document, which is handy for `.env` files
+(`RBAC_CONFIG`) or a `config.json` loaded at startup. Two shapes are accepted — an array of
+`{role, method, path}` objects, or an object mapping each role to a list of `METHOD:/path`
+strings:
+
+```json
+[
+  { "role": "ADMIN", "method": "*",        "path": "/api/*" },
+  { "role": "USER",  "method": "GET",      "path": "/api/resource" }
+]
+```
+```json
+{ "ADMIN": ["GET:/api/*", "POST:/api/*"], "USER": ["GET:/api/resource"] }
+```
+
+Wire it up from the environment (`RBAC_CONFIG` holds the JSON string) or from a file:
+
+```zig
+// reads RBAC_ROLE_<NAME> env keys AND the RBAC_CONFIG JSON string
+try app.rbacFromEnv();
+
+// or load a JSON document from a file (e.g. config.json)
+try app.rbacFromJsonFile("config.json");
+
+// or parse an in-memory JSON string directly
+try app.rbacFromJson(
+    \\[{"role":"ADMIN","method":"*","path":"/api/*"}]
+);
+```
 
 ### Redirect
 

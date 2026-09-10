@@ -33,6 +33,9 @@ config: *root.config = undefined,
 metricz: *root.metricz = undefined,
 authProvider: *root.AuthProvider = undefined,
 
+    /// optional role-based access control registry, wired into the rbac middleware
+    rbac: ?*root.rbac.RBAC = null,
+
 redis: ?rediz.Client = undefined,
 rdz: ?*root.rdz = undefined,
 SQL: ?*root.SQL = undefined,

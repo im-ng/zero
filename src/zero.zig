@@ -47,6 +47,7 @@ pub const addRestHandlers = autocrud.addRestHandlers;
 pub const authz = @import("mw/authz.zig");
 pub const AuthProvider = @import("mw/authProvider.zig");
 pub const jwtClaims = AuthProvider.jwtClaims;
+pub const rbac = @import("mw/rbac.zig");
 
 pub const rdz = @import("datasource/rdz.zig");
 

@@ -50,6 +50,8 @@ pub const jwtClaims = struct {
     sub: []const u8,
     jti: []const u8,
     nbf: u64,
+    /// optional RBAC role claim; absent in a token leaves this empty
+    role: []const u8 = "",
 };
 
 pub const AuthError = error{

@@ -641,6 +641,64 @@ pub fn addHealthCheck(self: Self, name: []const u8, check: *const fn (*root.cont
     try self.container.healthChecks.append(.{ .name = name, .check = check });
 }
 
+/// Registers an RBAC allow-rule: `role` may call `method` on `path`. `path`
+/// may end with `*` as a prefix wildcard and `method` may be `*` to match any
+/// verb. Applied by the rbac middleware after auth (requires a `role` claim
+/// in the verified JWT).
+pub fn rbac(self: *Self, role: []const u8, method: []const u8, path: []const u8) !void {
+    if (self.container.rbac == null) {
+        self.container.rbac = try self.container.allocator.create(root.rbac.RBAC);
+        self.container.rbac.?.* = root.rbac.RBAC.init(self.container.allocator);
+    }
+    try self.container.rbac.?.add(role, method, path);
+}
+
+/// Loads RBAC rules from `RBAC_ROLE_<NAME>=METHOD:/path,METHOD:/path` env keys,
+/// plus a JSON document from `RBAC_CONFIG` (either an array of
+/// `{"role","method","path"}` objects or an object mapping role →
+/// `["METHOD:/path", ...]`).
+pub fn rbacFromEnv(self: *Self) !void {
+    const prefix = "RBAC_ROLE_";
+    var it = self.container.config.environments.iterator();
+    while (it.next()) |entry| {
+        if (!std.mem.startsWith(u8, entry.key_ptr.*, prefix)) continue;
+        const role = entry.key_ptr.*[prefix.len..];
+        var rules = std.mem.splitScalar(u8, entry.value_ptr.*, ',');
+        while (rules.next()) |rule| {
+            const trimmed = std.mem.trim(u8, rule, " ");
+            if (trimmed.len == 0) continue;
+            var mp = std.mem.splitScalar(u8, trimmed, ':');
+            const m = mp.next() orelse continue;
+            const p = mp.next() orelse continue;
+            try self.rbac(role, std.mem.trim(u8, m, " "), std.mem.trim(u8, p, " "));
+        }
+    }
+
+    const json_config = self.container.config.getOrDefault("RBAC_CONFIG", "");
+    if (json_config.len > 0) {
+        try self.rbacFromJson(json_config);
+    }
+}
+
+/// Parses RBAC rules from a JSON string (array of `{"role","method","path"}`
+/// objects, or an object mapping role → `["METHOD:/path", ...]`).
+pub fn rbacFromJson(self: *Self, json_config: []const u8) !void {
+    if (self.container.rbac == null) {
+        self.container.rbac = try self.container.allocator.create(root.rbac.RBAC);
+        self.container.rbac.?.* = root.rbac.RBAC.init(self.container.allocator);
+    }
+    try self.container.rbac.?.fromJson(self.container.allocator, json_config);
+}
+
+/// Reads a JSON RBAC config from `path` (see `rbacFromJson` for the schema).
+pub fn rbacFromJsonFile(self: *Self, path: []const u8) !void {
+    const buf = std.fs.cwd().readFileAlloc(self.container.allocator, path, 1 << 20) catch {
+        return root.rbac.RbacError.InvalidRbacConfig;
+    };
+    defer self.container.allocator.free(buf);
+    try self.rbacFromJson(buf);
+}
+
 pub fn addWebsocket(self: Self, handler: *const fn (*root.Context) anyerror!void) !void {
     self.httpServer.router.get("/ws", handler, .{});
 }

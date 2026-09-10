@@ -111,9 +111,7 @@ pub fn fromEnv(ct: *root.container, name: []const u8) ServiceOptions {
     defer ct.allocator.free(prefix);
 
     const mode = cfgGet(ct, prefix, "AUTH_MODE");
-    if (std.mem.eql(u8, mode, "")) return opts;
-
-    const m = std.meta.stringToEnum(OutboundAuthMode, mode) orelse return opts;
+    const m = std.meta.stringToEnum(OutboundAuthMode, mode);
 
     switch (m) {
         .apiKey => {
