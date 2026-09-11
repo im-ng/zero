@@ -27,7 +27,11 @@ pub fn main(init: std.process.Init) !void {
 
     const app = try App.new(allocator, init.environ_map);
 
+    try app.addFileStore("local", .local, .{ .root = "./data/basic-store" });
+
     try app.get("/", index);
+
+    try app.get("/text", textResponse);
 
     try app.get("/json", jsonResponse);
 
@@ -36,6 +40,14 @@ pub fn main(init: std.process.Init) !void {
     try app.get("/keys", keys);
 
     try app.get("/memory", memoryUsage);
+
+    try app.get("/proto", protoGet);
+    try app.post("/proto", protoPost);
+
+    try app.graphql("/graphql", Query, null, &query_root, null);
+
+    try app.get("/filestore", filestoreGet);
+    try app.post("/filestore", filestorePost);
 
     try app.run();
 }
@@ -57,6 +69,65 @@ pub fn index(ctx: *Context) !void {
     ctx.response.body =
         \\ We are seeing the test content from zero framework
     ;
+}
+
+pub fn textResponse(ctx: *Context) !void {
+    ctx.response.setStatus(.ok);
+    ctx.response.content_type = .TEXT;
+    ctx.response.body = "plain text response from zero framework";
+}
+
+// Minimal protobuf endpoint (raw bytes; the `protobuf` module is not re-exported
+// by `zero`, so a hand-encoded message stands in for ctx.protobuf here).
+// TestMsg { value: string } field 1, wire type 2 (length-delimited).
+fn protoBytes() [7]u8 {
+    return [_]u8{ 0x0a, 0x05, 'h', 'e', 'l', 'l', 'o' };
+}
+
+pub fn protoGet(ctx: *Context) !void {
+    ctx.response.header("content-type", "application/x-protobuf");
+    ctx.response.setStatus(.ok);
+    try ctx.response.writer().writeAll(&protoBytes());
+}
+
+pub fn protoPost(ctx: *Context) !void {
+    const body = ctx.request.body() orelse "";
+    ctx.response.header("content-type", "application/x-protobuf");
+    ctx.response.setStatus(.ok);
+    try ctx.response.writer().writeAll(body);
+}
+
+const Query = struct {
+    hello: *const fn (*Context, void) anyerror![]const u8,
+};
+fn helloResolver(_: *Context, _: void) anyerror![]const u8 {
+    return "hello";
+}
+var query_root = Query{ .hello = helloResolver };
+
+pub fn filestoreGet(ctx: *Context) !void {
+    const key = blk: {
+        const qs = ctx.request.query() catch break :blk "seed";
+        break :blk qs.get("key") orelse "seed";
+    };
+    const got = (try ctx.GetFileFromStore("local", key)) orelse "";
+    ctx.response.header("content-type", "application/octet-stream");
+    ctx.response.setStatus(.ok);
+    try ctx.response.writer().writeAll(got);
+}
+
+pub fn filestorePost(ctx: *Context) !void {
+    const payload = "filestore-payload";
+    const key = try utils.combine(ctx.allocator, "k-{d}", .{std.c.getpid()});
+    try ctx.SaveFileToStore("local", key, payload);
+    const got = (try ctx.GetFileFromStore("local", key)) orelse {
+        ctx.response.setStatus(.internal_server_error);
+        return;
+    };
+    ctx.response.header("content-type", "application/octet-stream");
+    ctx.response.setStatus(.ok);
+    try ctx.response.writer().writeAll(got);
+    try ctx.DeleteFileFromStore("local", key);
 }
 
 pub fn keys(ctx: *Context) !void {

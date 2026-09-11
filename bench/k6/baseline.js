@@ -60,8 +60,16 @@ const endpoints = {
     trend: new Trend('ep_health_html_duration'),
     fails: new Counter('ep_health_html_fails'),
   },
+  index: { url: '/', method: 'GET', trend: new Trend('ep_index_duration'), fails: new Counter('ep_index_fails') },
+  text: { url: '/text', method: 'GET', trend: new Trend('ep_text_duration'), fails: new Counter('ep_text_fails') },
+  json: { url: '/json', method: 'GET', trend: new Trend('ep_json_duration'), fails: new Counter('ep_json_fails') },
+  keys: { url: '/keys', method: 'GET', trend: new Trend('ep_keys_duration'), fails: new Counter('ep_keys_fails') },
+  db: { url: '/db', method: 'GET', trend: new Trend('ep_db_duration'), fails: new Counter('ep_db_fails') },
+  proto_get: { url: '/proto', method: 'GET', trend: new Trend('ep_proto_get_duration'), fails: new Counter('ep_proto_get_fails') },
+  graphql_get: { url: '/graphql?query=' + encodeURIComponent('{ hello }'), method: 'GET', trend: new Trend('ep_graphql_get_duration'), fails: new Counter('ep_graphql_get_fails') },
+  filestore_get: { url: '/filestore?key=bench-seed', method: 'GET', trend: new Trend('ep_filestore_get_duration'), fails: new Counter('ep_filestore_get_fails') },
   proto: {
-    url: '/bench/proto',
+    url: '/proto',
     method: 'POST',
     body: protoBody(),
     ctype: 'application/x-protobuf',
@@ -69,7 +77,7 @@ const endpoints = {
     fails: new Counter('ep_proto_fails'),
   },
   graphql: {
-    url: '/bench/graphql',
+    url: '/graphql',
     method: 'POST',
     body: graphqlBody,
     ctype: 'application/json',
@@ -77,7 +85,7 @@ const endpoints = {
     fails: new Counter('ep_graphql_fails'),
   },
   filestore: {
-    url: '/bench/filestore',
+    url: '/filestore',
     method: 'POST',
     body: 'x',
     trend: new Trend('ep_filestore_duration'),
@@ -105,6 +113,14 @@ function run(name) {
 export function health() { run('health'); }
 export function healthJson() { run('health_json'); }
 export function healthHtml() { run('health_html'); }
+export function index() { run('index'); }
+export function text() { run('text'); }
+export function json() { run('json'); }
+export function keys() { run('keys'); }
+export function db() { run('db'); }
+export function protoGet() { run('proto_get'); }
+export function graphqlGet() { run('graphql_get'); }
+export function filestoreGet() { run('filestore_get'); }
 export function proto() { run('proto'); }
 export function graphql() { run('graphql'); }
 export function filestore() { run('filestore'); }
@@ -115,6 +131,14 @@ const execFor = {
   health: 'health',
   health_json: 'healthJson',
   health_html: 'healthHtml',
+  index: 'index',
+  text: 'text',
+  json: 'json',
+  keys: 'keys',
+  db: 'db',
+  proto_get: 'protoGet',
+  graphql_get: 'graphqlGet',
+  filestore_get: 'filestoreGet',
   proto: 'proto',
   graphql: 'graphql',
   filestore: 'filestore',

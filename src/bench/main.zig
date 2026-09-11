@@ -236,7 +236,48 @@ const TestMsg = struct {
     }
 };
 
-fn benchProtoHandler(ctx: *Context) !void {
+fn indexHandler(ctx: *Context) !void {
+    ctx.response.setStatus(.ok);
+    ctx.response.content_type = .HTML;
+    ctx.response.body =
+        \\ We are seeing the test content from zero framework
+    ;
+}
+
+fn textHandler(ctx: *Context) !void {
+    ctx.response.setStatus(.ok);
+    ctx.response.content_type = .TEXT;
+    ctx.response.body = "plain text response from zero framework";
+}
+
+fn jsonHandler(ctx: *Context) !void {
+    try ctx.response.json(.{ .msg = "hello world!" }, .{});
+}
+
+fn keysHandler(ctx: *Context) !void {
+    try ctx.response.json(.{
+        .keys = .{.{
+            .kty = "RSA",
+            .e = "AQAB",
+            .use = "sig",
+            .kid = "zero-framework-app",
+            .alg = "RS256",
+            .n = "i_RCaAfs93TKxeqaoExGcKsQLHjS9s4A8Eujcwv9g-9Qk5pPLm6jXb2AHIwPnbEvOEJvs8KY8hFHrQzp8PYsfc24Z_MY1MzJ7bdGNzCxzPViXcoljdWXAOzRIjpRTF0rF77nY1qbuRs5CefVgjwxrEOIQngrTqstAdMZlPm5_BQXKgop2REVAJF4VZAIR7-X9nOoSNFJewMpzxpwK3zqdnIF9sPf-uN5pLf4t07-teyr8EdO2enDVj1jaxiHadfCEENtL5FpRaVA5JpEIpnb1NJx0D9r9wdCo3jjUNTbyNUVxjI0Spm9pfk5G3Ma02u4STCs2B4PeP8F9a4UM5NlWw",
+        }},
+    }, .{});
+}
+
+fn dbHandler(ctx: *Context) !void {
+    // Static stand-in for the SQL-backed /db route (DB-free benchmark target).
+    try ctx.response.json(.{ .id = 1, .name = "zero" }, .{});
+}
+
+fn protoGetHandler(ctx: *Context) !void {
+    const msg = TestMsg{ .value = "bench-proto-payload" };
+    try ctx.protobuf(msg);
+}
+
+fn protoPostHandler(ctx: *Context) !void {
     const msg = (try ctx.bindProto(TestMsg)) orelse {
         ctx.response.setStatus(.bad_request);
         return;
@@ -255,7 +296,18 @@ var query_root = Query{ .hello = helloResolver };
 
 var bench_fs_seq: std.atomic.Value(u64) = .init(0);
 
-fn benchFilestoreHandler(ctx: *Context) !void {
+fn filestoreGetHandler(ctx: *Context) !void {
+    const key = blk: {
+        const qs = ctx.request.query() catch break :blk "bench-seed";
+        break :blk qs.get("key") orelse "bench-seed";
+    };
+    const got = (try ctx.GetFileFromStore("bench", key)) orelse "";
+    ctx.response.header("content-type", "application/octet-stream");
+    ctx.response.setStatus(.ok);
+    try ctx.response.writer().writeAll(got);
+}
+
+fn filestorePostHandler(ctx: *Context) !void {
     const payload = "bench-filestore-payload";
     const seq = bench_fs_seq.fetchAdd(1, .monotonic);
     const key = try std.fmt.allocPrint(ctx.allocator, "leak-key-{d}", .{seq});
@@ -437,11 +489,32 @@ pub fn main(init: std.process.Init) !void {
     const app = try App.new(allocator, init.environ_map);
     if (quiet) app.log.logLevel = 99;
 
-    // Register feature routes so the suite can exercise their alloc paths.
+    // Register the zero-basic workload so the suite/k6 can exercise resource
+    // endpoints (index/html, text, json, keys, db, proto get+post, graphql get+post,
+    // filestore get+post) — see plan: benchmark target = bench server (option B).
     try app.addFileStore("bench", .local, .{ .root = "./data/bench" });
-    try app.post("/bench/proto", benchProtoHandler);
-    try app.graphql("/bench/graphql", Query, null, &query_root, null);
-    try app.post("/bench/filestore", benchFilestoreHandler);
+
+    // Seed a filestore file so GET /filestore?key=bench-seed returns data.
+    {
+        const io = init.io;
+        std.Io.Dir.cwd().createDirPath(io, "./data/bench") catch |err| {
+            if (err != error.PathAlreadyExists) std.debug.print("bench seed dir warn: {any}\n", .{err});
+        };
+        std.Io.Dir.cwd().writeFile(io, .{ .sub_path = "./data/bench/bench-seed", .data = "bench-seed-payload" }) catch |err| {
+            std.debug.print("bench seed warn: {any}\n", .{err});
+        };
+    }
+
+    try app.get("/", indexHandler);
+    try app.get("/text", textHandler);
+    try app.get("/json", jsonHandler);
+    try app.get("/keys", keysHandler);
+    try app.get("/db", dbHandler);
+    try app.get("/proto", protoGetHandler);
+    try app.post("/proto", protoPostHandler);
+    try app.graphql("/graphql", Query, null, &query_root, null);
+    try app.get("/filestore", filestoreGetHandler);
+    try app.post("/filestore", filestorePostHandler);
 
     const srv_thread = try std.Thread.spawn(.{}, appRun, .{app});
 
@@ -456,9 +529,9 @@ pub fn main(init: std.process.Init) !void {
         std.debug.print("  health       {s}\n", .{health_url});
         std.debug.print("  health-json  {s}   (Accept: application/json)\n", .{health_url});
         std.debug.print("  health-html  {s}   (Accept: text/html)\n", .{health_url});
-        std.debug.print("  proto        http://127.0.0.1:{d}/bench/proto   (POST, application/x-protobuf)\n", .{port});
-        std.debug.print("  graphql      http://127.0.0.1:{d}/bench/graphql (POST, application/json)\n", .{port});
-        std.debug.print("  filestore    http://127.0.0.1:{d}/bench/filestore (POST)\n", .{port});
+        std.debug.print("  proto        http://127.0.0.1:{d}/proto   (GET/POST, application/x-protobuf)\n", .{port});
+        std.debug.print("  graphql      http://127.0.0.1:{d}/graphql (GET ?query= / POST, application/json)\n", .{port});
+        std.debug.print("  filestore    http://127.0.0.1:{d}/filestore (GET ?key= / POST)\n", .{port});
         std.debug.print("\nRun:  k6 run bench/k6/baseline.js\n", .{});
         srv_thread.join();
         std.process.exit(0);
@@ -476,50 +549,19 @@ pub fn main(init: std.process.Init) !void {
 
         const specs = [_]struct { name: []const u8, req: Req }{
             .{ .name = "health", .req = .{ .method = .GET, .url = health_url } },
-            .{
-                .name = "health-json",
-                .req = .{
-                    .method = .GET,
-                    .url = health_url,
-                    .accept = "application/json",
-                    .expect_ct = "application/json",
-                },
-            },
-            .{
-                .name = "health-html",
-                .req = .{
-                    .method = .GET,
-                    .url = health_url,
-                    .accept = "text/html",
-                    .expect_ct = "text/html",
-                },
-            },
-            .{
-                .name = "proto",
-                .req = .{
-                    .method = .POST,
-                    .url = try std.fmt.allocPrint(allocator, "http://127.0.0.1:{d}/bench/proto", .{port}),
-                    .body = proto_body,
-                    .content_type = "application/x-protobuf",
-                },
-            },
-            .{
-                .name = "graphql",
-                .req = .{
-                    .method = .POST,
-                    .url = try std.fmt.allocPrint(allocator, "http://127.0.0.1:{d}/bench/graphql", .{port}),
-                    .body = graphql_body,
-                    .content_type = "application/json",
-                },
-            },
-            .{
-                .name = "filestore",
-                .req = .{
-                    .method = .POST,
-                    .url = try std.fmt.allocPrint(allocator, "http://127.0.0.1:{d}/bench/filestore", .{port}),
-                    .body = "x",
-                },
-            },
+            .{ .name = "health-json", .req = .{ .method = .GET, .url = health_url, .accept = "application/json", .expect_ct = "application/json" } },
+            .{ .name = "health-html", .req = .{ .method = .GET, .url = health_url, .accept = "text/html", .expect_ct = "text/html" } },
+            .{ .name = "index", .req = .{ .method = .GET, .url = try std.fmt.allocPrint(allocator, "http://127.0.0.1:{d}/", .{port}), .expect_ct = "text/html" } },
+            .{ .name = "text", .req = .{ .method = .GET, .url = try std.fmt.allocPrint(allocator, "http://127.0.0.1:{d}/text", .{port}), .expect_ct = "text/plain" } },
+            .{ .name = "json", .req = .{ .method = .GET, .url = try std.fmt.allocPrint(allocator, "http://127.0.0.1:{d}/json", .{port}), .expect_ct = "application/json" } },
+            .{ .name = "keys", .req = .{ .method = .GET, .url = try std.fmt.allocPrint(allocator, "http://127.0.0.1:{d}/keys", .{port}), .expect_ct = "application/json" } },
+            .{ .name = "db", .req = .{ .method = .GET, .url = try std.fmt.allocPrint(allocator, "http://127.0.0.1:{d}/db", .{port}), .expect_ct = "application/json" } },
+            .{ .name = "proto-get", .req = .{ .method = .GET, .url = try std.fmt.allocPrint(allocator, "http://127.0.0.1:{d}/proto", .{port}), .expect_ct = "application/x-protobuf" } },
+            .{ .name = "proto", .req = .{ .method = .POST, .url = try std.fmt.allocPrint(allocator, "http://127.0.0.1:{d}/proto", .{port}), .body = proto_body, .content_type = "application/x-protobuf" } },
+            .{ .name = "graphql-get", .req = .{ .method = .GET, .url = try std.fmt.allocPrint(allocator, "http://127.0.0.1:{d}/graphql?query=%7B%20hello%20%7D", .{port}), .expect_ct = "application/json" } },
+            .{ .name = "graphql", .req = .{ .method = .POST, .url = try std.fmt.allocPrint(allocator, "http://127.0.0.1:{d}/graphql", .{port}), .body = graphql_body, .content_type = "application/json" } },
+            .{ .name = "filestore-get", .req = .{ .method = .GET, .url = try std.fmt.allocPrint(allocator, "http://127.0.0.1:{d}/filestore?key=bench-seed", .{port}), .expect_ct = "application/octet-stream" } },
+            .{ .name = "filestore", .req = .{ .method = .POST, .url = try std.fmt.allocPrint(allocator, "http://127.0.0.1:{d}/filestore", .{port}), .body = "x" } },
         };
 
         std.debug.print("\nzero framework HTTP benchmark (suite)\n", .{});
