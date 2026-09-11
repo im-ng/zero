@@ -45,6 +45,7 @@ pub fn build(b: *std.Build) void {
     module.addImport("nats", nats.module("nats"));
 
     const protobuf = b.dependency("protobuf", .{});
+    module.addImport("protobuf", protobuf.module("protobuf"));
 
     const graphql = b.dependency("graphql", .{});
     module.addImport("graphql", graphql.module("graphql"));
@@ -190,7 +191,6 @@ pub fn build(b: *std.Build) void {
     bench_module.addImport("jwt", jwt.module("zig-jwt"));
     bench_module.addImport("sqlite", sqlite.module("sqlite"));
     bench_module.addImport("nats", nats.module("nats"));
-    bench_module.addImport("protobuf", protobuf.module("protobuf"));
     bench_module.addImport("graphql", graphql.module("graphql"));
     bench_module.addImport("zero", module);
 

@@ -21,6 +21,8 @@ pub const gql = @import("graphql.zig");
 pub const rdkafka = @import("cimport.zig").librdkafka;
 pub const sqlitez = @import("sqlite");
 
+pub const protobuf = @import("protobuf");
+
 // zero internals
 pub const logger = @import("logger.zig");
 pub const config = @import("config.zig");

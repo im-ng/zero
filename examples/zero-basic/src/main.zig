@@ -42,11 +42,13 @@ pub fn main(init: std.process.Init) !void {
     try app.get("/memory", memoryUsage);
 
     try app.get("/proto", protoGet);
+
     try app.post("/proto", protoPost);
 
     try app.graphql("/graphql", Query, null, &query_root, null);
 
     try app.get("/filestore", filestoreGet);
+
     try app.post("/filestore", filestorePost);
 
     try app.run();
@@ -77,8 +79,9 @@ pub fn textResponse(ctx: *Context) !void {
     ctx.response.body = "plain text response from zero framework";
 }
 
-// Minimal protobuf endpoint (raw bytes; the `protobuf` module is not re-exported
-// by `zero`, so a hand-encoded message stands in for ctx.protobuf here).
+// Minimal protobuf endpoint. The `protobuf` module is re-exported by `zero`
+// (`zero.protobuf`), but a tiny hand-encoded message keeps this example free of
+// generated structs.
 // TestMsg { value: string } field 1, wire type 2 (length-delimited).
 fn protoBytes() [7]u8 {
     return [_]u8{ 0x0a, 0x05, 'h', 'e', 'l', 'l', 'o' };

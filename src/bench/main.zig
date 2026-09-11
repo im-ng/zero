@@ -1,7 +1,7 @@
 const std = @import("std");
 const zero = @import("zero");
 const zul = @import("zul");
-const protobuf = @import("protobuf");
+const protobuf = @import("zero").protobuf;
 
 const App = zero.App;
 const Context = zero.Context;

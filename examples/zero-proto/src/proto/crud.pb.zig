@@ -2,7 +2,7 @@
 ///! package crud
 const std = @import("std");
 
-const protobuf = @import("protobuf");
+const protobuf = @import("zero").protobuf;
 const fd = protobuf.fd;
 
 /// A single user row. `email` is optional (proto3 presence) so it maps cleanly

@@ -5,10 +5,10 @@ pub fn build(b: *std.Build) void {
     const optimize = b.standardOptimizeOption(.{});
 
     const zero = b.dependency("zero", .{});
-    // `protobuf` is both needed at build time for the codegen step below and at
-    // compile time for the generated structs. The `zero` framework no longer
-    // imports protobuf into its main module, so this is the only protobuf module
-    // instance in the build — no collision.
+    // `protobuf` is needed only at build time for the codegen step below. At
+    // compile time the generated structs reach the codec through `zero.protobuf`
+    // (the `zero` framework re-exports it), so the example never imports the
+    // bare `protobuf` module directly in its source.
     const protobuf = b.dependency("protobuf", .{});
     const protobuf_mod = @import("protobuf");
 
@@ -22,7 +22,6 @@ pub fn build(b: *std.Build) void {
     });
 
     exe.root_module.addImport("zero", zero.module("zero"));
-    exe.root_module.addImport("protobuf", protobuf.module("protobuf"));
 
     // Generate Zig structs from the .proto definitions under `proto/`. Run
     // `zig build gen-proto` whenever the .proto changes. The first run downloads
