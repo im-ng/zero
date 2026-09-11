@@ -659,7 +659,31 @@ pub fn health(ctx: *Context) !void {
         .components = std.json.Value{ .object = components },
     };
 
-    ctx.response.setStatus(if (all_up) .ok else .service_unavailable);
+    const http_status = if (all_up) std.http.Status.ok else std.http.Status.service_unavailable;
+    const status = if (all_up) up else down;
+
+    // Content negotiation: serve an HTML status page when the client asks for
+    // `text/html`; otherwise respond with JSON (the default).
+    const accept = ctx.request.header("accept") orelse "";
+    if (std.ascii.indexOfIgnoreCase(accept, "text/html") != null) {
+        var w: std.Io.Writer.Allocating = .init(ctx.allocator);
+        try w.writer.print(
+            \\<!doctype html>
+            \\<html><head><meta charset="utf-8"><title>{s} Health</title></head>
+            \\<body><h1>Status: {s}</h1><ul>
+        , .{ ctx.container.appName, status });
+        var it = components.iterator();
+        while (it.next()) |kv| {
+            try w.writer.print("<li>{s}: {s}</li>", .{ kv.key_ptr.*, kv.value_ptr.*.string });
+        }
+        try w.writer.writeAll("</ul></body></html>");
+        ctx.response.setStatus(http_status);
+        ctx.response.content_type = .HTML;
+        ctx.response.body = w.written();
+        return;
+    }
+
+    ctx.response.setStatus(http_status);
     try ctx.response.json(services, .{});
 }
 
