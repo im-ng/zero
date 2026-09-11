@@ -7,6 +7,7 @@ pub const Message = union(enum) {
     mqtt: *root.mqMessage,
     kafka: *root.kafkaMessage,
     nats: *root.natsMessage,
+    redis: *root.redisMessage,
 };
 
 /// Unified pub/sub interface (type-erased VTable).

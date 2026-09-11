@@ -221,6 +221,12 @@ pub const Context = struct {
         try store.create(self, key, data);
     }
 
+    /// Deletes `key` from a named file store.
+    pub fn DeleteFileFromStore(self: *Context, name: []const u8, key: []const u8) !void {
+        const store = self.GetFileStore(name) orelse return error.FileStoreNotFound;
+        try store.delete(self, key);
+    }
+
     fn mimeForPath(path: []const u8) []const u8 {
         const ext = std.fs.path.extension(path);
         if (ext.len == 0) return "application/octet-stream";

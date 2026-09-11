@@ -71,12 +71,12 @@ _*An `experimental` support has been added to achieve the zig version 0.16 addit
 | CORS            | ✅     | Configurable CORS middleware                    |
 | Panic Recovery  | ✅     | Automatic panic recovery                        |
 | Databases       | ✅     | PostgreSQL, SQLite, Redis                       |
-| Pub/Sub         | ✅     | MQTT, NATS, Kafka (via librdkafka)              |
+| Pub/Sub         | ✅     | MQTT, NATS, Kafka (via librdkafka), Redis        |
 | Migrations      | ✅     | DB migrations + seed on startup                 |
 | HTTP Client     | ✅     | Register multiple external services             |
 | Cron Jobs       | ✅     | `* * * * *` + second-level + range support      |
 | WebSockets      | ✅     | Built-in WebSocket support                      |
-| Static Files    | ✅     | Serve static assets + Swagger UI                |
+| Static Files    | ✅     | Serve static assets + Swagger UI; `addStaticFiles` mounts   |
 | Health Checks   | ✅     | Liveness + status endpoints                     |
 | GraphQL         | ✅     | Schema-less resolvers over HTTP (POST/GET)      |
 | Protobuf        | ✅     | proto3 codegen + bind/decode & encode over HTTP |
@@ -277,7 +277,7 @@ is a Go library and cannot be used from pure Zig without cgo.
 
 ## File Store
 
-`zero` exposes a unified `FileStore` interface for blob storage, plus helpers
+ `zero` exposes a unified `FileStore` interface for blob storage, plus helpers
 for handling `multipart/form-data` uploads and serving downloads. The `local`
 backend (rooted at `FILE_STORE_ROOT`, with `..` traversal protection) is
 implemented; `FTP`/`SFTP` backends are **deferred** (no vendored Zig libs; SFTP
@@ -287,6 +287,33 @@ needs libssh). The `local` store auto-registers as the default when
 ```zig
 try app.addFileStore("avatars", .local, .{ .root = "./data/avatars" });
 ```
+
+### S3-compatible file store
+
+The `s3` backend talks to any S3-compatible service (AWS S3, MinIO, Cloudflare
+R2, DigitalOcean Spaces, Backblaze B2) using **AWS Signature Version 4** over the
+built-in HTTP client. Every object key maps directly to an S3 key under the
+bucket (`create(ctx, "avatars/1.png", ...)` → `PUT /<bucket>/avatars/1.png`).
+
+```zig
+// configs/.env
+//   FILE_STORE_BACKEND=s3
+//   S3_REGION=us-east-1
+//   S3_BUCKET=my-bucket
+//   S3_ACCESS_KEY=...
+//   S3_SECRET_KEY=...
+//   S3_ENDPOINT=https://s3.us-east-1.amazonaws.com   # optional; default AWS per region
+try app.addFileStore("assets", .s3, .{});
+
+// in a handler — same interface as the local store
+try ctx.SaveFileToStore("assets", "report.pdf", data);
+const blob = (try ctx.GetFileFromStore("assets", "report.pdf")) orelse return error.NotFound;
+```
+
+- The signing logic (`signAuthorization`) is pure and covered by unit tests
+  against the AWS SigV4 `get-vanilla` test vector (RFC 4231 HMAC vectors too).
+- `x-amz-content-sha256` and `x-amz-date` are signed per S3's requirements; keys
+  are URI-encoded (slashes preserved) in both the request URL and the signature.
 
 In a handler:
 
@@ -558,6 +585,49 @@ try app.rbacFromJson(
     \\[{"role":"ADMIN","method":"*","path":"/api/*"}]
 );
 ```
+
+### Redis Pub/Sub
+
+Zero ships a native Redis Pub/Sub backend (RESP `PUBLISH`/`SUBSCRIBE`) — no extra dependency
+beyond the Redis connection already used for caching. Select it with `PUBSUB_BACKEND=REDIS`
+(reusing `REDIS_HOST`/`REDIS_PORT`/`REDIS_USER`/`REDIS_PASSWORD`/`REDIS_DB`):
+
+```bash
+PUBSUB_BACKEND=REDIS
+REDIS_HOST=127.0.0.1
+REDIS_PORT=6379
+```
+
+```zig
+// subscribe to a channel
+app.addRedisSubscription("users", fn (ctx: *zero.Context) !void {
+    const msg = ctx.message.redis; // redisMessage{ subject, payload, context }
+    ctx.container.log.info(msg.payload);
+});
+
+// publish through the unified PubSub interface (backend-agnostic)
+try ctx.pubsub.Publish("users", "hello");
+```
+
+Subscribers run on a dedicated connection with a background reader thread; messages are dispatched
+to the matching hook with a `context.message` of type `redisMessage`. Routes configured for other
+backends (Kafka/MQTT/NATS) are unaffected.
+
+### Static Files
+
+Beyond the embedded Swagger UI (served from `src/static/` under `/.well-known/*` and `/*`),
+you can mount any on-disk directory under a URL prefix:
+
+```zig
+// serve ./web/build at http://host/assets/*  (e.g. /assets/logo.png -> ./web/build/logo.png)
+app.addStaticFiles("/assets", "./web/build");
+```
+
+- `prefix` must start with `/`; requests under it map to `<dir><path-after-prefix>`.
+- The mount root (`/assets`) serves `index.html`.
+- Content type is inferred from the file extension via `httpz.ContentType.forExtension`.
+- Mounts are resolved by the `/*` static catch-all, so explicitly registered routes
+  (e.g. `app.get("/assets/special", ...)`) still take precedence.
 
 ### Redirect
 

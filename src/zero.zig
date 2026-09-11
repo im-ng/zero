@@ -81,6 +81,9 @@ pub const natsSubscriber = @import("pubsub/nats/subscriber.zig").natsSubscriber;
 pub const natsMessage = @import("pubsub/nats/message.zig").natsMessage;
 pub const nats = @import("pubsub/nats/NATS.zig").NATS;
 
+pub const redisMessage = @import("pubsub/redis/message.zig").redisMessage;
+pub const redisPubSub = @import("pubsub/redis/Redis.zig").Redis;
+
 pub const pubsubInterface = @import("pubsub/interface.zig");
 pub const PubSub = pubsubInterface.Interface;
 

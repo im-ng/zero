@@ -61,6 +61,7 @@ RUN apk add --no-cache \
     jq \
     openssh \
     libssh libssh2 libssh2-dev \
+    musl-dev \
     ca-certificates \
     librdkafka librdkafka-dev \
     binutils-dev curl-dev elfutils-dev

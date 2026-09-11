@@ -113,47 +113,49 @@ pub fn fromEnv(ct: *root.container, name: []const u8) ServiceOptions {
     const mode = cfgGet(ct, prefix, "AUTH_MODE");
     const m = std.meta.stringToEnum(OutboundAuthMode, mode);
 
-    switch (m) {
-        .apiKey => {
-            const key = cfgGet(ct, prefix, "API_KEY");
+    if (m) |selected| {
+        switch (selected) {
+            .none => {},
+            .apiKey => {
+                const key = cfgGet(ct, prefix, "API_KEY");
 
-            if (!std.mem.eql(u8, key, "")) {
-                opts.auth = .{
-                    .mode = .apiKey,
-                    .apiKey = .{ .key = key },
-                };
-            }
-        },
-        .basic => {
-            const u = cfgGet(ct, prefix, "BASIC_USER");
-            const p = cfgGet(ct, prefix, "BASIC_PASS");
+                if (!std.mem.eql(u8, key, "")) {
+                    opts.auth = .{
+                        .mode = .apiKey,
+                        .apiKey = .{ .key = key },
+                    };
+                }
+            },
+            .basic => {
+                const u = cfgGet(ct, prefix, "BASIC_USER");
+                const p = cfgGet(ct, prefix, "BASIC_PASS");
 
-            if (!std.mem.eql(u8, u, "") and !std.mem.eql(u8, p, "")) {
-                opts.auth = .{
-                    .mode = .basic,
-                    .basic = .{ .username = u, .password = p },
-                };
-            }
-        },
-        .oauth => {
-            const tu = cfgGet(ct, prefix, "OAUTH_TOKEN_URL");
-            const cid = cfgGet(ct, prefix, "OAUTH_CLIENT_ID");
-            const sec = cfgGet(ct, prefix, "OAUTH_CLIENT_SECRET");
+                if (!std.mem.eql(u8, u, "") and !std.mem.eql(u8, p, "")) {
+                    opts.auth = .{
+                        .mode = .basic,
+                        .basic = .{ .username = u, .password = p },
+                    };
+                }
+            },
+            .oauth => {
+                const tu = cfgGet(ct, prefix, "OAUTH_TOKEN_URL");
+                const cid = cfgGet(ct, prefix, "OAUTH_CLIENT_ID");
+                const sec = cfgGet(ct, prefix, "OAUTH_CLIENT_SECRET");
 
-            if (!std.mem.eql(u8, tu, "") and
-                !std.mem.eql(u8, cid, "") and
-                !std.mem.eql(u8, sec, ""))
-            {
-                opts.auth = .{ .mode = .oauth, .oauth = .{
-                    .tokenUrl = tu,
-                    .clientId = cid,
-                    .clientSecret = sec,
-                    .scope = optCfgGet(ct, prefix, "OAUTH_SCOPE"),
-                    .audience = optCfgGet(ct, prefix, "OAUTH_AUDIENCE"),
-                } };
-            }
-        },
-        else => {},
+                if (!std.mem.eql(u8, tu, "") and
+                    !std.mem.eql(u8, cid, "") and
+                    !std.mem.eql(u8, sec, ""))
+                {
+                    opts.auth = .{ .mode = .oauth, .oauth = .{
+                        .tokenUrl = tu,
+                        .clientId = cid,
+                        .clientSecret = sec,
+                        .scope = optCfgGet(ct, prefix, "OAUTH_SCOPE"),
+                        .audience = optCfgGet(ct, prefix, "OAUTH_AUDIENCE"),
+                    } };
+                }
+            },
+        }
     }
 
     var cb: CircuitBreakerConfig = .{};

@@ -393,6 +393,11 @@ fn startPubSubSubscriptions(self: Self) !void {
         self.container.log.info("starting nats subscriptions");
         try n.startSubscription();
     }
+
+    if (self.container.Redis) |r| {
+        self.container.log.info("starting redis subscriptions");
+        try r.startSubscription();
+    }
 }
 
 fn startShutdownHandler(_: Self) !void {
@@ -590,11 +595,40 @@ fn swaggerDirectory(ctx: *Context) !void {
 }
 
 fn staticDirectory(ctx: *Context) !void {
+    // user-registered mounts take precedence over the embedded static dir
+    if (ctx.container.staticMounts.items.len > 0) {
+        if (root.container.staticResolve(ctx.container.staticMounts.items, ctx.request.url.path)) |hit| {
+            var rel = hit.rel;
+            if (rel.len == 0) rel = "/";
+            const fname = if (rel.len > 0 and rel[0] == '/') rel[1..] else rel;
+            const name = if (fname.len == 0) "index.html" else fname;
+
+            const dir = if (hit.mount.dir.len > 0 and hit.mount.dir[hit.mount.dir.len - 1] == '/')
+                hit.mount.dir[0 .. hit.mount.dir.len - 1]
+            else
+                hit.mount.dir;
+            const fp = try std.fmt.allocPrint(ctx.allocator, "{s}/{s}", .{ dir, name });
+            defer ctx.allocator.free(fp);
+
+            const buffer = readFile(ctx, fp) catch {
+                ctx.response.setStatus(.not_found);
+                return;
+            };
+            ctx.response.setStatus(.ok);
+            ctx.response.content_type = httpz.ContentType.forExtension(std.fs.path.extension(fp));
+            ctx.response.body = buffer;
+            return;
+        }
+    }
+
     var urlPath: []u8 = undefined;
     urlPath = try ctx.allocator.alloc(u8, 100);
     urlPath = try std.fmt.bufPrint(urlPath, "{s}/{s}", .{ constants.STATIC_DIR, ctx.request.url.path });
 
-    const buffer = try readFile(ctx, urlPath);
+    const buffer = readFile(ctx, urlPath) catch {
+        ctx.response.setStatus(.not_found);
+        return;
+    };
 
     ctx.response.setStatus(.ok);
     ctx.response.body = buffer;
@@ -823,6 +857,21 @@ pub fn addFileStore(self: *Self, name: []const u8, backend: root.filestore.Backe
     if (self.container.defaultFileStore == null) self.container.defaultFileStore = store;
 }
 
+/// Serves files from an on-disk directory `dir` under the URL `prefix`
+/// (must start with `/`). Files are resolved with a `/` boundary, so a mount
+/// at `/assets` serves `/assets/logo.png` from `<dir>/logo.png`, and the mount
+/// root serves `index.html`. Resolved through the `/*` static catch-all, so
+/// explicit routes still win.
+pub fn addStaticFiles(self: *Self, prefix: []const u8, dir: []const u8) !void {
+    if (prefix.len == 0 or prefix[0] != '/') {
+        self.container.log.err("static mount prefix must start with '/'");
+        return error.InvalidStaticPrefix;
+    }
+    try self.container.staticMounts.append(.{ .prefix = prefix, .dir = dir });
+    const msg = try utils.toString(self.container.allocator, "registered static mount {s} -> {s}", .{ prefix, dir });
+    self.container.log.info(msg);
+}
+
 /// Registers list/get/create/update/delete REST handlers for struct `T`
 /// (see `zero.autocrud`). Mirrors GoFr's `AddRESTHandlers`.
 pub fn addRestHandlers(self: *Self, comptime T: type, comptime opts: root.AutoCrudOptions) !void {
@@ -855,6 +904,16 @@ pub fn addPubSubSubscription(self: *Self, topic: []const u8, hook: fn (*root.Con
     }
 
     try self.container.pubSub.?.addSubscriber(topic, hook);
+}
+
+/// Subscribe to a Redis Pub/Sub channel (`PUBSUB_BACKEND=REDIS`).
+pub fn addRedisSubscription(self: *Self, topic: []const u8, hook: fn (*root.Context) anyerror!void) !void {
+    if (self.container.Redis == null) {
+        self.container.log.err("redis pubsub is disabled, topic subscription is not available.");
+        return;
+    }
+
+    try self.container.Redis.?.addSubscriber(topic, hook);
 }
 
 pub fn addOAuthKeyRefresher(self: *Self) anyerror!void {

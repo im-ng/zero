@@ -24,6 +24,27 @@ pub const HealthCheck = struct {
     check: *const fn (*container) anyerror!void,
 };
 
+/// A user-registered static-file mount: URL `prefix` → on-disk `dir`.
+pub const StaticMount = struct {
+    prefix: []const u8,
+    dir: []const u8,
+};
+
+/// Returns the mount whose `prefix` is a path-prefix of `path` (with a `/`
+/// boundary), plus the remaining path to resolve under `dir`. `null` if no
+/// mount matches. Pure — safe to unit test without a live request.
+pub fn staticResolve(mounts: []const StaticMount, path: []const u8) ?struct { mount: StaticMount, rel: []const u8 } {
+    for (mounts) |m| {
+        if (path.len >= m.prefix.len and std.mem.startsWith(u8, path, m.prefix)) {
+            const after = path[m.prefix.len..];
+            if (after.len == 0 or after[0] == '/') {
+                return .{ .mount = m, .rel = after };
+            }
+        }
+    }
+    return null;
+}
+
 appName: []const u8 = undefined,
 appVersion: []const u8 = undefined,
 allocator: std.mem.Allocator,
@@ -49,7 +70,11 @@ datasource: root.Datasource = undefined,
     mqtt: ?*root.MQTT = null,
 Kakfa: ?*root.kafka = null,
 Nats: ?*root.nats = null,
-pubSub: ?*root.PubSub = null,
+Redis: ?*root.redisPubSub = null,
+    pubSub: ?*root.PubSub = null,
+
+    // user-registered static-file mounts (served by the staticDirectory catch-all)
+    staticMounts: std.array_list.Managed(StaticMount) = undefined,
 
     // GraphQL resolver roots (set by App.graphql; read by the dispatch handler)
     graphql_query: ?*const anyopaque = null,
@@ -83,6 +108,9 @@ pub fn create(self: Self) anyerror!*container {
     // initialize user-registered health checks
     c.healthChecks = std.array_list.Managed(container.HealthCheck).init(self.allocator);
 
+    // initialize user-registered static mounts
+    c.staticMounts = std.array_list.Managed(container.StaticMount).init(self.allocator);
+
     // initialize metricz
     try c.loadMetricz();
 
@@ -105,6 +133,25 @@ pub fn create(self: Self) anyerror!*container {
     c.log.info(msg);
 
     return c;
+}
+
+test "staticResolve matches mount with path boundary" {
+    const mounts = [_]StaticMount{
+        .{ .prefix = "/assets", .dir = "/var/www" },
+        .{ .prefix = "/public", .dir = "/srv" },
+    };
+    const hit = staticResolve(&mounts, "/assets/logo.png").?;
+    try std.testing.expectEqualStrings("/var/www", hit.mount.dir);
+    try std.testing.expectEqualStrings("/logo.png", hit.rel);
+
+    // mount root resolves with empty rel
+    const rmt = staticResolve(&mounts, "/public").?;
+    try std.testing.expectEqualStrings("/srv", rmt.mount.dir);
+    try std.testing.expectEqualStrings("", rmt.rel);
+
+    // prefix must be a path boundary, not a substring
+    try std.testing.expect(staticResolve(&mounts, "/assets2/x") == null);
+    try std.testing.expect(staticResolve(&mounts, "/nope/x") == null);
 }
 
 pub fn destroy(self: *Self) void {
@@ -150,6 +197,8 @@ fn loadPubSub(self: *Self) !void {
         try self.loadMqttPubSub();
     } else if (std.mem.eql(u8, "NATS", pubsub)) {
         try self.loadNatsPubSub();
+    } else if (std.mem.eql(u8, "REDIS", pubsub)) {
+        try self.loadRedisPubSub();
     } else {
         buffer = try std.fmt.bufPrint(buffer, "pubsub is disabled, as pubsub mode is not provided.", .{});
         self.log.debug(buffer);
@@ -503,6 +552,44 @@ fn loadNatsPubSub(self: *Self) !void {
     self.pubSub = ps;
 }
 
+fn loadRedisPubSub(self: *Self) !void {
+    var buffer: []u8 = undefined;
+    buffer = try self.allocator.alloc(u8, 256);
+
+    const hostname = self.config.get("REDIS_HOST");
+    if (std.mem.eql(u8, hostname, "") == true) {
+        buffer = try std.fmt.bufPrint(buffer, "redis pubsub is disabled, as redis host is not provided.", .{});
+        self.log.debug(buffer);
+        return;
+    }
+
+    const port = self.config.get("REDIS_PORT");
+    if (std.mem.eql(u8, port, "") == true) {
+        buffer = try std.fmt.bufPrint(buffer, "redis pubsub is disabled, as redis port is empty.", .{});
+        self.log.err(buffer);
+        return;
+    }
+
+    const user = self.config.get("REDIS_USER");
+    const password = self.config.get("REDIS_PASSWORD");
+    const dbInt = self.config.getAsInt("REDIS_DB") catch 0;
+    const portInt = try self.config.getAsInt("REDIS_PORT");
+
+    self.Redis = root.redisPubSub.create(self, hostname, portInt, user, password, @intCast(dbInt)) catch |err| {
+        buffer = try std.fmt.bufPrint(buffer, "could not connect to Redis pubsub at '{s}:{d}'", .{ hostname, portInt });
+        self.log.err(buffer);
+        self.log.any(err);
+        return;
+    };
+
+    const ps = try self.allocator.create(root.PubSub);
+    ps.* = .{ .ptr = @ptrCast(@alignCast(self.Redis)), .vtable = &root.redisPubSub.vtable };
+    self.pubSub = ps;
+
+    buffer = try std.fmt.bufPrint(buffer, "redis pubsub enabled at '{s}:{d}'", .{ hostname, portInt });
+    self.log.info(buffer);
+}
+
 pub fn natsPullWaitMs(self: *Self) u32 {
     return @intCast(self.config.getAsInt("NATS_MAX_PULL_WAIT") catch 5000);
 }
@@ -777,6 +864,20 @@ pub fn registerZeroClient(self: *Self, service: *zeroClient) !void {
 }
 
 fn loadFileStore(self: *Self) !void {
+    const backend_name = self.config.getOrDefault("FILE_STORE_BACKEND", "local");
+
+    if (std.mem.eql(u8, backend_name, "s3")) {
+        const store = root.filestore.build(self, .s3, .{}) catch |err| {
+            self.log.err("could not initialize s3 file store");
+            self.log.any(err);
+            return;
+        };
+        try self.fileStores.put("s3", store);
+        if (self.defaultFileStore == null) self.defaultFileStore = store;
+        self.log.info("connected to s3 file store");
+        return;
+    }
+
     const root_dir = self.config.getOrDefault("FILE_STORE_ROOT", "");
     if (std.mem.eql(u8, root_dir, "")) {
         self.log.debug("file store is disabled, as FILE_STORE_ROOT is not provided.");
