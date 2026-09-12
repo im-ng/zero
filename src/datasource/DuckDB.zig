@@ -34,28 +34,81 @@ pub const DuckDB = struct {
         c.duckdb_close(&self.db);
     }
 
-    fn run(self: *DuckDB, sql: []const u8, result: *c.duckdb_result) !void {
+    /// Run `sql`. When `args` is non-empty it is treated as a tuple of positional
+    /// `?` bind parameters and a prepared statement is used; otherwise the SQL is
+    /// executed directly. This lets callers pass runtime values safely.
+    fn run(self: *DuckDB, comptime sql: []const u8, args: anytype, result: *c.duckdb_result) !void {
+        const has_args = comptime @typeInfo(@TypeOf(args)) == .@"struct" and
+            @typeInfo(@TypeOf(args)).@"struct".fields.len > 0;
+        if (!has_args) {
+            const cstr = try c.toCStr(self.allocator, sql);
+            defer self.allocator.free(cstr);
+            if (c.duckdb_query(self.conn, cstr, result) != 0) {
+                c.duckdb_destroy_result(result);
+                return error.DuckDBQueryFailed;
+            }
+            return;
+        }
+
+        var ps: c.duckdb_prepared_statement = undefined;
         const cstr = try c.toCStr(self.allocator, sql);
         defer self.allocator.free(cstr);
-        if (c.duckdb_query(self.conn, cstr, result) != 0) {
+        if (c.duckdb_prepare(self.conn, cstr, &ps) != 0) {
+            c.duckdb_destroy_prepare(&ps);
+            return error.DuckDBQueryFailed;
+        }
+        defer c.duckdb_destroy_prepare(&ps);
+
+        inline for (@typeInfo(@TypeOf(args)).@"struct".fields, 0..) |f, i| {
+            try self.bindValue(&ps, @intCast(i + 1), @field(args, f.name));
+        }
+
+        if (c.duckdb_execute_prepared(ps, result) != 0) {
             c.duckdb_destroy_result(result);
             return error.DuckDBQueryFailed;
         }
     }
 
+    fn bindValue(self: *DuckDB, ps: *c.duckdb_prepared_statement, idx: c.idx_t, v: anytype) !void {
+        const T = @TypeOf(v);
+        const info = @typeInfo(T);
+        if (info == .optional) {
+            if (v == null) {
+                if (c.duckdb_bind_null(ps.*, idx) != 0) return error.DuckDBQueryFailed;
+                return;
+            }
+            return self.bindValue(ps, idx, v.?);
+        }
+        switch (info) {
+            .int, .comptime_int => {
+                if (c.duckdb_bind_int64(ps.*, idx, @intCast(v)) != 0) return error.DuckDBQueryFailed;
+            },
+            .float, .comptime_float => {
+                if (c.duckdb_bind_double(ps.*, idx, @floatCast(v)) != 0) return error.DuckDBQueryFailed;
+            },
+            .bool => {
+                if (c.duckdb_bind_boolean(ps.*, idx, v) != 0) return error.DuckDBQueryFailed;
+            },
+            .pointer => |p| if (p.size == .slice and p.child == u8) {
+                const s = try c.toCStr(self.allocator, v);
+                defer self.allocator.free(s);
+                if (c.duckdb_bind_varchar(ps.*, idx, s) != 0) return error.DuckDBQueryFailed;
+            } else @compileError("DuckDB: unsupported bind pointer type " ++ @typeName(T)),
+            else => @compileError("DuckDB: unsupported bind type " ++ @typeName(T)),
+        }
+    }
+
     pub fn queryRow(self: *DuckDB, ctx: *root.Context, comptime Type: type, comptime stmt: []const u8, args: anytype) !?Type {
-        _ = args;
         var result: c.duckdb_result = undefined;
-        try self.run(stmt, &result);
+        try self.run(stmt, args, &result);
         defer c.duckdb_destroy_result(&result);
         if (c.duckdb_row_count(&result) == 0) return null;
         return try mapRow(Type, &result, 0, ctx.allocator);
     }
 
     pub fn queryRows(self: *DuckDB, ctx: *root.Context, comptime Type: type, comptime stmt: []const u8, args: anytype) ![]Type {
-        _ = args;
         var result: c.duckdb_result = undefined;
-        try self.run(stmt, &result);
+        try self.run(stmt, args, &result);
         defer c.duckdb_destroy_result(&result);
         const rows = c.duckdb_row_count(&result);
         const out = try ctx.allocator.alloc(Type, rows);
@@ -81,9 +134,8 @@ pub const DuckDB = struct {
     }
 
     pub fn execWithContext(self: *DuckDB, _: *root.Context, comptime stmt: []const u8, args: anytype) !i64 {
-        _ = args;
         var result: c.duckdb_result = undefined;
-        try self.run(stmt, &result);
+        try self.run(stmt, args, &result);
         c.duckdb_destroy_result(&result);
         return 0;
     }
@@ -100,19 +152,19 @@ pub const DuckDB = struct {
 
     pub fn begin(self: *DuckDB) !void {
         var result: c.duckdb_result = undefined;
-        try self.run("BEGIN TRANSACTION", &result);
+        try self.run("BEGIN TRANSACTION", .{}, &result);
         c.duckdb_destroy_result(&result);
     }
 
     pub fn commit(self: *DuckDB) !void {
         var result: c.duckdb_result = undefined;
-        try self.run("COMMIT", &result);
+        try self.run("COMMIT", .{}, &result);
         c.duckdb_destroy_result(&result);
     }
 
     pub fn rollback(self: *DuckDB) void {
         var result: c.duckdb_result = undefined;
-        self.run("ROLLBACK", &result) catch {};
+        self.run("ROLLBACK", .{}, &result) catch {};
         c.duckdb_destroy_result(&result);
     }
 };
@@ -176,10 +228,10 @@ test "DuckDB in-memory query maps onto a struct" {
 
     {
         var r1: c.duckdb_result = undefined;
-        try db.run("CREATE TABLE users (id INTEGER, name VARCHAR)", &r1);
+        try db.run("CREATE TABLE users (id INTEGER, name VARCHAR)", .{}, &r1);
         c.duckdb_destroy_result(&r1);
         var r2: c.duckdb_result = undefined;
-        try db.run("INSERT INTO users VALUES (1, 'alice'), (2, 'bob')", &r2);
+        try db.run("INSERT INTO users VALUES (1, 'alice'), (2, 'bob')", .{}, &r2);
         c.duckdb_destroy_result(&r2);
     }
 

@@ -46,6 +46,18 @@ pub extern fn duckdb_value_string(result: *duckdb_result, col: idx_t, row: idx_t
 pub extern fn duckdb_value_is_null(result: *duckdb_result, col: idx_t, row: idx_t) bool;
 pub extern fn duckdb_free(ptr: ?*anyopaque) void;
 
+/// `duckdb_prepared_statement` is a pointer type (opaque handle).
+pub const duckdb_prepared_statement = ?*anyopaque;
+
+pub extern fn duckdb_prepare(conn: duckdb_connection, query: [*:0]const u8, out_stmt: *duckdb_prepared_statement) duckdb_state;
+pub extern fn duckdb_destroy_prepare(stmt: *duckdb_prepared_statement) void;
+pub extern fn duckdb_execute_prepared(stmt: duckdb_prepared_statement, out_result: *duckdb_result) duckdb_state;
+pub extern fn duckdb_bind_int64(stmt: duckdb_prepared_statement, idx: idx_t, val: i64) duckdb_state;
+pub extern fn duckdb_bind_double(stmt: duckdb_prepared_statement, idx: idx_t, val: f64) duckdb_state;
+pub extern fn duckdb_bind_boolean(stmt: duckdb_prepared_statement, idx: idx_t, val: bool) duckdb_state;
+pub extern fn duckdb_bind_varchar(stmt: duckdb_prepared_statement, idx: idx_t, val: [*:0]const u8) duckdb_state;
+pub extern fn duckdb_bind_null(stmt: duckdb_prepared_statement, idx: idx_t) duckdb_state;
+
 /// Allocate a null-terminated C string copy of `s` (caller frees with `allocator`).
 pub fn toCStr(allocator: std.mem.Allocator, s: []const u8) ![:0]const u8 {
     return try allocator.dupeZ(u8, s);

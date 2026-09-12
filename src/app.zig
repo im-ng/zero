@@ -995,6 +995,14 @@ pub fn addDuckDB(self: *Self, path: []const u8) !void {
         else
             null,
     );
+
+    const msg = try std.fmt.allocPrint(
+        self.container.bootstrap,
+        "connected to duckdb at '{s}'",
+        .{if (path.len == 0) ":memory:" else path},
+    );
+    defer self.container.bootstrap.free(msg);
+    self.container.log.info(msg);
 }
 
 /// Serves files from an on-disk directory `dir` under the URL `prefix`

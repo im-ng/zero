@@ -233,6 +233,16 @@ LOG_LEVEL=debug
 
 # DuckDB (in-process OLAP SQL; reuses the relational ctx.SQL interface)
 # DUCKDB_PATH=./data/app.db            # DuckDB file; in-memory when unset/empty
+#
+# Or register an in-process DuckDB engine directly in code — no external service:
+#     try app.addDuckDB(":memory:");   // or a file path for a persistent database
+# `ctx.SQL` then targets DuckDB. Queries support positional `?` placeholders with
+# runtime args, bound safely via DuckDB's prepared-statement C API:
+#     _ = try ctx.SQL.exec(ctx,
+#         "INSERT INTO users (id, name) VALUES (?, ?)", .{ id, name });
+#     const u = try ctx.SQL.queryRow(ctx, User,
+#         "SELECT id, name FROM users WHERE id = ?", .{id});
+# Startup logs: "connected to duckdb at ':memory:'" (or the configured file path).
 
 # InfluxDB (time-series, specialized surface ctx.Timeseries; HTTP via zul)
 # INFLUXDB_URL=http://localhost:8086
@@ -821,6 +831,7 @@ See [`examples/zero-proto`](./examples/zero-proto) for a runnable example.
 | Example                 | Description                            |
 | ----------------------- | -------------------------------------- |
 | `zero-basic`            | Minimal HTTP server + datasource demos (DuckDB/InfluxDB/Solr/Cassandra) |
+| `zero-duckdb`           | DuckDB (in-process OLAP SQL) CRUD over a `users` table (REST routes) |
 | `zero-nosql`            | NoSQL CRUD over Cassandra (collection/:key REST routes) |
 | `zero-timeseries`       | Time-series CRUD over InfluxDB (write + Flux query) |
 | `zero-search`           | Search + persistence over Solr (index/get/delete/query) |

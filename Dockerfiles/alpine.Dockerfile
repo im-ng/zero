@@ -79,6 +79,7 @@ COPY --from=builder /opt/zig-0.16.0 /usr/local/zig-0.16.0/
 # RUN ls -alt /usr/local/zig-0.15.2/
 # RUN ls -alth
 
+# COPY ALPINE SPECIFIC DUCKDB LIBRARY FOR ZERO COMPILATION
 COPY /libs/duckdb-alpine.h /usr/local/lib/duckdb.h
 COPY /libs/libduckdb-alpine.so /usr/local/lib/libduckdb.so
 COPY /libs/libduckdb-alpine.so /usr/local/lib/libduckdb.so.1.5
