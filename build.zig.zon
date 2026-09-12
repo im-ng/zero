@@ -15,7 +15,7 @@
         // .dotenv = .{ .path = "../dotenv" },
         // .sqlite = .{ .path = "../zig-sqlite" },
         .zdt = .{
-            .url = "git+https://codeberg.org/FObersteiner/zdt.git?ref=v0.9.5#0db1d32005b7058fea0138e97976cc55b58b403d",
+            .url = "git+https://codeberg.org/FObersteiner/zdt.git#0db1d32005b7058fea0138e97976cc55b58b403d",
             .hash = "zdt-0.9.5-xr0_vK7ZEQDFyjfdx_ds5WMEMEUCfUkOnNqLNyvaA8b9",
         },
         .dotenv = .{
