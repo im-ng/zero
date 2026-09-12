@@ -446,8 +446,22 @@ fn encodeTestMsg(allocator: Allocator) ![]const u8 {
     return w.written();
 }
 
+/// Best-effort: raise RLIMIT_NOFILE so the in-process load generator (hundreds
+/// of concurrent client sockets) plus the embedded server don't exhaust file
+/// descriptors at high concurrency levels. The filestore scenario opens extra
+/// fds per request (save/get/delete) and was the first to fail under the
+/// default ~1024 soft limit; raising it removes that harness-only artifact.
+fn bumpNoFileLimit() void {
+    const want: std.posix.rlim_t = 1_000_000;
+    const cur = std.posix.getrlimit(.NOFILE) catch return;
+    if (cur.cur >= want) return;
+    const lim: std.posix.rlimit = .{ .cur = @min(want, cur.max), .max = cur.max };
+    std.posix.setrlimit(.NOFILE, lim) catch {};
+}
+
 pub fn main(init: std.process.Init) !void {
     utils.setIo(init.io);
+    bumpNoFileLimit();
 
     var duration_s: f64 = 3;
     var quiet = true;
