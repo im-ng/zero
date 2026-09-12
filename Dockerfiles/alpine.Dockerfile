@@ -20,7 +20,7 @@ RUN apk add --no-cache \
     binutils-dev curl-dev elfutils-dev
 
 # Create working directories
-RUN mkdir -p /opt/zig-0.15.1 /opt/zig-0.15.2 /opt/zig-0.16.0 /opt/kcov
+RUN mkdir -p /opt/zig-0.15.1 /opt/zig-0.15.2 /opt/zig-0.16.0 /opt/kcov /opt/libduckdb
 
 # Install Zig 0.15.1
 # RUN wget -q https://ziglang.org/download/0.15.1/zig-x86_64-linux-0.15.1.tar.xz \
@@ -49,6 +49,10 @@ RUN wget -q https://github.com/SimonKagstrom/kcov/archive/refs/heads/master.tar.
     && make install \
     && cd / && rm -rf kcov-master master.tar.gz
 
+RUN wget -q https://install.duckdb.org/v1.5.5/libduckdb-linux-amd64.zip \
+    && unzip libduckdb-linux-amd64.zip -d /opt/libduckdb \
+    && cd / && rm -rf libduckdb-linux-amd64.zip
+
 FROM alpine:latest 
 LABEL maintainer="im-ng"
 LABEL description="Multi-version Zig CI container with kcov coverage support"
@@ -68,12 +72,15 @@ RUN apk add --no-cache \
 
 # Create working directories
 # RUN mkdir -p /usr/local/zig-0.15.2 /app
-RUN mkdir -p /usr/local/zig-0.16.0 /app
+RUN mkdir -p /usr/local/zig-0.16.0 /app /app/libs
 
 COPY --from=builder /opt/kcov* /usr/
 COPY --from=builder /opt/zig-0.16.0 /usr/local/zig-0.16.0/
 # RUN ls -alt /usr/local/zig-0.15.2/
 # RUN ls -alth
+
+COPY --from=builder /opt/libduckdb/duckdb.h /app/libs/duckdb.h
+COPY --from=builder /opt/libduckdb/libduckdb.so /app/libs/libduckdb.so
 
 # Set environment variables for Zig versions
 # ENV ZIG151=/opt/zig/zig-0.15.1
@@ -87,5 +94,6 @@ RUN ln -s /usr/local/zig-0.16.0/zig /usr/local/bin/zig
 # ENV PATH="${ZIG}:${PATH}"
 
 WORKDIR /app
+RUN tree -a
 
 CMD ["/bin/bash"]

@@ -12,7 +12,7 @@ jobs:
   unit_test_and_coverage:
     runs-on: ubuntu-latest
     container:
-      image: imng/zero-kcov:0.3
+      image: imng/zero-kcov:0.3.1
       options: --security-opt seccomp=unconfined
 
     services:
