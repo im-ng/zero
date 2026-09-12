@@ -26,9 +26,12 @@ rootContext: *root.Context = undefined,
 subscriber: std.array_list.Managed(mqSubscriber) = undefined,
 mu: std.Io.Mutex = undefined,
 signal: Atomic(bool) = undefined,
-mqtt: root.mqttz.posix.Client311 = undefined,
-mqttClient: ?[]const u8 = undefined,
-isPubSubSet: bool = false,
+    mqtt: root.mqttz.posix.Client311 = undefined,
+    mqttClient: ?[]const u8 = undefined,
+    isPubSubSet: bool = false,
+    // Connection config retained so the consumer can reconnect after a drop.
+    config: *const mqConfig = undefined,
+    mqtt_initialized: bool = false,
 
 pub fn create(container: *root.container, config: *const mqConfig) !*MQTT {
     const c = try container.allocator.create(MQTT);
@@ -38,48 +41,61 @@ pub fn create(container: *root.container, config: *const mqConfig) !*MQTT {
     c.signal = Atomic(bool).init(true);
     c.container = container;
     c.subscriber = std.array_list.Managed(mqSubscriber).init(container.allocator);
+    c.config = config;
 
+    try c.connect();
+
+    return c;
+}
+
+/// (Re)establish the MQTT connection: tear down any prior client, init a fresh
+/// one, connect, and process the connack. Safe to call repeatedly on reconnect.
+fn connect(self: *Self) !void {
+    if (self.mqtt_initialized) {
+        self.mqtt.deinit();
+    }
+
+    const config = self.config;
     const m = try root.mqttz.posix.Client311.init(utils.io, .{
         .port = config.port,
         .ip = config.ip,
         .host = config.hostname,
-        .allocator = container.allocator,
+        .allocator = self.container.allocator,
         .read_buf_size = 32_000,
         .write_buf_size = 32_000,
         .default_timeout = @as(i32, @intCast(config.connectionTimeout)),
         .default_retries = 3,
     });
-    c.mqtt = m;
+    self.mqtt = m;
+    self.mqtt_initialized = true;
 
-    c.mqtt.connect(.{ .timeout = @as(i32, @intCast(config.connectionTimeout)) }, .{}) catch |err| {
+    self.mqtt.connect(.{ .timeout = @as(i32, @intCast(config.connectionTimeout)) }, .{}) catch |err| {
         return err;
     };
 
-    if (try c.mqtt.readPacket(.{})) |packet| switch (packet) {
+    if (try self.mqtt.readPacket(.{})) |packet| switch (packet) {
         .disconnect => |d| {
-            const msg = try utils.combine(container.allocator, "MQTT disconnected with reason: {s}", .{@tagName(d.reason_code)});
-            container.log.info(msg);
+            const msg = try utils.combine(self.container.allocator, "MQTT disconnected with reason: {s}", .{@tagName(d.reason_code)});
+            self.container.log.info(msg);
         },
         .connack => |cack| {
-            var msg = try utils.combine(container.allocator, "MQTT server connected", .{});
-            container.log.info(msg);
+            var msg = try utils.combine(self.container.allocator, "MQTT server connected", .{});
+            self.container.log.info(msg);
 
-            c.mqttClient = cack.assigned_client_identifier;
+            self.mqttClient = cack.assigned_client_identifier;
 
             if (cack.assigned_client_identifier) |id| {
-                msg = try utils.combine(container.allocator, "MQTT client id {s}", .{id});
-                container.log.info(msg);
+                msg = try utils.combine(self.container.allocator, "MQTT client id {s}", .{id});
+                self.container.log.info(msg);
             }
         },
         else => {
-            const msg = try utils.combine(container.allocator, "could not connect to MQTT at '{s}:{d}'", .{ config.hostname, config.port });
-            container.log.info(msg);
+            const msg = try utils.combine(self.container.allocator, "could not connect to MQTT at '{s}:{d}'", .{ config.hostname, config.port });
+            self.container.log.info(msg);
         },
     };
 
-    c.isPubSubSet = true;
-
-    return c;
+    self.isPubSubSet = true;
 }
 
 pub fn destroy(self: *Self) void {
@@ -116,6 +132,51 @@ fn destroryChildAllocator(self: *Self, ca: *arena) void {
 
 pub fn readPackets(self: *Self, subscriber: mqSubscriber) !void {
     while (self.signal.load(.monotonic)) {
+        // (Re)connect if the previous session dropped.
+        if (!self.mqtt_initialized) {
+            self.connect() catch |err| {
+                self.container.log.Any(self.container.allocator, err);
+                std.Io.sleep(utils.io, std.Io.Duration.fromSeconds(2), .awake) catch {};
+                continue;
+            };
+        }
+
+        // (Re)subscribe this topic and consume its messages.
+        const packet_identifier = try self.mqtt.subscribe(
+            .{},
+            .{ .topics = &.{.{ .filter = subscriber.topic, .qos = .at_most_once } },
+        },
+
+        );
+
+        if (try self.mqtt.readPacket(.{})) |packet| switch (packet) {
+            .disconnect => |d| {
+                const msg = try utils.combine(self.container.allocator, "server disconnected us: {s}", .{@tagName(d.reason_code)});
+                self.container.log.info(msg);
+                self.mqtt_initialized = false;
+                std.Io.sleep(utils.io, std.Io.Duration.fromSeconds(2), .awake) catch {};
+                continue;
+            },
+            .suback => {
+                const msg = try utils.combine(self.container.allocator, "received packet identifier {d}", .{packet_identifier});
+                self.container.log.info(msg);
+            },
+            else => {},
+        };
+
+        self.consume(subscriber) catch |err| {
+            self.container.log.Any(self.container.allocator, err);
+            // Mark disconnected so the next iteration reconnects + resubscribes.
+            self.mqtt_initialized = false;
+            std.Io.sleep(utils.io, std.Io.Duration.fromSeconds(2), .awake) catch {};
+            continue;
+        };
+        break;
+    }
+}
+
+fn consume(self: *Self, subscriber: mqSubscriber) !void {
+    while (self.signal.load(.monotonic)) {
         std.Io.sleep(utils.io, std.Io.Duration.fromSeconds(1), .awake) catch {};
         const packet = try self.mqtt.readPacket(.{ .timeout = 1000 }) orelse {
             continue;
@@ -135,7 +196,7 @@ pub fn readPackets(self: *Self, subscriber: mqSubscriber) !void {
                     _res,
                 ) catch |err| {
                     self.container.log.Any(self.container.allocator, err);
-                    return;
+                    continue;
                 };
                 const context = &ctx;
 
@@ -147,11 +208,28 @@ pub fn readPackets(self: *Self, subscriber: mqSubscriber) !void {
                 // transform packet to client.response using std.json.parse.
                 context.message = .{ .mqtt = &message };
 
-                try subscriber.exec(context);
+                // Retry the handler a few times; on a poison message, dead-letter it
+                // to `<topic>/dlq`.
+                var attempt: u32 = 0;
+                const max_attempts: u32 = 3;
+                const backoff_ms: i64 = 500;
+                while (attempt < max_attempts) : (attempt += 1) {
+                    subscriber.exec(context) catch |err| {
+                        self.container.log.Any(self.container.allocator, err);
+                        if (attempt + 1 < max_attempts) {
+                            std.Io.sleep(utils.io, std.Io.Duration.fromMilliseconds(backoff_ms), .awake) catch {};
+                            continue;
+                        }
+                        const dlq = std.fmt.allocPrint(self.container.allocator, "{s}/dlq", .{publish.topic}) catch break;
+                        defer self.container.allocator.free(dlq);
+                        self.container.metricz.dlq(.{ .topic = publish.topic, .consumer = "dlq" }) catch {};
+                        if (self.Publish(dlq, publish.message)) |_| {} else |dlerr| self.container.log.Any(self.container.allocator, dlerr);
+                        break;
+                    };
+                    break;
+                }
             },
             else => {
-                // self.container.log.err("unexpected packet found");
-                // self.container.log.any(packet);
                 // Do nothing
             },
         }
@@ -159,39 +237,23 @@ pub fn readPackets(self: *Self, subscriber: mqSubscriber) !void {
 }
 
 fn subscriptions(self: *Self) !void {
+    // Spawn one thread per subscriber, then join them all afterwards. Joining
+    // *inside* the loop would block on the first subscriber forever and never
+    // start the rest, so only the first topic would ever be serviced.
+    var threads = try std.ArrayList(std.Thread).initCapacity(self.container.allocator, 0);
+    defer {
+        for (threads.items) |t| t.join();
+    }
+
     for (self.subscriber.items) |client| {
-        const packet_identifier = try self.mqtt.subscribe(
-            .{},
-            .{ .topics = &.{.{
-                .filter = client.topic,
-                .qos = .at_most_once,
-            }} },
-        );
-
-        // persist packet identifier
-        // client.packetIdentifier = packet_identifier;
-
-        if (try self.mqtt.readPacket(.{})) |packet| switch (packet) {
-            .disconnect => |d| {
-                const msg = try utils.combine(self.container.allocator, "server disconnected us: {s}", .{@tagName(d.reason_code)});
-                self.container.log.info(msg);
-                return;
-            },
-            .suback => {
-                const msg = try utils.combine(self.container.allocator, "received packet identifier {d}", .{packet_identifier});
-                self.container.log.info(msg);
-            },
-            else => {
-                // do nothing
-            },
-        };
-
+        // Subscribe + connect + consume all happen inside readPackets so a dropped
+        // session is transparently reconnected and re-subscribed (see connect()).
         std.Io.sleep(utils.io, std.Io.Duration.fromMilliseconds(100), .awake) catch {};
         const thread = Thread.spawn(.{}, Self.readPackets, .{ self, client }) catch |err| {
             self.container.log.Any(self.container.allocator, err);
-            return;
+            continue;
         };
-        thread.join();
+        try threads.append(self.container.allocator, thread);
     }
 }
 

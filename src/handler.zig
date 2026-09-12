@@ -20,6 +20,13 @@ pub const Handler = struct {
     container: *root.container = undefined,
     ctx: *Context = undefined,
     wsClient: wsHandler = undefined,
+
+    /// Inbound bulkhead: count of in-flight requests, capped at `max_concurrent`
+    /// (0 = unlimited). When at capacity, `dispatch` rejects with 503 instead of
+    /// queuing, protecting the server from overload.
+    in_flight: std.atomic.Value(u32) = undefined,
+    max_concurrent: u32 = 0,
+
     pub const WebsocketHandler = wsHandler;
 
     pub fn metric(self: *Handler, duration: f32, method: []const u8, status: u16, path: []const u8) !void {
@@ -51,6 +58,19 @@ pub const Handler = struct {
     }
 
     pub fn dispatch(self: *Handler, action: Responder.Do(*Context), req: *httpz.Request, res: *httpz.Response) !void {
+        // Inbound bulkhead: reject (503) instead of queuing when at capacity.
+        if (self.max_concurrent > 0) {
+            const n = self.in_flight.fetchAdd(1, .monotonic);
+            if (n >= self.max_concurrent) {
+                _ = self.in_flight.fetchSub(1, .monotonic);
+                res.setStatus(.service_unavailable);
+                res.content_type = .JSON;
+                res.body = "{\"error\":\"concurrency limit exceeded\"}";
+                return;
+            }
+            defer _ = self.in_flight.fetchSub(1, .monotonic);
+        }
+
         var ctx = try Context.init(req.arena, self.container, req, res);
         defer req.arena.destroy(&ctx);
 

@@ -62,6 +62,7 @@ pub const migration = @import("migration/migration.zig");
 pub const migrate = @import("migration/migrate.zig");
 
 pub const client = @import("service/client.zig");
+pub const circuit_breaker = @import("service/circuit_breaker.zig");
 pub const Error = @import("http/errors.zig");
 
 pub const scheduler = @import("cronz/scheduler.zig");

@@ -33,12 +33,18 @@ wbuf: [8192]u8 = undefined,
 sub_rdbuf: [8192]u8 = undefined,
 sub_wbuf: [8192]u8 = undefined,
 
-subscriber: std.array_list.Managed(Subscriber) = undefined,
-mu: std.Io.Mutex = undefined,
-signal: Atomic(bool) = undefined,
-thread: std.Thread = undefined,
-started: bool = false,
-isPubSubSet: bool = false,
+    subscriber: std.array_list.Managed(Subscriber) = undefined,
+    mu: std.Io.Mutex = undefined,
+    signal: Atomic(bool) = undefined,
+    thread: std.Thread = undefined,
+    started: bool = false,
+    isPubSubSet: bool = false,
+    // Connection parameters retained so the consumer can reconnect on drop.
+    host: []const u8 = undefined,
+    port: u16 = 0,
+    user: []const u8 = undefined,
+    password: []const u8 = undefined,
+    db: u16 = 0,
 
 pub fn create(
     container: *root.container,
@@ -59,7 +65,24 @@ pub fn create(
     self.mu = .init;
     self.signal = Atomic(bool).init(true);
 
-    const addr = try std.Io.net.IpAddress.parseIp4(host, port);
+    // Retain connection parameters so the consumer can reconnect after a drop.
+    self.host = host;
+    self.port = port;
+    self.user = user;
+    self.password = password;
+    self.db = db;
+
+    try self.connect();
+
+    return self;
+}
+
+/// Establish (or re-establish) the request/response and push connections,
+/// authenticate, and select the target DB. Closes any prior sockets first.
+fn connect(self: *Self) !void {
+    self.disconnect();
+
+    const addr = try std.Io.net.IpAddress.parseIp4(self.host, self.port);
 
     const conn = try addr.connect(utils.io, .{ .mode = .stream });
     self.stream = conn;
@@ -71,24 +94,46 @@ pub fn create(
     self.sub_reader = sconn.reader(utils.io, &self.sub_rdbuf).interface;
     self.sub_writer = sconn.writer(utils.io, &self.sub_wbuf).interface;
 
-    if (password.len > 0) {
-        if (user.len > 0) {
-            try execCommand(&self.writer.?, &.{ "AUTH", user, password });
+    if (self.password.len > 0) {
+        if (self.user.len > 0) {
+            try execCommand(&self.writer.?, &.{ "AUTH", self.user, self.password });
         } else {
-            try execCommand(&self.writer.?, &.{ "AUTH", password });
+            try execCommand(&self.writer.?, &.{ "AUTH", self.password });
         }
         _ = try takeLine(&self.reader.?, self.allocator);
     }
 
-    if (db > 0) {
+    if (self.db > 0) {
         var db_buf: [8]u8 = undefined;
-        const db_str = try std.fmt.bufPrint(&db_buf, "{d}", .{db});
+        const db_str = try std.fmt.bufPrint(&db_buf, "{d}", .{self.db});
         try execCommand(&self.writer.?, &.{ "SELECT", db_str });
         _ = try takeLine(&self.reader.?, self.allocator);
     }
 
     self.isPubSubSet = true;
-    return self;
+}
+
+/// Close the active sockets (best-effort). Safe to call when not connected.
+fn disconnect(self: *Self) void {
+    if (self.stream) |s| s.close(utils.io);
+    if (self.sub_stream) |s| s.close(utils.io);
+    self.stream = null;
+    self.sub_stream = null;
+    self.reader = null;
+    self.writer = null;
+    self.sub_reader = null;
+    self.sub_writer = null;
+}
+
+/// Re-issue SUBSCRIBE for every registered topic on the (re)connected push socket.
+fn resubscribe(self: *Self) void {
+    for (self.subscriber.items) |sub| {
+        var w = self.sub_writer orelse break;
+        encodeCommand(&w, &.{ "SUBSCRIBE", sub.topic }) catch continue;
+        if (readSubFrame(&self.sub_reader.?, self.allocator) catch null) |frame| {
+            freeFrame(frame, self.allocator);
+        }
+    }
 }
 
 pub fn destroy(self: *Self) void {
@@ -139,6 +184,27 @@ pub fn startSubscription(self: *Self) !void {
 
 fn subscriptions(self: *Self) !void {
     while (self.signal.load(.monotonic)) {
+        self.consume() catch |err| {
+            self.container.log.Any(self.allocator, err);
+            // Connection dropped: tear down, reconnect, and re-subscribe, then
+            // resume. This keeps the subscription alive across Redis restarts /
+            // network blips instead of the consumer thread dying permanently.
+            self.disconnect();
+            self.connect() catch |e| {
+                self.container.log.Any(self.allocator, e);
+                std.Io.sleep(utils.io, std.Io.Duration.fromSeconds(2), .awake) catch {};
+                continue;
+            };
+            self.resubscribe();
+            std.Io.sleep(utils.io, std.Io.Duration.fromMilliseconds(500), .awake) catch {};
+            continue;
+        };
+        break;
+    }
+}
+
+fn consume(self: *Self) !void {
+    while (self.signal.load(.monotonic)) {
         const frame = try readSubFrame(&self.sub_reader.?, self.allocator) orelse continue;
         if (std.mem.eql(u8, frame.kind, "message") and frame.elements.len >= 3) {
             self.dispatch(frame.elements[1], frame.elements[2]);
@@ -173,7 +239,26 @@ fn runHook(self: *Self, hook: *const fn (*root.Context) anyerror!void, channel: 
     };
     context.message = .{ .redis = &message };
 
-    hook(context) catch |err| self.container.log.Any(self.allocator, err);
+    // Retry the handler a few times; on a poison message, dead-letter it to
+    // `<channel>.dlq`.
+    var attempt: u32 = 0;
+    const max_attempts: u32 = 3;
+    const backoff_ms: i64 = 500;
+    while (attempt < max_attempts) : (attempt += 1) {
+        hook(context) catch |err| {
+            self.container.log.Any(self.allocator, err);
+            if (attempt + 1 < max_attempts) {
+                std.Io.sleep(utils.io, std.Io.Duration.fromMilliseconds(backoff_ms), .awake) catch {};
+                continue;
+            }
+            const dlq = std.fmt.allocPrint(self.allocator, "{s}.dlq", .{channel}) catch break;
+            defer self.allocator.free(dlq);
+            self.container.metricz.dlq(.{ .topic = channel, .consumer = "dlq" }) catch {};
+            self.Publish(dlq, payload) catch |dlerr| self.container.log.Any(self.allocator, dlerr);
+            break;
+        };
+        break;
+    }
 }
 
 // ---- RESP helpers ----

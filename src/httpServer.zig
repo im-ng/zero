@@ -51,8 +51,37 @@ pub fn create(allocator: std.mem.Allocator, container: *root.container) !*server
         hzs.port = constants.HTTP_PORT;
     }
 
+    // Inbound request timeout: a stalled client must not pin a worker forever.
+    // httpz defaults to effectively-infinite, so cap it (override via config).
+    const default_request_timeout_ms: u32 = 30000;
+    const request_timeout_ms: u32 = blk: {
+        const v = hzs.container.config.getOrDefault("ZERO_REQUEST_TIMEOUT_MS", "");
+        break :blk std.fmt.parseInt(u32, v, 10) catch default_request_timeout_ms;
+    };
+
     hzs.handler = root.handler.Handler{
         .container = hzs.container,
+    };
+
+    // Inbound bulkhead: cap concurrent requests (0 = unlimited). Override with
+    // INBOUND_MAX_CONCURRENT (e.g. 100). Rejected requests get a 503.
+    hzs.handler.in_flight = std.atomic.Value(u32).init(0);
+    hzs.handler.max_concurrent = parseMaxConcurrent(hzs.container.config);
+
+    // httpz pre-allocates `large_buffer_count` request-body buffers of
+    // `large_buffer_size`. When `workers.large_buffer_size` is unset it defaults
+    // to `request.max_body_size` (32MiB here), giving 16 × 32MiB ≈ 512MiB of
+    // resident memory for the whole process lifetime. Cap the pool explicitly so
+    // steady-state RSS stays small; bodies larger than the pooled buffer still
+    // grow on the per-request arena and are freed at request end. Override via
+    // ZERO_HTTP_LARGE_BUFFER_SIZE (bytes) / ZERO_HTTP_LARGE_BUFFER_COUNT.
+    const large_buffer_size: u32 = blk: {
+        const v = hzs.container.config.getAsInt("ZERO_HTTP_LARGE_BUFFER_SIZE") catch 0;
+        break :blk if (v == 0) 1 * 1024 * 1024 else @as(u32, v);
+    };
+    const large_buffer_count: u16 = blk: {
+        const v = hzs.container.config.getAsInt("ZERO_HTTP_LARGE_BUFFER_COUNT") catch 0;
+        break :blk if (v == 0) 16 else v;
     };
 
     hzs.http = try httpz.Server(*root.handler.Handler).init(
@@ -64,6 +93,11 @@ pub fn create(allocator: std.mem.Allocator, container: *root.container) !*server
                 .max_multiform_count = 32,
                 .max_body_size = 32 * 1024 * 1024,
             },
+            .workers = .{
+                .large_buffer_size = large_buffer_size,
+                .large_buffer_count = large_buffer_count,
+            },
+            .timeout = .{ .request = request_timeout_ms },
         },
         &hzs.handler,
     );
@@ -95,7 +129,12 @@ pub fn create(allocator: std.mem.Allocator, container: *root.container) !*server
         .container = container,
     });
 
-    const rlEnabled = hzs.container.config.getAsBool("RATE_LIMIT_ENABLE");
+    // Rate limiter is ON by default; set RATE_LIMIT_ENABLE=false to disable it.
+    // (In-memory limiter; a distributed store would be configured later.)
+    const rlEnabled = blk: {
+        const v = hzs.container.config.getOrDefault("RATE_LIMIT_ENABLE", "");
+        break :blk !std.mem.eql(u8, v, "false");
+    };
     var rlKeyMode: rateLimiter_mw.KeyMode = .ip;
     var rlHeaderName: []const u8 = "X-Forwarded-For";
     const rlKey = hzs.container.config.getOrDefault("RATE_LIMIT_KEY", "ip");
@@ -103,8 +142,12 @@ pub fn create(allocator: std.mem.Allocator, container: *root.container) !*server
         rlKeyMode = .header;
         rlHeaderName = rlKey["header:".len..];
     }
-    const rlMax = hzs.container.config.getAsInt("RATE_LIMIT_MAX") catch 100;
-    const rlWindowS = hzs.container.config.getAsInt("RATE_LIMIT_WINDOW") catch 60;
+    // `getAsInt` returns 0 for a missing key (it never errors), so `catch` alone
+    // won't apply the default. Treat 0 as "use default".
+    const rlMaxRaw = hzs.container.config.getAsInt("RATE_LIMIT_MAX") catch 0;
+    const rlMax: u64 = if (rlMaxRaw == 0) 100 else rlMaxRaw;
+    const rlWindowRaw = hzs.container.config.getAsInt("RATE_LIMIT_WINDOW") catch 0;
+    const rlWindowS: i64 = if (rlWindowRaw == 0) 60 else rlWindowRaw;
     const rateLimitMW = try hzs.http.middleware(rateLimiter_mw, .{
         .allocator = allocator,
         .enabled = rlEnabled,
@@ -257,6 +300,12 @@ fn loadAuthProviderConfig(self: *Self) anyerror!?*authProvider {
             return null;
         },
     }
+}
+
+/// Reads `INBOUND_MAX_CONCURRENT` from config; 0 (or unparsable) means unlimited.
+fn parseMaxConcurrent(config: *root.config) u32 {
+    const v = config.getOrDefault("INBOUND_MAX_CONCURRENT", "0");
+    return std.fmt.parseInt(u32, v, 10) catch 0;
 }
 
 fn registerRefresherThread(self: *Self, provider: *authProvider) !void {

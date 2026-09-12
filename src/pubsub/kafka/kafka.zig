@@ -286,7 +286,28 @@ pub fn readPayload(self: *Self, subscriber: kafkaSubscriber) !void {
             // transform packet to client.response using std.json.parse.
             context.message = .{ .kafka = &msg };
 
-            try subscriber.exec(context);
+            // Retry the handler a few times; on a poison message, dead-letter it to
+            // `<topic>__dlq` before committing the offset so it isn't silently lost.
+            var attempt: u32 = 0;
+            const max_attempts: u32 = 3;
+            const backoff_ms: i64 = 500;
+            while (attempt < max_attempts) : (attempt += 1) {
+                subscriber.exec(context) catch |err| {
+                    self.container.log.Any(self.container.allocator, err);
+                    if (attempt + 1 < max_attempts) {
+                        std.Io.sleep(utils.io, std.Io.Duration.fromMilliseconds(backoff_ms), .awake) catch {};
+                        continue;
+                    }
+                    const dlq = std.fmt.allocPrint(self.container.allocator, "{s}__dlq", .{msg.getTopic()}) catch break;
+                    defer self.container.allocator.free(dlq);
+                    self.container.metricz.dlq(.{ .topic = msg.getTopic(), .consumer = "dlq" }) catch {};
+                    self.publishOnSubject(dlq, msg.getPayload()) catch |dlerr| {
+                        self.container.log.Any(self.container.allocator, dlerr);
+                    };
+                    break;
+                };
+                break;
+            }
 
             self.commitOffset(context, msg);
 
@@ -296,6 +317,16 @@ pub fn readPayload(self: *Self, subscriber: kafkaSubscriber) !void {
 }
 
 fn subscriptions(self: *Self) !void {
+    // Spawn one thread per subscriber, then join them all afterwards. The
+    // consumer loops run until `self.signal` flips, so joining after the loop
+    // is correct — joining *inside* the loop would block on the first
+    // subscriber forever and never start the rest (only the first topic would
+    // ever be serviced).
+    var threads = try std.ArrayList(std.Thread).initCapacity(self.container.allocator, 0);
+    defer {
+        for (threads.items) |t| t.join();
+    }
+
     for (self.subscriber.items) |s| {
         std.Io.sleep(utils.io, std.Io.Duration.fromMilliseconds(100), .awake) catch {};
         const err_code: c_int = rdkafka.rd_kafka_subscribe(self.client, s.topics);
@@ -306,15 +337,15 @@ fn subscriptions(self: *Self) !void {
                 .{rdkafka.rd_kafka_err2str(err_code)},
             );
             self.container.log.err(msg);
-            return;
+            continue;
         }
 
         self.container.log.info("kafka consumer subscribed");
         const thread = Thread.spawn(.{}, Self.readPayload, .{ self, s }) catch |err| {
             self.container.log.any(err);
-            return;
+            continue;
         };
-        thread.join();
+        try threads.append(self.container.allocator, thread);
     }
 }
 

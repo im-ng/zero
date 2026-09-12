@@ -66,16 +66,35 @@ pub fn run(self: *Self) anyerror!void {
 
             const start = util.nowReal();
 
-            m.run(ctx) catch |err| switch (err) {
-                else => {
-                    ctx.err(try self.executionError(ctx, m));
-                    ctx.any(err);
-                },
+            ctx.SQL.begin() catch |err| {
+                ctx.any(err);
+                continue;
+            };
+
+            m.run(ctx) catch |err| {
+                ctx.err(try self.executionError(ctx, m));
+                ctx.any(err);
+                // Do NOT record a failed migration as applied. Roll back whatever the
+                // migration did so a partial apply isn't left behind, and leave it
+                // *unrecorded* so it is retried on the next run instead of being
+                // masked as UP and permanently skipped.
+                ctx.SQL.rollback();
+                continue;
             };
 
             const duration: u64 = @as(u64, @intCast(@divTrunc(start.nanoseconds, 1_000_000)));
 
-            _ = try sqlMigrator.insertMigration(ctx, m, duration);
+            _ = sqlMigrator.insertMigration(ctx, m, duration) catch |err| {
+                ctx.any(err);
+                ctx.SQL.rollback();
+                continue;
+            };
+
+            ctx.SQL.commit() catch |err| {
+                ctx.any(err);
+                ctx.SQL.rollback();
+                continue;
+            };
 
             ctx.info(try self.migrationCompleted(ctx, m));
         }

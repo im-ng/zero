@@ -93,6 +93,14 @@ const endpoints = {
   },
 };
 
+for (const [name, ep] of Object.entries(endpoints)) {
+  // Per-endpoint request counter. k6 v2 reports `.values.count` reliably for
+  // custom Counters (the framework's `Trend` also exposes `count`, but a
+  // `Trend` does not, so we count attempts with a Counter for an accurate
+  // request total).
+  ep.reqs = new Counter('ep_' + name + '_reqs');
+}
+
 function run(name) {
   const ep = endpoints[name];
   const params = {};
@@ -105,6 +113,7 @@ function run(name) {
     ? http.post(BASE + ep.url, ep.body, params)
     : http.get(BASE + ep.url, params);
 
+  ep.reqs.add(1);
   ep.trend.add(res.timings.duration);
   if (res.status !== 200) ep.fails.add(1);
   check(res, { 'status 200': (r) => r.status === 200 });
@@ -168,9 +177,11 @@ export function handleSummary(data) {
   let totalFails = 0;
 
   for (const [name, ep] of Object.entries(endpoints)) {
-    const m = (data.metrics[ep.trend.name] && data.metrics[ep.trend.name].values) || {};
+    const rq = (data.metrics[ep.reqs.name] && data.metrics[ep.reqs.name].values) || {};
     const f = (data.metrics[ep.fails.name] && data.metrics[ep.fails.name].values) || {};
-    const n = m.n || 0;
+    const m = (data.metrics[ep.trend.name] && data.metrics[ep.trend.name].values) || {};
+    // k6 v2: Counter exposes `count`; Trend percentiles are keyed `p(95)`/`p(99)`.
+    const n = rq.count || 0;
     const fails = f.count || 0;
     totalReqs += n;
     totalFails += fails;
@@ -178,10 +189,10 @@ export function handleSummary(data) {
       endpoint: name,
       reqs: n,
       fails: fails,
-      rps: n > 0 ? (n / (durSec * VUS)) * VUS / VUS : 0, // placeholder; real rps below
+      rps: n > 0 ? n / durSec : 0,
       avg_ms: m.avg || 0,
-      p95_ms: m.p95 || 0,
-      p99_ms: m.p99 || 0,
+      p95_ms: m['p(95)'] || 0,
+      p99_ms: m['p(99)'] || 0,
       max_ms: m.max || 0,
     });
   }

@@ -18,6 +18,9 @@ pub const Job: type = struct {
     month: std.AutoHashMap(u8, bool) = undefined,
     dayOfWeek: std.AutoHashMap(u8, bool) = undefined,
     exec: *const fn (*root.Context) anyerror!void = undefined,
+    /// Serializes runs of the same job so an overrunning tick can't stack on
+    /// top of itself.
+    mu: std.Io.Mutex = .init,
 
     pub fn create(allocator: std.mem.Allocator) !Job {
         var j = Job{};
@@ -30,7 +33,7 @@ pub const Job: type = struct {
         return j;
     }
 
-    pub fn run(self: Job, context: ?*Context) void {
+    pub fn run(self: Job, context: ?*Context) !void {
         if (context == null) {
             return;
         }
@@ -42,7 +45,7 @@ pub const Job: type = struct {
         root.cronz.current_job_name = self.name;
         self.exec(ctx) catch |err| {
             ctx.any(err);
-            return;
+            return err;
         };
         root.cronz.current_job_name = null;
 

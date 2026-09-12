@@ -11,6 +11,12 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
+    // // `protobuf` is re-exported by `zero` (the generated `*.pb.zig` structs do
+    // // `@import("zero").protobuf`). It must be wired into the module so the
+    // // `zero-proto` (and any protobuf) example compiles.
+    const protobuf = b.dependency("protobuf", .{});
+    module.addImport("protobuf", protobuf.module("protobuf"));
+
     const pgz = b.dependency("pg", .{ .openssl = true });
     module.addImport("pg", pgz.module("pg"));
 
@@ -44,7 +50,7 @@ pub fn build(b: *std.Build) void {
     const nats = b.dependency("nats", .{});
     module.addImport("nats", nats.module("nats"));
 
-    const protobuf = b.dependency("protobuf", .{});
+    // const protobuf = b.dependency("protobuf", .{});
     // module.addImport("protobuf", protobuf.module("protobuf"));
 
     const graphql = b.dependency("graphql", .{});

@@ -486,6 +486,14 @@ pub fn main(init: std.process.Init) !void {
     var gpa: std.heap.DebugAllocator(.{}) = .init;
     const allocator: Allocator = if (debug_alloc) gpa.allocator() else std.heap.page_allocator;
 
+    // A benchmark harness measures raw server throughput, not the inbound rate
+    // limiter. The limiter is ON by default (100 req/window per client IP); with
+    // the bench driving all traffic from 127.0.0.1 it would reject ~all requests
+    // with 429. Disable it for the run unless the caller opts in via env.
+    if (init.environ_map.get("RATE_LIMIT_ENABLE") == null) {
+        try init.environ_map.put("RATE_LIMIT_ENABLE", "false");
+    }
+
     const app = try App.new(allocator, init.environ_map);
     if (quiet) app.log.logLevel = 99;
 

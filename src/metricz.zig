@@ -31,6 +31,10 @@ pub const PubSubPublisherSuccessLabel = struct { topic: []const u8 };
 pub const PubSubSubscriberTotalLabel = struct { topic: []const u8, consumer: []const u8 };
 pub const PubSubSubscriberSuccessLabel = struct { topic: []const u8, consumer: []const u8 };
 
+// failure metrics labels
+pub const CircuitOpenLabel = struct { name: []const u8 };
+pub const PubSubDLQLabel = PubSubSubscriberTotalLabel;
+
 // Type-erased handle for an app-registered custom metric. The metrics library
 // has no global registry, so custom metrics are kept in a dynamic list and
 // written alongside the built-ins. `ptr` points at the heap-allocated metric
@@ -173,6 +177,17 @@ PubSubSubscriberSuccess: metrics.CounterVec(
     PubSubSubscriberSuccessLabel,
 ).Impl,
 
+// failure metrics
+CircuitOpenTotal: metrics.CounterVec(
+    u64,
+    CircuitOpenLabel,
+).Impl,
+
+PubSubDLQTotal: metrics.CounterVec(
+    u64,
+    PubSubDLQLabel,
+).Impl,
+
 pub fn info(self: *Self, labels: AppInfoLabel) !void {
     return self.Info.incr(labels);
 }
@@ -221,6 +236,14 @@ pub fn SubscriberSuccess(self: *Self, labels: PubSubSubscriberSuccessLabel) !voi
     return self.PubSubSubscriberSuccess.incr(labels);
 }
 
+pub fn circuitOpen(self: *Self, labels: CircuitOpenLabel) !void {
+    return self.CircuitOpenTotal.incr(labels);
+}
+
+pub fn dlq(self: *Self, labels: PubSubDLQLabel) !void {
+    return self.PubSubDLQTotal.incr(labels);
+}
+
 /// Registers a custom counter with label struct `L` and returns the handle so
 /// the caller can `incr(label)` / `incrBy(label, n)` from request handlers.
 /// Appears on `/metrics` automatically.
@@ -265,6 +288,12 @@ pub fn initialize(allocator: Allocator, comptime _: metrics.RegistryOpts) !*metr
     const m = try allocator.create(metricz);
     errdefer allocator.destroy(m);
 
+    // `allocator.create` returns uninitialized memory; the struct's default
+    // field initializers are NOT applied, so `mut` must be initialized here.
+    // Without this, `writeRaw`'s `self.mut.lockUncancelable` futex-waits
+    // forever on garbage state (manifesting as a hung `/metrics`).
+    m.mut = .init;
+
     m.Info = try metrics.CounterVec(u32, AppInfoLabel).Impl
         .init(allocator, utils.io, "app_info", .{ .help = "Info for app_name, app_version and framework_version." });
 
@@ -300,6 +329,12 @@ pub fn initialize(allocator: Allocator, comptime _: metrics.RegistryOpts) !*metr
 
     m.PubSubSubscriberSuccess = try metrics.CounterVec(u64, PubSubSubscriberSuccessLabel).Impl
         .init(allocator, utils.io, "app_pubsub_subscriber_success_count", .{ .help = "Successful pubsub subscriber counter per topic per consumer group" });
+
+    m.CircuitOpenTotal = try metrics.CounterVec(u64, CircuitOpenLabel).Impl
+        .init(allocator, utils.io, "app_circuit_open_total", .{ .help = "Total circuit-breaker open events by downstream name." });
+
+    m.PubSubDLQTotal = try metrics.CounterVec(u64, PubSubDLQLabel).Impl
+        .init(allocator, utils.io, "app_pubsub_dlq_total", .{ .help = "Total dead-lettered messages per topic per consumer." });
 
     m.custom = std.array_list.Managed(CustomMetric).init(allocator);
 
@@ -339,6 +374,9 @@ pub fn writeRaw(self: *Self, allocator: Allocator, writer: *std.Io.Writer) !void
     try self.PubSubPublisherSuccess.write(writer);
     try self.PubSubSubscriberTotal.write(writer);
     try self.PubSubSubscriberSuccess.write(writer);
+
+    try self.CircuitOpenTotal.write(writer);
+    try self.PubSubDLQTotal.write(writer);
 
     self.mut.lockUncancelable(utils.io);
     defer self.mut.unlock(utils.io);

@@ -31,6 +31,16 @@ pub const ServiceOptions = struct {
     auth: ?OutboundAuth = null,
     circuitBreaker: ?CircuitBreakerConfig = null,
     rateLimiter: ?RateLimiterConfig = null,
+    /// Per-request connect timeout (ms) for this downstream. Bounds how long the
+    /// outbound call waits to establish the TCP/TLS connection before failing.
+    /// `null` (default) means no connect timeout.
+    timeout_ms: ?u64 = null,
+    /// Maximum number of additional attempts for transient failures (network
+    /// errors and 5xx). 0 (default) = no retry.
+    max_retries: ?u32 = null,
+    /// Base backoff in ms between retries; the actual delay is
+    /// `retry_base_ms * attempt` (linear). 0 = no backoff.
+    retry_base_ms: ?i64 = null,
 };
 
 container: *root.container = undefined,
@@ -45,12 +55,21 @@ auth: ?OutboundAuth = null,
 breaker: ?CircuitBreaker = null,
 /// Per-service fixed-window rate limiter (null = disabled).
 limiter: ?RateLimiter = null,
+    /// Optional connect timeout (ms) applied to outbound requests to this service.
+    timeout_ms: ?u64 = null,
+    /// Max additional attempts for transient failures (network errors + 5xx).
+    max_retries: ?u32 = null,
+    /// Base backoff (ms) between retries; delay = base * attempt (linear).
+    retry_base_ms: ?i64 = null,
 
 /// OAuth token cache (runtime, managed by `ensureOAuthToken`).
 oauth_token: ?[]const u8 = null,
 oauth_expires_at: i128 = 0,
 oauth_mutex: std.Io.Mutex = .init,
-oauth_client: ?zul.http.Client = null,
+    oauth_client: ?zul.http.Client = null,
+    /// Circuit breaker guarding the OAuth token endpoint (separate from the
+    /// downstream breaker so a flapping IdP can't pin every outbound call).
+    oauth_breaker: ?CircuitBreaker = null,
 
 pub fn create(
     ct: *root.container,
@@ -78,6 +97,9 @@ pub fn createWithConfig(
     c.container = ct;
     c.url = _url;
     c.auth = opts.auth;
+    c.timeout_ms = opts.timeout_ms;
+    c.max_retries = opts.max_retries;
+    c.retry_base_ms = opts.retry_base_ms;
 
     if (opts.circuitBreaker) |cb| {
         c.breaker = CircuitBreaker.init(cb);
@@ -86,6 +108,8 @@ pub fn createWithConfig(
     if (opts.rateLimiter) |rl| {
         c.limiter = RateLimiter.init(rl);
     }
+
+    c.oauth_breaker = CircuitBreaker.init(CircuitBreakerConfig{});
 
     return c;
 }
@@ -173,6 +197,21 @@ pub fn fromEnv(ct: *root.container, name: []const u8) ServiceOptions {
 
     opts.circuitBreaker = cb;
 
+    const to = cfgGet(ct, prefix, "TIMEOUT_MS");
+    if (!std.mem.eql(u8, to, "")) {
+        opts.timeout_ms = std.fmt.parseUnsigned(u64, to, 10) catch null;
+    }
+
+    const mr = cfgGet(ct, prefix, "MAX_RETRIES");
+    if (!std.mem.eql(u8, mr, "")) {
+        opts.max_retries = std.fmt.parseUnsigned(u32, mr, 10) catch null;
+    }
+
+    const rb = cfgGet(ct, prefix, "RETRY_BASE_MS");
+    if (!std.mem.eql(u8, rb, "")) {
+        opts.retry_base_ms = std.fmt.parseInt(i64, rb, 10) catch null;
+    }
+
     const rl_limit = cfgGet(ct, prefix, "RATE_LIMIT");
     const rl_window = cfgGet(ct, prefix, "RATE_LIMIT_WINDOW_MS");
 
@@ -252,6 +291,11 @@ pub fn log(
     buffer = try std.fmt.bufPrint(buffer, "{s}\t {d} {d}ms {s} {s}", .{ traceId, status, duration, method, path });
     ctx.info(buffer);
 }
+
+    fn retryBackoffMs(self: *Self, attempt: u32) i64 {
+        const base = self.retry_base_ms orelse 100;
+        return @as(i64, base) * @as(i64, attempt);
+    }
 
 pub fn get(
     self: *Self,
@@ -353,72 +397,112 @@ fn createAndSendRequest(
         );
     }
 
-    var req = try self.client.allocRequest(ctx.allocator, absoluteURL);
-    defer req.deinit();
+    var req: zul.http.Request = undefined;
+    var req_owned = false;
+    defer if (req_owned) req.deinit();
 
-    req.method = method;
+    var res: zul.http.Response = undefined;
+    var replayed: bool = false;
+    var attempt: u32 = 0;
+    var elapsed: f32 = 0;
+    const max_attempts = self.max_retries orelse 0;
 
-    // Propagate the inbound correlation id onto the outbound request so the call
-    // chain stays traceable across services. No-op when none is present (e.g. a
-    // cron-driven or standalone call).
-    if (ctx.request.header("X-Correlation-ID")) |cid| {
-        try req.header("X-Correlation-ID", cid);
-    }
+    while (true) {
+        if (req_owned) req.deinit();
+        req_owned = false;
+        req = try self.client.allocRequest(ctx.allocator, absoluteURL);
+        req_owned = true;
 
-    if (queryParams) |params| {
-        var iterator = params.iterator();
-        while (iterator.next()) |param| {
-            try req.query(param.key_ptr.*, param.value_ptr.*);
+        req.method = method;
+
+        // Propagate the inbound correlation id onto the outbound request so the
+        // call chain stays traceable across services. No-op when none is present.
+        if (ctx.request.header("X-Correlation-ID")) |cid| {
+            try req.header("X-Correlation-ID", cid);
         }
-    }
 
-    if (headers) |custom_headers| {
-        var iterator = custom_headers.iterator();
-        while (iterator.next()) |header| {
-            try req.header(header.key_ptr.*, header.value_ptr.*);
+        if (queryParams) |params| {
+            var iterator = params.iterator();
+            while (iterator.next()) |param| {
+                try req.query(param.key_ptr.*, param.value_ptr.*);
+            }
         }
-    }
 
-    if (payload) |body| {
-        req.body(body);
-    }
+        if (headers) |custom_headers| {
+            var iterator = custom_headers.iterator();
+            while (iterator.next()) |header| {
+                try req.header(header.key_ptr.*, header.value_ptr.*);
+            }
+        }
 
-    // circuit breaker: fail fast if open
-    if (self.breaker) |*b| {
-        b.before() catch return ClientError.CircuitOpen;
-    }
+        if (payload) |body| {
+            req.body(body);
+        }
 
-    // downstream rate limiter: fail fast if the per-service window is exhausted
-    if (self.limiter) |*rl| {
-        rl.before() catch return ClientError.RateLimited;
-    }
+        // circuit breaker: fail fast if open
+        if (self.breaker) |*b| {
+            b.before() catch {
+                self.container.metricz.circuitOpen(.{ .name = self.name }) catch {};
+                return ClientError.CircuitOpen;
+            };
+        }
 
-    // attach outbound auth (api key / basic / oauth bearer)
-    self.applyAuth(ctx, &req) catch |e| return switch (e) {
-        error.OAuthTokenFetchFailed => ClientError.OAuthTokenFetchFailed,
-        else => e,
-    };
+        // downstream rate limiter: fail fast if the per-service window is exhausted
+        if (self.limiter) |*rl| {
+            rl.before() catch return ClientError.RateLimited;
+        }
 
-    const start = utils.nowMonotonic();
+        // attach outbound auth (api key / basic / oauth bearer)
+        self.applyAuth(ctx, &req) catch |e| return switch (e) {
+            error.OAuthTokenFetchFailed => ClientError.OAuthTokenFetchFailed,
+            else => e,
+        };
 
-    var res = req.getResponse(.{}) catch |e| {
-        if (self.breaker) |*b| b.recordFailure();
-        return e;
-    };
+        const start = utils.nowMonotonic();
 
-    const elapsed: f32 = utils.elapsedMs(start);
-
-    switch (res.status) { //expand more
-        404 => {
-            return ClientError.EntityNotFound;
-        },
-        500...600 => {
+        res = req.getResponse(.{}) catch |e| {
             if (self.breaker) |*b| b.recordFailure();
-            return ClientError.ServiceNotReachable;
-        },
-        else => {
-            if (self.breaker) |*b| b.recordSuccess();
-        },
+            if (attempt < max_attempts) {
+                attempt += 1;
+                const backoff = self.retryBackoffMs(attempt);
+                std.Io.sleep(utils.io, std.Io.Duration.fromMilliseconds(backoff), .awake) catch {};
+                continue;
+            }
+            return e;
+        };
+
+        elapsed = utils.elapsedMs(start);
+
+        switch (res.status) {
+            404 => {
+                return ClientError.EntityNotFound;
+            },
+            500...600 => {
+                if (self.breaker) |*b| b.recordFailure();
+                if (attempt < max_attempts) {
+                    attempt += 1;
+                    const backoff = self.retryBackoffMs(attempt);
+                    std.Io.sleep(utils.io, std.Io.Duration.fromMilliseconds(backoff), .awake) catch {};
+                    continue;
+                }
+                return ClientError.ServiceNotReachable;
+            },
+            else => {
+                if (self.breaker) |*b| b.recordSuccess();
+            },
+        }
+
+        // OAuth token may have expired mid-flight: force a refresh and replay once.
+        if (res.status == 401 and self.auth != null and self.auth.?.mode == .oauth and !replayed) {
+            replayed = true;
+            self.oauth_token = null;
+            if (self.breaker) |*b| b.recordFailure();
+            const backoff = self.retryBackoffMs(attempt + 1);
+            std.Io.sleep(utils.io, std.Io.Duration.fromMilliseconds(backoff), .awake) catch {};
+            continue;
+        }
+
+        break;
     }
 
     const responseTraceID = res.header("X-Correlation-ID");
@@ -487,6 +571,16 @@ fn ensureOAuthToken(self: *Self) ![]const u8 {
 
     const cfg = self.auth.?.oauth orelse return error.OAuthTokenFetchFailed;
 
+    // Circuit breaker guards the token endpoint so a flapping IdP can't pin every
+    // outbound call in a retry storm. If it's open, fall back to the last cached
+    // token (possibly stale) so in-flight requests can still be attempted.
+    if (self.oauth_breaker) |*b| {
+        b.before() catch {
+            if (self.oauth_token) |token| return token;
+            return error.OAuthTokenFetchFailed;
+        };
+    }
+
     if (self.oauth_client == null) {
         self.oauth_client = zul.http.Client.init(utils.io, self.container.allocator);
     }
@@ -544,10 +638,23 @@ fn ensureOAuthToken(self: *Self) ![]const u8 {
 
     req.body(body.items);
 
-    var res = try req.getResponse(.{});
+    var res = req.getResponse(.{}) catch |e| {
+        // Network failure: fall back to the last cached token if we have one,
+        // otherwise surface the error.
+        if (self.oauth_breaker) |*b| b.recordFailure();
+        if (self.oauth_token) |token| return token;
+        return e;
+    };
+
     if (res.status < 200 or res.status > 299) {
+        if (self.oauth_breaker) |*b| b.recordFailure();
+        // Refresh failed: reuse the previously cached token (stale is better than
+        // hard-failing the outbound call) if one is available.
+        if (self.oauth_token) |token| return token;
         return error.OAuthTokenFetchFailed;
     }
+
+    if (self.oauth_breaker) |*b| b.recordSuccess();
 
     const TokenResponse = struct {
         access_token: []const u8,

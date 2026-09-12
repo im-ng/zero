@@ -24,6 +24,32 @@ pub const HealthCheck = struct {
     check: *const fn (*container) anyerror!void,
 };
 
+/// Probes SQL connectivity for the health endpoint. For Postgres it acquires and
+/// releases a pooled connection (failing the check if the pool is exhausted or
+/// the server is unreachable); for SQLite the store is local, so a successful
+/// load already implies health.
+fn sqlHealthCheck(c: *container) anyerror!void {
+    if (c.SQL) |sql| {
+        const conn = try sql.sql.acquire();
+        sql.sql.release(conn);
+        return;
+    }
+    if (c.SQLite) |_| {
+        return;
+    }
+    return error.DatasourceUnavailable;
+}
+
+/// Probes Redis connectivity for the health endpoint via a PING round-trip.
+fn redisHealthCheck(c: *container) anyerror!void {
+    if (c.redis) |*r| {
+        const pong = try r.sendAlloc([]u8, c.allocator, .{"ping"});
+        c.allocator.free(pong);
+        return;
+    }
+    return error.RedisUnavailable;
+}
+
 /// A user-registered static-file mount: URL `prefix` → on-disk `dir`.
 pub const StaticMount = struct {
     prefix: []const u8,
@@ -687,6 +713,11 @@ fn loadRedis(self: *Self) !void {
     buffer = try std.fmt.bufPrint(buffer, "connected to redis at '{s}:{d}' on database {d}", .{ hostname, portInt, dbInt });
     self.log.info(buffer);
 
+    // Auto-register a Redis dependency health probe so /.well-known/health
+    // reflects cache availability without a manual check.
+    try self.healthChecks.append(.{ .name = "redis", .check = redisHealthCheck });
+
+
     // expose Redis through the unified KV store interface (default store)
     const redisStore = try root.kvstore.build(self, .redis, .{});
     try self.kvStores.put("cache", redisStore);
@@ -783,7 +814,7 @@ fn loadSQL(self: *Self) !void {
         }
     }
 
-    var options: pgz.Pool.Opts = .{
+    const options: pgz.Pool.Opts = .{
         .size = 10,
         .connect = .{
             .host = hostname,
@@ -804,12 +835,17 @@ fn loadSQL(self: *Self) !void {
         self.log.err(buffer);
         std.process.exit(1);
     };
-    self.SQL.?.options = &options;
-
     // reference metricz
     self.SQL.?.metricz = self.metricz;
 
-    self.datasource = root.Datasource.init(self.SQL, .postgres);
+    self.datasource = root.Datasource.init(
+        self.SQL,
+        .postgres,
+        if (self.config.getAsBool("SQL_CIRCUIT_BREAKER_ENABLE"))
+            root.circuit_breaker.CircuitBreaker.init(.{})
+        else
+            null,
+    );
 
     buffer = try std.fmt.bufPrint(buffer, "generating database connection string for {s}", .{dialect});
     self.log.info(buffer);
@@ -817,6 +853,10 @@ fn loadSQL(self: *Self) !void {
     buffer = try self.allocator.alloc(u8, 256);
     buffer = try std.fmt.bufPrint(buffer, "connected to {s} user to {s} database at '{s}:{s}'", .{ user, db, hostname, port });
     self.log.info(buffer);
+
+    // Auto-register a SQL dependency health probe so /.well-known/health reflects
+    // DB availability without the user adding a manual check.
+    try self.healthChecks.append(.{ .name = "sql", .check = sqlHealthCheck });
 }
 
 fn loadSQLite(self: *Self) !void {
@@ -853,10 +893,20 @@ fn loadSQLite(self: *Self) !void {
         self.metricz,
     );
 
-    self.datasource = root.Datasource.init(self.SQLite, .sqlite);
+    self.datasource = root.Datasource.init(
+        self.SQLite,
+        .sqlite,
+        if (self.config.getAsBool("SQL_CIRCUIT_BREAKER_ENABLE"))
+            root.circuit_breaker.CircuitBreaker.init(.{})
+        else
+            null,
+    );
 
     buffer = try std.fmt.bufPrint(buffer, "connected to sqlite at '{s}'", .{dbPath});
     self.log.info(buffer);
+
+    // Auto-register a SQL (sqlite) dependency health probe.
+    try self.healthChecks.append(.{ .name = "sql", .check = sqlHealthCheck });
 }
 
 pub fn registerZeroClient(self: *Self, service: *zeroClient) !void {

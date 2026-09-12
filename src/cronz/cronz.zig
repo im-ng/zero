@@ -78,31 +78,47 @@ pub fn runSchedules(self: *Self, _: i128) void {
     while (self.running.load(.monotonic)) {
         std.Io.sleep(utils.io, std.Io.Duration.fromSeconds(1), .awake) catch {};
         const now = dateTime.nowUTC(utils.io);
-        for (self.jobs.items) |j| {
+        for (self.jobs.items) |*j| {
             if (j.compare(now)) {
-                const ca = self.prepareChildAllocator() catch |err| {
-                    self.container.log.any(err);
-                    continue;
-                };
-                defer self.destroryChildAllocator(ca);
+                // Serialize runs of the same job so an overrunning tick can't stack
+                // on top of itself.
+                j.mu.lock(utils.io) catch {};
+                defer j.mu.unlock(utils.io);
 
-                var ctx = try Context.init(
-                    ca.allocator(),
-                    self.container,
-                    self.request,
-                    self.response,
-                );
+                var attempt: u32 = 0;
+                const max_attempts: u32 = 3;
+                const backoff_ms: i64 = 500;
+                var ok = false;
 
-                const thread = Thread.spawn(
-                    .{},
-                    job.run,
-                    .{ j, &ctx },
-                ) catch |err| {
-                    self.container.log.any(err);
-                    return;
-                };
+                while (attempt < max_attempts) : (attempt += 1) {
+                    const ca = self.prepareChildAllocator() catch |err| {
+                        self.container.log.any(err);
+                        break;
+                    };
+                    defer self.destroryChildAllocator(ca);
 
-                thread.join();
+                    var ctx = try Context.init(
+                        ca.allocator(),
+                        self.container,
+                        self.request,
+                        self.response,
+                    );
+
+                    job.run(j.*, &ctx) catch |err| {
+                        self.container.log.any(err);
+                        if (attempt + 1 < max_attempts) {
+                            std.Io.sleep(utils.io, std.Io.Duration.fromMilliseconds(backoff_ms), .awake) catch {};
+                            continue;
+                        }
+                        break;
+                    };
+                    ok = true;
+                    break;
+                }
+
+                if (!ok) {
+                    self.container.log.err("cron job failed after retries");
+                }
             }
         }
     }

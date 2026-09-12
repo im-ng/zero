@@ -155,9 +155,26 @@ fn dispatch(self: *Self, subject: []const u8, payload: []const u8, hook: *const 
     };
     context.message = .{ .nats = &message };
 
-    hook(context) catch |err| {
-        self.container.log.Any(self.container.allocator, err);
-    };
+    // Retry the handler a few times; on a poison message, dead-letter it to
+    // `<subject>.dlq`.
+    var attempt: u32 = 0;
+    const max_attempts: u32 = 3;
+    const backoff_ms: i64 = 500;
+    while (attempt < max_attempts) : (attempt += 1) {
+        hook(context) catch |err| {
+            self.container.log.Any(self.allocator, err);
+            if (attempt + 1 < max_attempts) {
+                std.Io.sleep(utils.io, std.Io.Duration.fromMilliseconds(backoff_ms), .awake) catch {};
+                continue;
+            }
+            const dlq = std.fmt.allocPrint(self.allocator, "{s}.dlq", .{subject}) catch break;
+            defer self.allocator.free(dlq);
+            self.container.metricz.dlq(.{ .topic = subject, .consumer = "dlq" }) catch {};
+            self.Publish(dlq, payload) catch |dlerr| self.container.log.Any(self.allocator, dlerr);
+            break;
+        };
+        break;
+    }
 }
 
 fn readJetStream(self: *Self, sub: natsSubscriber) !void {
@@ -170,7 +187,10 @@ fn readJetStream(self: *Self, sub: natsSubscriber) !void {
                 continue;
             }
             self.container.log.Any(self.container.allocator, err);
-            return;
+            // The nats client reconnects automatically; pause and retry rather than
+            // abandoning the stream consumer.
+            std.Io.sleep(utils.io, std.Io.Duration.fromSeconds(2), .awake) catch {};
+            continue;
         };
         defer result.deinit();
 
@@ -187,12 +207,21 @@ fn readJetStream(self: *Self, sub: natsSubscriber) !void {
 }
 
 fn readCore(self: *Self, sub: natsSubscriber) !void {
-    const s = try self.client.subscribeSync(sub.topic);
     while (self.signal.load(.monotonic)) {
-        std.Io.sleep(utils.io, std.Io.Duration.fromMilliseconds(100), .awake) catch {};
-        const msg = s.tryNextMsg() orelse continue;
-        self.dispatch(msg.subject, msg.data, sub.exec);
-        msg.deinit();
+        // (Re)subscribe; on a dropped connection the subscription is gone so we
+        // re-establish it each time the inner loop bails out on error.
+        const s = self.client.subscribeSync(sub.topic) catch |err| {
+            self.container.log.Any(self.container.allocator, err);
+            std.Io.sleep(utils.io, std.Io.Duration.fromSeconds(2), .awake) catch {};
+            continue;
+        };
+        while (self.signal.load(.monotonic)) {
+            std.Io.sleep(utils.io, std.Io.Duration.fromMilliseconds(100), .awake) catch {};
+            const msg = s.tryNextMsg() orelse continue;
+            self.dispatch(msg.subject, msg.data, sub.exec);
+            msg.deinit();
+        }
+        break;
     }
 }
 

@@ -3,6 +3,7 @@ const root = @import("../zero.zig");
 
 const SQLite = root.SQLite;
 const SQL = root.SQL;
+const service = root.circuit_breaker;
 
 /// Supported database dialects. Resolved at runtime from `DB_DIALECT` so the
 /// same `Interface` handle works for any configured backend without the caller
@@ -70,6 +71,18 @@ pub const MockBackend = struct {
     pub fn rowsAffected(self: *MockBackend) usize {
         return self.affected;
     }
+
+    pub fn begin(self: *MockBackend) !void {
+        _ = self;
+    }
+
+    pub fn commit(self: *MockBackend) !void {
+        _ = self;
+    }
+
+    pub fn rollback(self: *MockBackend) void {
+        _ = self;
+    }
 };
 
 /// Unified, type-erased datasource interface.
@@ -81,18 +94,23 @@ pub const MockBackend = struct {
 pub const Interface = struct {
     ptr: *anyopaque,
     dialect: Dialect,
+    /// Optional circuit breaker guarding all backend calls. When `null`, calls
+    /// pass straight through (no trip/fail-fast). Enable via `SQL_CIRCUIT_BREAKER_ENABLE`.
+    breaker: ?service.CircuitBreaker = null,
 
     /// Build an interface handle from a concrete backend pointer.
-    pub fn init(ptr: anytype, dialect: Dialect) Interface {
+    pub fn init(ptr: anytype, dialect: Dialect, breaker: ?service.CircuitBreaker) Interface {
         return .{
             .ptr = @ptrCast(@alignCast(ptr)),
             .dialect = dialect,
+            .breaker = breaker,
         };
     }
 
     /// Single typed row. `null` when the query matches no rows.
-    pub fn queryRow(self: Interface, ctx: *root.Context, comptime Type: type, comptime stmt: []const u8, args: anytype) !?Type {
-        return switch (self.dialect) {
+    pub fn queryRow(    self: *Interface, ctx: *root.Context, comptime Type: type, comptime stmt: []const u8, args: anytype) !?Type {
+        if (self.breaker) |*b| b.before() catch return error.CircuitOpen;
+        const r = switch (self.dialect) {
             .sqlite => @as(*SQLite, @ptrCast(@alignCast(self.ptr))).queryRow(
                 ctx,
                 Type,
@@ -111,12 +129,18 @@ pub const Interface = struct {
                 stmt,
                 args,
             ),
+        } catch |e| {
+            if (self.breaker) |*b| b.recordFailure();
+            return e;
         };
+        if (self.breaker) |*b| b.recordSuccess();
+        return r;
     }
 
     /// Multiple typed rows, owned by the connection allocator.
-    pub fn queryRows(self: Interface, ctx: *root.Context, comptime Type: type, comptime stmt: []const u8, args: anytype) ![]Type {
-        return switch (self.dialect) {
+    pub fn queryRows(    self: *Interface, ctx: *root.Context, comptime Type: type, comptime stmt: []const u8, args: anytype) ![]Type {
+        if (self.breaker) |*b| b.before() catch return error.CircuitOpen;
+        const r = switch (self.dialect) {
             .sqlite => @as(*SQLite, @ptrCast(@alignCast(self.ptr))).queryRows(
                 ctx,
                 Type,
@@ -135,12 +159,18 @@ pub const Interface = struct {
                 stmt,
                 args,
             ),
+        } catch |e| {
+            if (self.breaker) |*b| b.recordFailure();
+            return e;
         };
+        if (self.breaker) |*b| b.recordSuccess();
+        return r;
     }
 
     /// Single typed row with a request context (tracing / metrics).
-    pub fn queryRowContext(self: Interface, ctx: *root.Context, comptime Type: type, comptime stmt: []const u8, args: anytype) !?Type {
-        return switch (self.dialect) {
+    pub fn queryRowContext(    self: *Interface, ctx: *root.Context, comptime Type: type, comptime stmt: []const u8, args: anytype) !?Type {
+        if (self.breaker) |*b| b.before() catch return error.CircuitOpen;
+        const r = switch (self.dialect) {
             .sqlite => @as(*SQLite, @ptrCast(@alignCast(self.ptr))).queryRowContext(
                 ctx,
                 Type,
@@ -159,12 +189,18 @@ pub const Interface = struct {
                 stmt,
                 args,
             ),
+        } catch |e| {
+            if (self.breaker) |*b| b.recordFailure();
+            return e;
         };
+        if (self.breaker) |*b| b.recordSuccess();
+        return r;
     }
 
     /// Multiple typed rows with a request context.
-    pub fn queryRowsContext(self: Interface, ctx: *root.Context, comptime Type: type, comptime stmt: []const u8, args: anytype) ![]Type {
-        return switch (self.dialect) {
+    pub fn queryRowsContext(    self: *Interface, ctx: *root.Context, comptime Type: type, comptime stmt: []const u8, args: anytype) ![]Type {
+        if (self.breaker) |*b| b.before() catch return error.CircuitOpen;
+        const r = switch (self.dialect) {
             .sqlite => @as(*SQLite, @ptrCast(@alignCast(self.ptr))).queryRowsContext(
                 ctx,
                 Type,
@@ -183,12 +219,18 @@ pub const Interface = struct {
                 stmt,
                 args,
             ),
+        } catch |e| {
+            if (self.breaker) |*b| b.recordFailure();
+            return e;
         };
+        if (self.breaker) |*b| b.recordSuccess();
+        return r;
     }
 
     /// Append typed rows into `list`. Returns the number of rows appended.
-    pub fn selectSlice(self: Interface, ctx: *root.Context, comptime Type: type, list: *std.array_list.Managed(Type), comptime stmt: []const u8, args: anytype) !i64 {
-        return switch (self.dialect) {
+    pub fn selectSlice(    self: *Interface, ctx: *root.Context, comptime Type: type, list: *std.array_list.Managed(Type), comptime stmt: []const u8, args: anytype) !i64 {
+        if (self.breaker) |*b| b.before() catch return error.CircuitOpen;
+        const r = switch (self.dialect) {
             .sqlite => @as(*SQLite, @ptrCast(@alignCast(self.ptr))).selectSlice(
                 ctx,
                 Type,
@@ -210,12 +252,18 @@ pub const Interface = struct {
                 stmt,
                 args,
             ),
+        } catch |e| {
+            if (self.breaker) |*b| b.recordFailure();
+            return e;
         };
+        if (self.breaker) |*b| b.recordSuccess();
+        return r;
     }
 
     /// Execute a write statement (INSERT/UPDATE/DELETE). Returns the last insert id.
-    pub fn exec(self: Interface, ctx: *root.Context, comptime stmt: []const u8, args: anytype) !i64 {
-        return switch (self.dialect) {
+    pub fn exec(    self: *Interface, ctx: *root.Context, comptime stmt: []const u8, args: anytype) !i64 {
+        if (self.breaker) |*b| b.before() catch return error.CircuitOpen;
+        const r = switch (self.dialect) {
             .sqlite => @as(*SQLite, @ptrCast(@alignCast(self.ptr))).execWithContext(
                 ctx,
                 stmt,
@@ -231,7 +279,12 @@ pub const Interface = struct {
                 stmt,
                 args,
             ),
+        } catch |e| {
+            if (self.breaker) |*b| b.recordFailure();
+            return e;
         };
+        if (self.breaker) |*b| b.recordSuccess();
+        return r;
     }
 
     /// Last inserted row id (after an INSERT).
@@ -252,13 +305,40 @@ pub const Interface = struct {
         };
     }
 
+    /// Begin a transaction on the underlying backend.
+    pub fn begin(self: Interface) !void {
+        return switch (self.dialect) {
+            .sqlite => @as(*SQLite, @ptrCast(@alignCast(self.ptr))).begin(),
+            .postgres => @as(*SQL, @ptrCast(@alignCast(self.ptr))).begin(),
+            .mock => @as(*MockBackend, @ptrCast(@alignCast(self.ptr))).begin(),
+        };
+    }
+
+    /// Commit the active transaction.
+    pub fn commit(self: Interface) !void {
+        return switch (self.dialect) {
+            .sqlite => @as(*SQLite, @ptrCast(@alignCast(self.ptr))).commit(),
+            .postgres => @as(*SQL, @ptrCast(@alignCast(self.ptr))).commit(),
+            .mock => @as(*MockBackend, @ptrCast(@alignCast(self.ptr))).commit(),
+        };
+    }
+
+    /// Roll back the active transaction (best-effort).
+    pub fn rollback(self: Interface) void {
+        switch (self.dialect) {
+            .sqlite => @as(*SQLite, @ptrCast(@alignCast(self.ptr))).rollback(),
+            .postgres => @as(*SQL, @ptrCast(@alignCast(self.ptr))).rollback(),
+            .mock => @as(*MockBackend, @ptrCast(@alignCast(self.ptr))).rollback(),
+        }
+    }
+
     /// `query` alias — single typed row.
-    pub fn query(self: Interface, ctx: *root.Context, comptime Type: type, comptime stmt: []const u8, args: anytype) !?Type {
+    pub fn query(    self: *Interface, ctx: *root.Context, comptime Type: type, comptime stmt: []const u8, args: anytype) !?Type {
         return self.queryRow(ctx, Type, stmt, args);
     }
 
     /// `select` alias — single typed row.
-    pub fn select(self: Interface, ctx: *root.Context, comptime Type: type, comptime stmt: []const u8, args: anytype) !?Type {
+    pub fn select(    self: *Interface, ctx: *root.Context, comptime Type: type, comptime stmt: []const u8, args: anytype) !?Type {
         return self.queryRow(ctx, Type, stmt, args);
     }
 };

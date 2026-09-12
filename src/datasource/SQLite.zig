@@ -104,3 +104,19 @@ pub fn rowsAffected(self: *SQLite) usize {
 pub fn lastInsertRowID(self: *SQLite) i64 {
     return self.db.getLastInsertRowID();
 }
+
+/// Begin a transaction. SQLite auto-commits each statement, so an explicit
+/// BEGIN/COMMIT pair is required to make a set of writes atomic.
+pub fn begin(self: *SQLite) !void {
+    try self.db.exec("BEGIN", .{}, .{});
+}
+
+/// Commit the active transaction.
+pub fn commit(self: *SQLite) !void {
+    try self.db.exec("COMMIT", .{}, .{});
+}
+
+/// Roll back the active transaction (best-effort).
+pub fn rollback(self: *SQLite) void {
+    self.db.exec("ROLLBACK", .{}, .{}) catch {};
+}

@@ -1,5 +1,6 @@
 const std = @import("std");
 const root = @import("../zero.zig");
+const service = root.circuit_breaker;
 
 /// Backend implementations available through the `KVStore` interface.
 pub const Backend = enum {
@@ -23,57 +24,88 @@ pub const Options = struct {
 pub const KVStore = struct {
     ptr: *anyopaque,
     backend: Backend,
+    /// Optional circuit breaker guarding all backend calls. When `null`, calls
+    /// pass straight through. Enable via `CACHE_CIRCUIT_BREAKER_ENABLE`.
+    breaker: ?service.CircuitBreaker = null,
 
-    pub fn init(ptr: anytype, backend: Backend) KVStore {
+    pub fn init(ptr: anytype, backend: Backend, breaker: ?service.CircuitBreaker) KVStore {
         return .{
             .ptr = @ptrCast(@alignCast(ptr)),
             .backend = backend,
+            .breaker = breaker,
         };
     }
 
     pub fn get(self: *KVStore, ctx: *root.Context, key: []const u8) !?[]const u8 {
-        return switch (self.backend) {
+        if (self.breaker) |*b| b.before() catch return error.CircuitOpen;
+        const r = switch (self.backend) {
             .redis => @as(*redis.KVRedis, @ptrCast(@alignCast(self.ptr))).get(ctx, key),
             .nats_kv => @as(*natskv.KVNats, @ptrCast(@alignCast(self.ptr))).get(ctx, key),
             .memory => @as(*memory.KVMemory, @ptrCast(@alignCast(self.ptr))).get(ctx, key),
             .sqlite => @as(*sqlite.KVSQLite, @ptrCast(@alignCast(self.ptr))).get(ctx, key),
+        } catch |e| {
+            if (self.breaker) |*b| b.recordFailure();
+            return e;
         };
+        if (self.breaker) |*b| b.recordSuccess();
+        return r;
     }
 
     pub fn set(self: *KVStore, ctx: *root.Context, key: []const u8, value: []const u8) !void {
-        return switch (self.backend) {
+        if (self.breaker) |*b| b.before() catch return error.CircuitOpen;
+        (switch (self.backend) {
             .redis => @as(*redis.KVRedis, @ptrCast(@alignCast(self.ptr))).set(ctx, key, value),
             .nats_kv => @as(*natskv.KVNats, @ptrCast(@alignCast(self.ptr))).set(ctx, key, value),
             .memory => @as(*memory.KVMemory, @ptrCast(@alignCast(self.ptr))).set(ctx, key, value),
             .sqlite => @as(*sqlite.KVSQLite, @ptrCast(@alignCast(self.ptr))).set(ctx, key, value),
+        }) catch |e| {
+            if (self.breaker) |*b| b.recordFailure();
+            return e;
         };
+        if (self.breaker) |*b| b.recordSuccess();
     }
 
     pub fn delete(self: *KVStore, ctx: *root.Context, key: []const u8) !void {
-        return switch (self.backend) {
+        if (self.breaker) |*b| b.before() catch return error.CircuitOpen;
+        (switch (self.backend) {
             .redis => @as(*redis.KVRedis, @ptrCast(@alignCast(self.ptr))).delete(ctx, key),
             .nats_kv => @as(*natskv.KVNats, @ptrCast(@alignCast(self.ptr))).delete(ctx, key),
             .memory => @as(*memory.KVMemory, @ptrCast(@alignCast(self.ptr))).delete(ctx, key),
             .sqlite => @as(*sqlite.KVSQLite, @ptrCast(@alignCast(self.ptr))).delete(ctx, key),
+        }) catch |e| {
+            if (self.breaker) |*b| b.recordFailure();
+            return e;
         };
+        if (self.breaker) |*b| b.recordSuccess();
     }
 
     pub fn exists(self: *KVStore, ctx: *root.Context, key: []const u8) !bool {
-        return switch (self.backend) {
+        if (self.breaker) |*b| b.before() catch return error.CircuitOpen;
+        const r = switch (self.backend) {
             .redis => @as(*redis.KVRedis, @ptrCast(@alignCast(self.ptr))).exists(ctx, key),
             .nats_kv => @as(*natskv.KVNats, @ptrCast(@alignCast(self.ptr))).exists(ctx, key),
             .memory => @as(*memory.KVMemory, @ptrCast(@alignCast(self.ptr))).exists(ctx, key),
             .sqlite => @as(*sqlite.KVSQLite, @ptrCast(@alignCast(self.ptr))).exists(ctx, key),
+        } catch |e| {
+            if (self.breaker) |*b| b.recordFailure();
+            return e;
         };
+        if (self.breaker) |*b| b.recordSuccess();
+        return r;
     }
 
     pub fn expire(self: *KVStore, ctx: *root.Context, key: []const u8, ms: i64) !void {
-        return switch (self.backend) {
+        if (self.breaker) |*b| b.before() catch return error.CircuitOpen;
+        (switch (self.backend) {
             .redis => @as(*redis.KVRedis, @ptrCast(@alignCast(self.ptr))).expire(ctx, key, ms),
             .nats_kv => @as(*natskv.KVNats, @ptrCast(@alignCast(self.ptr))).expire(ctx, key, ms),
             .memory => @as(*memory.KVMemory, @ptrCast(@alignCast(self.ptr))).expire(ctx, key, ms),
             .sqlite => @as(*sqlite.KVSQLite, @ptrCast(@alignCast(self.ptr))).expire(ctx, key, ms),
+        }) catch |e| {
+            if (self.breaker) |*b| b.recordFailure();
+            return e;
         };
+        if (self.breaker) |*b| b.recordSuccess();
     }
 };
 
@@ -84,16 +116,23 @@ pub fn build(container: *root.container, backend: Backend, opts: Options) !*KVSt
     const store = try container.allocator.create(KVStore);
     errdefer container.allocator.destroy(store);
 
+    // Optional circuit breaker guarding cache operations (fails fast when the
+    // backend is unhealthy). Opt-in via CACHE_CIRCUIT_BREAKER_ENABLE.
+    const breaker: ?service.CircuitBreaker = if (container.config.getAsBool("CACHE_CIRCUIT_BREAKER_ENABLE"))
+        service.CircuitBreaker.init(.{})
+    else
+        null;
+
     switch (backend) {
         .redis => {
             if (container.redis == null) return error.RedisNotConfigured;
             const b = try container.allocator.create(redis.KVRedis);
             b.* = .{ .client = container.redis.? };
-            store.* = KVStore.init(b, .redis);
+            store.* = KVStore.init(b, .redis, breaker);
         },
         .memory => {
             const b = try memory.KVMemory.create(container.allocator);
-            store.* = KVStore.init(b, .memory);
+            store.* = KVStore.init(b, .memory, breaker);
         },
         .nats_kv => {
             if (container.Nats == null or container.Nats.?.js == null) {
@@ -102,13 +141,13 @@ pub fn build(container: *root.container, backend: Backend, opts: Options) !*KVSt
             const kv = try container.Nats.?.js.?.createOrUpdateKeyValue(.{ .bucket = opts.bucket });
             const b = try container.allocator.create(natskv.KVNats);
             b.* = .{ .kv = kv };
-            store.* = KVStore.init(b, .nats_kv);
+            store.* = KVStore.init(b, .nats_kv, breaker);
         },
         .sqlite => {
             if (container.SQLite == null) return error.SQLiteNotConfigured;
             const b = try container.allocator.create(sqlite.KVSQLite);
             b.* = .{ .db = container.SQLite.?, .allocator = container.allocator };
-            store.* = KVStore.init(b, .sqlite);
+            store.* = KVStore.init(b, .sqlite, breaker);
         },
     }
     return store;

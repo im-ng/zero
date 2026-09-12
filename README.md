@@ -47,6 +47,7 @@ _*An `experimental` support has been added to achieve the zig version 0.16 addit
 - [Quick Start](#quick-start)
 - [Project Structure](#project-structure)
 - [Configuration](#configuration)
+- [Resilience](#resilience)
 - [Metrics](#metrics)
 - [Examples](#examples)
 - [GraphQL](#graphql)
@@ -243,6 +244,58 @@ LOG_LEVEL=debug
 
 All keys are commented out by default; features activate only when uncommented. See [config.md](./config.md) for the full list.
 
+## Resilience
+
+Zero ships a set of **opt-in** resilience features. All are off by default (or
+preserve prior behavior), so existing apps are unaffected; enable them via
+`configs/.env`.
+
+### Inbound request timeout & bulkhead
+
+- **Request timeout** — a stalled client can't pin a worker forever. Default
+  `30s`; override with `ZERO_REQUEST_TIMEOUT_MS` (read from `configs/.env`).
+- **Bulkhead** — cap concurrent in-flight requests. When `INBOUND_MAX_CONCURRENT`
+  is exceeded the server replies `503` instead of queuing, protecting it from
+  overload:
+
+  ```bash
+  INBOUND_MAX_CONCURRENT=100          # 0 = unlimited (default)
+  ```
+
+### Circuit breakers for datasources
+
+The SQL datasource (`ctx.SQL`) and the KV/Redis cache (`ctx.KV`) can each be
+guarded by a circuit breaker — the same `circuit_breaker.zig` used for outbound
+services. After `failure_threshold` (5) consecutive failures the breaker trips
+*open* and calls fail fast with `error.CircuitOpen` until the cooldown (`30s`)
+elapses and a half-open trial succeeds:
+
+```bash
+SQL_CIRCUIT_BREAKER_ENABLE=true      # guard Postgres/SQLite queries & writes
+CACHE_CIRCUIT_BREAKER_ENABLE=true    # guard KV store (Redis) operations
+```
+
+### Pub/Sub reconnect & dead-letter
+
+MQTT, NATS, Redis and Kafka consumers transparently **reconnect and
+re-subscribe** after a broker drop, and **retry** handler failures
+(3× / 500ms) before dead-lettering a poison message to a `<topic>/dlq`
+(Kafka `__dlq`). Dead-letter events are counted on the metrics endpoint.
+
+### Structured logging
+
+Set `LOG_FORMAT=json` to emit one JSON object per log line
+(`{"ts":...,"level":...,"msg":...}`) for log pipelines:
+
+```bash
+LOG_FORMAT=json
+```
+
+### Config required-keys
+
+- **Required keys** — fail fast at startup if any listed key is missing/empty:
+  `REQUIRED_CONFIG_KEYS=DB_HOST,DB_NAME`.
+
 ## KV Store
 
 `zero` exposes a unified, type-erased KV store so handlers don't depend on a
@@ -437,6 +490,18 @@ Set the port via `configs/.env`:
 ```bash
 METRICS_PORT=2121
 ```
+
+#### Failure metrics
+
+Two counters track resilience events and are exposed in the same Prometheus
+format:
+
+- `app_circuit_open_total{name="<downstream>"}` — outbound circuit-breaker open events.
+- `app_pubsub_dlq_total{topic="...",consumer="dlq"}` — messages dead-lettered by a pub/sub consumer (after retries are exhausted).
+
+These let you alert on downstream outages (`circuit_open_total` climbing) and on
+poison messages (`dlq_total` > 0) without adding instrumentation to your
+handlers.
 
 ### Remote log level (pull from a central service)
 
