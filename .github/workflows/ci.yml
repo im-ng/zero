@@ -12,7 +12,7 @@ jobs:
   unit_test_and_coverage:
     runs-on: ubuntu-latest
     container:
-      image: imng/zero-kcov:0.3.1
+      image: imng/zero-kcov:0.3.2
       options: --security-opt seccomp=unconfined
 
     services:
@@ -43,6 +43,7 @@ jobs:
 
       - name: Run tests with coverage
         run: |
+          ls -alth /usr/local/lib
           mkdir -p ~/.cache/zig/tmp
           zig build test -Dcoverage --summary all
 

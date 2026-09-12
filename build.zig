@@ -71,8 +71,8 @@ pub fn build(b: *std.Build) void {
         .weak = true,
     });
 
-    module.addLibraryPath(b.path("libs"));
-    module.addRPath(b.path("libs"));
+    module.addLibraryPath(.{ .cwd_relative = "/usr/local/lib" });
+    module.addRPath(.{ .cwd_relative = "/usr/local/lib" });
     module.linkSystemLibrary("duckdb", .{ .weak = true });
 
     const test_module = b.createModule(.{
@@ -101,8 +101,8 @@ pub fn build(b: *std.Build) void {
     }
     test_module.linkSystemLibrary("rdkafka", .{ .weak = true });
 
-    test_module.addLibraryPath(b.path("libs"));
-    test_module.addRPath(b.path("libs"));
+    test_module.addLibraryPath(.{ .cwd_relative = "/usr/local/lib" });
+    test_module.addRPath(.{ .cwd_relative = "/usr/local/lib" });
     test_module.linkSystemLibrary("duckdb", .{ .weak = true });
 
     const unit_tests = b.addTest(.{
@@ -138,8 +138,8 @@ pub fn build(b: *std.Build) void {
     }
     integration_module.linkSystemLibrary("rdkafka", .{ .weak = true });
 
-    integration_module.addLibraryPath(b.path("libs"));
-    integration_module.addRPath(b.path("libs"));
+    integration_module.addLibraryPath(.{ .cwd_relative = "/usr/local/lib" });
+    integration_module.addRPath(.{ .cwd_relative = "/usr/local/lib" });
     integration_module.linkSystemLibrary("duckdb", .{ .weak = true });
 
     const integration_tests = b.addTest(.{
@@ -181,8 +181,8 @@ pub fn build(b: *std.Build) void {
         .weak = true,
     });
 
-    validation_module.addLibraryPath(b.path("libs"));
-    validation_module.addRPath(b.path("libs"));
+    validation_module.addLibraryPath(.{ .cwd_relative = "/usr/local/lib" });
+    validation_module.addRPath(.{ .cwd_relative = "/usr/local/lib" });
     validation_module.linkSystemLibrary("duckdb", .{ .weak = true });
 
     const validation_tests = b.addTest(.{
@@ -224,8 +224,8 @@ pub fn build(b: *std.Build) void {
         .weak = true,
     });
 
-    bench_module.addLibraryPath(b.path("libs"));
-    bench_module.addRPath(b.path("libs"));
+    bench_module.addLibraryPath(.{ .cwd_relative = "/usr/local/lib" });
+    bench_module.addRPath(.{ .cwd_relative = "/usr/local/lib" });
     bench_module.linkSystemLibrary("duckdb", .{ .weak = true });
 
     const bench_exe = b.addExecutable(.{
