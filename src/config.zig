@@ -79,6 +79,22 @@ pub fn get(self: *Self, key: []const u8) []const u8 {
     return self.getOrDefault(key, "");
 }
 
+/// Fails (error.MissingRequiredConfig) if any of `keys` is unset or empty.
+/// Call during bootstrap to fail fast on misconfiguration.
+pub fn enforceRequired(self: *Self, keys: []const []const u8) !void {
+    for (keys) |k| {
+        if (self.get(k).len == 0) {
+            const msg = try utils.combine(
+                self.allocator,
+                "required config key missing or empty: {s}",
+                .{k},
+            );
+            self.log.err(msg);
+            return error.MissingRequiredConfig;
+        }
+    }
+}
+
 pub fn getAsInt(self: *Self, key: []const u8) !u16 {
     const zero: []const u8 = "0";
     const value: []const u8 = self.getOrDefault(key, zero);

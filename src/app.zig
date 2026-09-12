@@ -35,6 +35,7 @@ metriczThread: ?std.Thread = null,
 migrations: *root.migration = undefined,
 cronz: ?*root.cronz = null,
 startupHook: ?*const fn (*root.Context) anyerror!void = null,
+reload_thread: ?std.Thread = null,
 
 var hServer: ?*root.httpServer = undefined;
 var AppInstance: *Self = undefined;
@@ -44,6 +45,13 @@ pub fn new(allocator: std.mem.Allocator, em: *EnvMap) !*App {
     errdefer allocator.destroy(app);
 
     const log = try root.logger.create(allocator);
+
+    // structured logging: LOG_FORMAT=json emits one JSON object per log line.
+    // Set this before config creation so early logs (e.g. "Loaded config from file")
+    // are also emitted as JSON.
+    if (em.get("LOG_FORMAT") != null and std.mem.eql(u8, em.get("LOG_FORMAT").?, "json")) {
+        root.logger.setJsonFormat(true);
+    }
 
     const config = try root.config.create(.{
         .allocator = allocator,
@@ -56,6 +64,11 @@ pub fn new(allocator: std.mem.Allocator, em: *EnvMap) !*App {
         "LOG_LEVEL",
         "info",
     ));
+
+    // also honor LOG_FORMAT when it is supplied via a loaded config file
+    if (std.mem.eql(u8, config.getOrDefault("LOG_FORMAT", "text"), "json")) {
+        root.logger.setJsonFormat(true);
+    }
 
     const container = try root.container.create(.{
         .allocator = allocator,
@@ -85,6 +98,22 @@ pub fn new(allocator: std.mem.Allocator, em: *EnvMap) !*App {
     try app.printPid();
 
     AppInstance = app;
+
+    // Fail-fast on missing required config keys. Opt-in via REQUIRED_CONFIG_KEYS
+    // (comma-separated). Empty by default so existing apps/tests are unaffected.
+    const reqKeys = app.config.getOrDefault("REQUIRED_CONFIG_KEYS", "");
+    if (reqKeys.len > 0) {
+        var it = std.mem.splitScalar(u8, reqKeys, ',');
+        while (it.next()) |k| {
+            const trimmed = std.mem.trim(u8, k, " ");
+            if (trimmed.len == 0) continue;
+            if (app.config.get(trimmed).len == 0) {
+                const msg = try utils.combine(app.container.allocator, "required config key missing or empty: {s}", .{trimmed});
+                app.log.err(msg);
+                return error.MissingRequiredConfig;
+            }
+        }
+    }
 
     return app;
 }

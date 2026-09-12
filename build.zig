@@ -45,7 +45,7 @@ pub fn build(b: *std.Build) void {
     module.addImport("nats", nats.module("nats"));
 
     const protobuf = b.dependency("protobuf", .{});
-    module.addImport("protobuf", protobuf.module("protobuf"));
+    // module.addImport("protobuf", protobuf.module("protobuf"));
 
     const graphql = b.dependency("graphql", .{});
     module.addImport("graphql", graphql.module("graphql"));

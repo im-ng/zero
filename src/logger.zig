@@ -6,20 +6,71 @@ const utils = root.utils;
 
 var mutex: std.Io.Mutex = .init;
 
+/// When true, log lines are emitted as JSON (`{"ts":...,"level":...,"msg":...}`)
+/// instead of the default colorized text. Controlled by `LOG_FORMAT=json`.
+var json_format: bool = false;
+
 allocator: std.mem.Allocator,
 logLevel: u8 = undefined,
 
+/// Formats `value` into `buf`, using `{s}` for string-like values and `{any}`
+/// otherwise, so non-string payloads (e.g. structs) still serialize in JSON mode.
+fn formatArg(buf: []u8, value: anytype) []const u8 {
+    const T = @TypeOf(value);
+    switch (@typeInfo(T)) {
+        .pointer => |ptr| {
+            if (ptr.size == .slice and ptr.child == u8) return std.fmt.bufPrint(buf, "{s}", .{value}) catch "";
+        },
+        .array => |arr| {
+            if (arr.child == u8) return std.fmt.bufPrint(buf, "{s}", .{value}) catch "";
+        },
+        else => {},
+    }
+    return std.fmt.bufPrint(buf, "{any}", .{value}) catch "";
+}
+
+/// Writes `s` to `out` with JSON string escaping (`"`, `\`, control chars).
+fn writeJsonEscaped(out: std.Io.File, s: []const u8) !void {
+    for (s) |c| {
+        switch (c) {
+            '"' => try out.writeStreamingAll(utils.io, "\\\""),
+            '\\' => try out.writeStreamingAll(utils.io, "\\\\"),
+            '\n' => try out.writeStreamingAll(utils.io, "\\n"),
+            '\r' => try out.writeStreamingAll(utils.io, "\\r"),
+            '\t' => try out.writeStreamingAll(utils.io, "\\t"),
+            else => try out.writeStreamingAll(utils.io, &.{c}),
+        }
+    }
+}
+
 pub fn custom(
-    comptime _: std.log.Level,
+    comptime level: std.log.Level,
     comptime _: @TypeOf(.EnumLiteral),
     comptime format: []const u8,
     args: anytype,
 ) void {
     mutex.lock(utils.io) catch {};
     defer mutex.unlock(utils.io);
+    const out = std.Io.File.stdout();
+
+    if (json_format) {
+        var ts_buf: [64]u8 = undefined;
+        const ts = if (args.len >= 1) formatArg(&ts_buf, args[0]) else "";
+        var msg_buf: [2048]u8 = undefined;
+        const msg = if (args.len >= 2) formatArg(&msg_buf, args[1]) else "";
+
+        out.writeStreamingAll(utils.io, "{\"ts\":\"") catch return;
+        writeJsonEscaped(out, ts) catch return;
+        out.writeStreamingAll(utils.io, "\",\"level\":\"") catch return;
+        out.writeStreamingAll(utils.io, @tagName(level)) catch return;
+        out.writeStreamingAll(utils.io, "\",\"msg\":\"") catch return;
+        writeJsonEscaped(out, msg) catch return;
+        out.writeStreamingAll(utils.io, "\"}\n") catch return;
+        return;
+    }
+
     var buf: [2048]u8 = undefined;
     const msg = std.fmt.bufPrint(&buf, format, args) catch "log format error";
-    const out = std.Io.File.stdout();
     out.writeStreamingAll(utils.io, msg) catch return;
 }
 
@@ -31,6 +82,12 @@ pub fn create(allocator: std.mem.Allocator) !*logger {
     l.logLevel = 1;
 
     return l;
+}
+
+/// Enables (`true`) or disables (`false`) JSON structured log output. Driven by
+/// the `LOG_FORMAT=json` app config (see `app.zig`).
+pub fn setJsonFormat(enabled: bool) void {
+    json_format = enabled;
 }
 
 pub fn deinit(self: *Self) void {
