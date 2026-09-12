@@ -106,6 +106,7 @@ const Query = struct {
 fn helloResolver(_: *Context, _: void) anyerror![]const u8 {
     return "hello";
 }
+
 var query_root = Query{ .hello = helloResolver };
 
 pub fn filestoreGet(ctx: *Context) !void {
