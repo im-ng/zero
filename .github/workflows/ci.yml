@@ -12,7 +12,7 @@ jobs:
   unit_test_and_coverage:
     runs-on: ubuntu-latest
     container:
-      image: imng/zero-kcov:0.3.3
+      image: imng/zero-kcov:0.3.4
       options: --security-opt seccomp=unconfined
 
     services:
@@ -105,7 +105,7 @@ jobs:
   bench_regression:
     runs-on: ubuntu-latest
     container:
-      image: imng/zero-kcov:0.3.3
+      image: imng/zero-kcov:0.3.4
       options: --security-opt seccomp=unconfined
 
     steps:
