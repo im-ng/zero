@@ -91,6 +91,16 @@ const endpoints = {
     trend: new Trend('ep_filestore_duration'),
     fails: new Counter('ep_filestore_fails'),
   },
+  // Round-1 datasources (DuckDB works in-memory; ts/solr/nosql need their
+  // backend env vars configured on the bench server or they return 501).
+  duckdb_write: { url: '/duckdb/write', method: 'GET', trend: new Trend('ep_duckdb_write_duration'), fails: new Counter('ep_duckdb_write_fails') },
+  duckdb_query: { url: '/duckdb/query', method: 'GET', trend: new Trend('ep_duckdb_query_duration'), fails: new Counter('ep_duckdb_query_fails') },
+  ts_write: { url: '/ts/write', method: 'GET', trend: new Trend('ep_ts_write_duration'), fails: new Counter('ep_ts_write_fails') },
+  ts_query: { url: '/ts/query', method: 'GET', trend: new Trend('ep_ts_query_duration'), fails: new Counter('ep_ts_query_fails') },
+  solr_index: { url: '/solr/index', method: 'GET', trend: new Trend('ep_solr_index_duration'), fails: new Counter('ep_solr_index_fails') },
+  solr_query: { url: '/solr/query', method: 'GET', trend: new Trend('ep_solr_query_duration'), fails: new Counter('ep_solr_query_fails') },
+  nosql_put: { url: '/nosql/put', method: 'GET', trend: new Trend('ep_nosql_put_duration'), fails: new Counter('ep_nosql_put_fails') },
+  nosql_get: { url: '/nosql/get', method: 'GET', trend: new Trend('ep_nosql_get_duration'), fails: new Counter('ep_nosql_get_fails') },
 };
 
 for (const [name, ep] of Object.entries(endpoints)) {
@@ -133,6 +143,14 @@ export function filestoreGet() { run('filestore_get'); }
 export function proto() { run('proto'); }
 export function graphql() { run('graphql'); }
 export function filestore() { run('filestore'); }
+export function duckdbWrite() { run('duckdb_write'); }
+export function duckdbQuery() { run('duckdb_query'); }
+export function tsWrite() { run('ts_write'); }
+export function tsQuery() { run('ts_query'); }
+export function solrIndex() { run('solr_index'); }
+export function solrQuery() { run('solr_query'); }
+export function nosqlPut() { run('nosql_put'); }
+export function nosqlGet() { run('nosql_get'); }
 
 // --- scenarios: run each endpoint in its own staggered executor ----------
 
@@ -151,6 +169,14 @@ const execFor = {
   proto: 'proto',
   graphql: 'graphql',
   filestore: 'filestore',
+  duckdb_write: 'duckdbWrite',
+  duckdb_query: 'duckdbQuery',
+  ts_write: 'tsWrite',
+  ts_query: 'tsQuery',
+  solr_index: 'solrIndex',
+  solr_query: 'solrQuery',
+  nosql_put: 'nosqlPut',
+  nosql_get: 'nosqlGet',
 };
 
 const scenarios = {};

@@ -85,9 +85,19 @@ authProvider: *root.AuthProvider = undefined,
 
 redis: ?rediz.Client = undefined,
 rdz: ?*root.rdz = undefined,
-SQL: ?*root.SQL = undefined,
-SQLite: ?*root.SQLite = undefined,
-datasource: root.Datasource = undefined,
+    SQL: ?*root.SQL = undefined,
+    SQLite: ?*root.SQLite = undefined,
+    datasource: root.Datasource = undefined,
+
+    // In-process OLAP SQL engine (DuckDB). Linked via libs/libduckdb.so.
+    DuckDB: ?*root.DuckDB = null,
+
+    // Specialized datasources (Round 1: time-series / search).
+    Timeseries: ?*root.Timeseries = null,
+    Search: ?*root.Search = null,
+
+    // NoSQL datasource (Round 1: document / wide-column).
+    NoSQL: ?*root.NoSQL = null,
     services: ?std.StringHashMap(*zeroClient) = undefined,
     kvStores: std.StringHashMap(*root.KVStore) = undefined,
     defaultKV: ?*root.KVStore = null,
@@ -151,6 +161,16 @@ pub fn create(self: Self) anyerror!*container {
 
     // initialize sqlite
     try c.loadSQLite();
+
+    // initialize duckdb (in-process OLAP SQL) when configured
+    try c.loadDuckDB();
+
+    // initialize specialized datasources (time-series / search) when configured
+    try c.loadTimeseries();
+    try c.loadSearch();
+
+    // initialize nosql datasource (document / wide-column) when configured
+    try c.loadNoSQL();
 
     // initilize message queues
     try c.loadPubSub();
@@ -907,6 +927,109 @@ fn loadSQLite(self: *Self) !void {
 
     // Auto-register a SQL (sqlite) dependency health probe.
     try self.healthChecks.append(.{ .name = "sql", .check = sqlHealthCheck });
+}
+
+// Auto-wire the in-process OLAP SQL engine (DuckDB) when DUCKDB_PATH is set.
+// Defaults to an in-memory database when the path is empty. The shared library
+// (`libs/libduckdb.so`) is linked at build time, so this adds no runtime dep.
+fn loadDuckDB(self: *Self) !void {
+    if (self.DuckDB != null) return;
+    const path = self.config.get("DUCKDB_PATH");
+    if (path.len == 0) return;
+
+    const db = try root.DuckDB.create(self.allocator, path);
+    self.DuckDB = db;
+    self.datasource = root.Datasource.init(
+        db,
+        .duckdb,
+        if (self.config.getAsBool("SQL_CIRCUIT_BREAKER_ENABLE"))
+            root.circuit_breaker.CircuitBreaker.init(.{})
+        else
+            null,
+    );
+
+    const msg = try std.fmt.allocPrint(self.allocator, "connected to duckdb at '{s}'", .{if (path.len == 0) ":memory:" else path});
+    defer self.allocator.free(msg);
+    self.log.info(msg);
+
+    // Auto-register a SQL (duckdb) dependency health probe.
+    try self.healthChecks.append(.{ .name = "sql", .check = sqlHealthCheck });
+}
+
+// Auto-wire the time-series datasource when INFLUXDB_URL is set. The org/bucket
+// are required; token is optional (auth disabled / 1.x auth).
+fn loadTimeseries(self: *Self) !void {
+    const url = self.config.get("INFLUXDB_URL");
+    if (std.mem.eql(u8, url, "")) {
+        self.log.debug("time-series is disabled, as INFLUXDB_URL is not provided.");
+        return;
+    }
+
+    const org = self.config.get("INFLUXDB_ORG");
+    const bucket = self.config.get("INFLUXDB_BUCKET");
+    if (std.mem.eql(u8, org, "") or std.mem.eql(u8, bucket, "")) {
+        self.log.err("time-series connection failed: INFLUXDB_ORG and INFLUXDB_BUCKET must be set.");
+        return;
+    }
+
+    const handle = try root.Timeseries.build(self, .influxdb, .{
+        .url = url,
+        .org = org,
+        .bucket = bucket,
+        .token = if (std.mem.eql(u8, self.config.get("INFLUXDB_TOKEN"), "")) null else self.config.get("INFLUXDB_TOKEN"),
+    });
+    self.Timeseries = handle;
+    self.log.info(try std.fmt.allocPrint(self.allocator, "connected to influxdb at '{s}' (org '{s}', bucket '{s}')", .{ url, org, bucket }));
+}
+
+// Auto-wire the search datasource when SOLR_URL is set.
+fn loadSearch(self: *Self) !void {
+    const url = self.config.get("SOLR_URL");
+    if (std.mem.eql(u8, url, "")) {
+        self.log.debug("search is disabled, as SOLR_URL is not provided.");
+        return;
+    }
+
+    const collection = self.config.get("SOLR_DEFAULT_COLLECTION");
+    if (std.mem.eql(u8, collection, "")) {
+        self.log.err("search connection failed: SOLR_DEFAULT_COLLECTION must be set.");
+        return;
+    }
+
+    const auth_val = self.config.get("SOLR_BASIC_AUTH");
+    const handle = try root.Search.build(self, .solr, .{
+        .url = url,
+        .default_collection = collection,
+        .basic_auth = if (std.mem.eql(u8, auth_val, "")) null else auth_val,
+    });
+    self.Search = handle;
+    self.log.info(try std.fmt.allocPrint(self.allocator, "connected to solr at '{s}' (default collection '{s}')", .{ url, collection }));
+}
+
+// Auto-wire the NoSQL datasource when CASSANDRA_CONTACT_POINTS is set.
+fn loadNoSQL(self: *Self) !void {
+    const contact_points = self.config.get("CASSANDRA_CONTACT_POINTS");
+    if (std.mem.eql(u8, contact_points, "")) {
+        self.log.debug("nosql is disabled, as CASSANDRA_CONTACT_POINTS is not provided.");
+        return;
+    }
+
+    const keyspace = self.config.get("CASSANDRA_KEYSPACE");
+    if (std.mem.eql(u8, keyspace, "")) {
+        self.log.err("nosql connection failed: CASSANDRA_KEYSPACE must be set.");
+        return;
+    }
+
+    const user_val = self.config.get("CASSANDRA_USER");
+    const pass_val = self.config.get("CASSANDRA_PASSWORD");
+    const handle = try root.NoSQL.build(self, .cassandra, .{
+        .contact_points = contact_points,
+        .keyspace = keyspace,
+        .user = if (std.mem.eql(u8, user_val, "")) null else user_val,
+        .password = if (std.mem.eql(u8, pass_val, "")) null else pass_val,
+    });
+    self.NoSQL = handle;
+    self.log.info(try std.fmt.allocPrint(self.allocator, "connected to cassandra at '{s}' (keyspace '{s}')", .{ contact_points, keyspace }));
 }
 
 pub fn registerZeroClient(self: *Self, service: *zeroClient) !void {

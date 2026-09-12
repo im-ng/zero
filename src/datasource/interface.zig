@@ -12,6 +12,9 @@ const service = root.circuit_breaker;
 pub const Dialect = enum {
     sqlite,
     postgres,
+    /// In-process OLAP SQL engine (DuckDB). Reuses this relational interface;
+    /// backed by `src/datasource/DuckDB.zig` (links `libs/libduckdb.so`).
+    duckdb,
     /// Test-only dialect backed by `MockBackend`. Lets the `Interface` dispatch
     /// be exercised without loading a real database driver (keeps the
     /// coverage/unit-test build free of the native `libsqlite3` dependency that
@@ -129,6 +132,12 @@ pub const Interface = struct {
                 stmt,
                 args,
             ),
+            .duckdb => @as(*root.DuckDB, @ptrCast(@alignCast(self.ptr))).queryRow(
+                ctx,
+                Type,
+                stmt,
+                args,
+            ),
         } catch |e| {
             if (self.breaker) |*b| b.recordFailure();
             return e;
@@ -154,6 +163,12 @@ pub const Interface = struct {
                 args,
             ),
             .mock => @as(*MockBackend, @ptrCast(@alignCast(self.ptr))).queryRows(
+                ctx,
+                Type,
+                stmt,
+                args,
+            ),
+            .duckdb => @as(*root.DuckDB, @ptrCast(@alignCast(self.ptr))).queryRows(
                 ctx,
                 Type,
                 stmt,
@@ -189,6 +204,12 @@ pub const Interface = struct {
                 stmt,
                 args,
             ),
+            .duckdb => @as(*root.DuckDB, @ptrCast(@alignCast(self.ptr))).queryRowContext(
+                ctx,
+                Type,
+                stmt,
+                args,
+            ),
         } catch |e| {
             if (self.breaker) |*b| b.recordFailure();
             return e;
@@ -214,6 +235,12 @@ pub const Interface = struct {
                 args,
             ),
             .mock => @as(*MockBackend, @ptrCast(@alignCast(self.ptr))).queryRowsContext(
+                ctx,
+                Type,
+                stmt,
+                args,
+            ),
+            .duckdb => @as(*root.DuckDB, @ptrCast(@alignCast(self.ptr))).queryRowsContext(
                 ctx,
                 Type,
                 stmt,
@@ -252,6 +279,13 @@ pub const Interface = struct {
                 stmt,
                 args,
             ),
+            .duckdb => @as(*root.DuckDB, @ptrCast(@alignCast(self.ptr))).selectSlice(
+                ctx,
+                Type,
+                list,
+                stmt,
+                args,
+            ),
         } catch |e| {
             if (self.breaker) |*b| b.recordFailure();
             return e;
@@ -279,6 +313,11 @@ pub const Interface = struct {
                 stmt,
                 args,
             ),
+            .duckdb => @as(*root.DuckDB, @ptrCast(@alignCast(self.ptr))).execWithContext(
+                ctx,
+                stmt,
+                args,
+            ),
         } catch |e| {
             if (self.breaker) |*b| b.recordFailure();
             return e;
@@ -293,6 +332,7 @@ pub const Interface = struct {
             .sqlite => @as(*SQLite, @ptrCast(@alignCast(self.ptr))).lastInsertRowID(),
             .postgres => @as(*SQL, @ptrCast(@alignCast(self.ptr))).lastInsertRowID(),
             .mock => @as(*MockBackend, @ptrCast(@alignCast(self.ptr))).lastInsertRowID(),
+            .duckdb => @as(*root.DuckDB, @ptrCast(@alignCast(self.ptr))).lastInsertRowID(),
         };
     }
 
@@ -302,6 +342,7 @@ pub const Interface = struct {
             .sqlite => @as(*SQLite, @ptrCast(@alignCast(self.ptr))).rowsAffected(),
             .postgres => @as(*SQL, @ptrCast(@alignCast(self.ptr))).rowsAffected(),
             .mock => @as(*MockBackend, @ptrCast(@alignCast(self.ptr))).rowsAffected(),
+            .duckdb => @as(*root.DuckDB, @ptrCast(@alignCast(self.ptr))).rowsAffected(),
         };
     }
 
@@ -311,6 +352,7 @@ pub const Interface = struct {
             .sqlite => @as(*SQLite, @ptrCast(@alignCast(self.ptr))).begin(),
             .postgres => @as(*SQL, @ptrCast(@alignCast(self.ptr))).begin(),
             .mock => @as(*MockBackend, @ptrCast(@alignCast(self.ptr))).begin(),
+            .duckdb => @as(*root.DuckDB, @ptrCast(@alignCast(self.ptr))).begin(),
         };
     }
 
@@ -320,6 +362,7 @@ pub const Interface = struct {
             .sqlite => @as(*SQLite, @ptrCast(@alignCast(self.ptr))).commit(),
             .postgres => @as(*SQL, @ptrCast(@alignCast(self.ptr))).commit(),
             .mock => @as(*MockBackend, @ptrCast(@alignCast(self.ptr))).commit(),
+            .duckdb => @as(*root.DuckDB, @ptrCast(@alignCast(self.ptr))).commit(),
         };
     }
 
@@ -329,6 +372,7 @@ pub const Interface = struct {
             .sqlite => @as(*SQLite, @ptrCast(@alignCast(self.ptr))).rollback(),
             .postgres => @as(*SQL, @ptrCast(@alignCast(self.ptr))).rollback(),
             .mock => @as(*MockBackend, @ptrCast(@alignCast(self.ptr))).rollback(),
+            .duckdb => @as(*root.DuckDB, @ptrCast(@alignCast(self.ptr))).rollback(),
         }
     }
 

@@ -910,6 +910,40 @@ pub fn addFileStore(self: *Self, name: []const u8, backend: root.filestore.Backe
     if (self.container.defaultFileStore == null) self.container.defaultFileStore = store;
 }
 
+/// Register the time-series datasource backend (influxdb). Exposed on the request
+/// context as `ctx.Timeseries`.
+pub fn addTimeseries(self: *Self, backend: root.timeseriesInterface.Backend, opts: root.timeseriesInterface.Options) !void {
+    self.container.Timeseries = try root.Timeseries.build(self.container, backend, opts);
+}
+
+/// Register the search datasource backend (solr). Exposed on the request context
+/// as `ctx.Search`.
+pub fn addSearch(self: *Self, backend: root.searchInterface.Backend, opts: root.searchInterface.Options) !void {
+    self.container.Search = try root.Search.build(self.container, backend, opts);
+}
+
+/// Register the NoSQL datasource backend (cassandra). Exposed on the request
+/// context as `ctx.NoSQL`.
+pub fn addNoSQL(self: *Self, backend: root.nosqlInterface.Backend, opts: root.nosqlInterface.Options) !void {
+    self.container.NoSQL = try root.NoSQL.build(self.container, backend, opts);
+}
+
+/// Register the in-process OLAP SQL engine (DuckDB). Exposed on the request
+/// context as `ctx.SQL` (reusing the relational `Datasource` interface). When
+/// `path` is empty an in-memory database is used.
+pub fn addDuckDB(self: *Self, path: []const u8) !void {
+    const db = try root.DuckDB.create(self.container.allocator, path);
+    self.container.DuckDB = db;
+    self.container.datasource = root.Datasource.init(
+        db,
+        .duckdb,
+        if (self.container.config.getAsBool("SQL_CIRCUIT_BREAKER_ENABLE"))
+            root.circuit_breaker.CircuitBreaker.init(.{})
+        else
+            null,
+    );
+}
+
 /// Serves files from an on-disk directory `dir` under the URL `prefix`
 /// (must start with `/`). Files are resolved with a `/` boundary, so a mount
 /// at `/assets` serves `/assets/logo.png` from `<dir>/logo.png`, and the mount

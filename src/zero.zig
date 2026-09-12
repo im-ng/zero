@@ -52,14 +52,29 @@ pub const jwtClaims = AuthProvider.jwtClaims;
 pub const rbac = @import("mw/rbac.zig");
 
 pub const rdz = @import("datasource/rdz.zig");
-
 pub const SQL = @import("datasource/SQL.zig");
+
 pub const SQLite = @import("datasource/SQLite.zig");
+
+pub const DuckDB = @import("datasource/DuckDB.zig").DuckDB;
 pub const datasourceInterface = @import("datasource/interface.zig");
 pub const Datasource = datasourceInterface.Interface;
 
 pub const migration = @import("migration/migration.zig");
 pub const migrate = @import("migration/migrate.zig");
+
+// Specialized datasources (time-series / search) — Round 1 (InfluxDB, Solr).
+pub const timeseriesInterface = @import("datasource/specialized/timeseriesInterface.zig");
+pub const Timeseries = timeseriesInterface.Timeseries;
+pub const InfluxDB = @import("datasource/specialized/influxdb.zig").InfluxDB;
+pub const searchInterface = @import("datasource/specialized/searchInterface.zig");
+pub const Search = searchInterface.Search;
+pub const Solr = @import("datasource/specialized/solr.zig").Solr;
+
+// NoSQL datasource (document / wide-column) — Round 1 (Cassandra).
+pub const nosqlInterface = @import("datasource/nosqlInterface.zig");
+pub const NoSQL = nosqlInterface.NoSQL;
+pub const Cassandra = @import("datasource/cassandra.zig").Cassandra;
 
 pub const client = @import("service/client.zig");
 pub const circuit_breaker = @import("service/circuit_breaker.zig");

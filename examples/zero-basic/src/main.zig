@@ -51,6 +51,22 @@ pub fn main(init: std.process.Init) !void {
 
     try app.post("/filestore", filestorePost);
 
+    // Round 1 specialized / nosql datasources (require INFLUXDB_URL / SOLR_URL /
+    // CASSANDRA_CONTACT_POINTS to be configured; otherwise they report 501).
+    try app.get("/ts/write", tsWrite);
+    try app.get("/ts/query", tsQuery);
+    try app.get("/solr/index", solrIndex);
+    try app.get("/solr/query", solrQuery);
+    try app.get("/nosql/put", nosqlPut);
+    try app.get("/nosql/get", nosqlGet);
+
+    // Round 1: in-process OLAP SQL (DuckDB). Opened in-memory so the demo works
+    // with no external service; use app.addDuckDB("/path/to/file.db") for a
+    // persistent database.
+    try app.addDuckDB(":memory:");
+    try app.get("/duckdb/write", duckdbWrite);
+    try app.get("/duckdb/query", duckdbQuery);
+
     try app.run();
 }
 
@@ -172,4 +188,98 @@ pub fn dbResponse(ctx: *Context) !void {
     const user = try ctx.SQL.queryRow(ctx, User, stmt, .{}) orelse unreachable;
 
     try ctx.response.json(user, .{});
+}
+
+// --- Round 1: time-series (InfluxDB) ---
+
+pub fn tsWrite(ctx: *Context) !void {
+    if (ctx.Timeseries) |ts| {
+        try ts.write(ctx, "demo", "host=example", "value=1.0", null);
+        try ctx.response.json(.{ .status = "written" }, .{});
+    } else {
+        ctx.response.setStatus(.not_implemented);
+        try ctx.response.json(.{ .message = "INFLUXDB_URL not configured" }, .{});
+    }
+}
+
+pub fn tsQuery(ctx: *Context) !void {
+    if (ctx.Timeseries) |ts| {
+        const csv = try ts.query(ctx, "from(bucket:\"metrics\") |> range(start:-1h)");
+        defer ctx.allocator.free(csv);
+        try ctx.response.json(.{ .csv = csv }, .{});
+    } else {
+        ctx.response.setStatus(.not_implemented);
+        try ctx.response.json(.{ .message = "INFLUXDB_URL not configured" }, .{});
+    }
+}
+
+// --- Round 1: search (Solr) ---
+
+pub fn solrIndex(ctx: *Context) !void {
+    if (ctx.Search) |s| {
+        try s.index(ctx, "demo", "{\"id\":\"1\",\"title\":\"example\"}");
+        try ctx.response.json(.{ .status = "indexed" }, .{});
+    } else {
+        ctx.response.setStatus(.not_implemented);
+        try ctx.response.json(.{ .message = "SOLR_URL not configured" }, .{});
+    }
+}
+
+pub fn solrQuery(ctx: *Context) !void {
+    if (ctx.Search) |s| {
+        const hits = try s.query(ctx, "demo", "title:example");
+        defer ctx.allocator.free(hits);
+        try ctx.response.json(.{ .hits = hits }, .{});
+    } else {
+        ctx.response.setStatus(.not_implemented);
+        try ctx.response.json(.{ .message = "SOLR_URL not configured" }, .{});
+    }
+}
+
+// --- Round 1: NoSQL (Cassandra) ---
+
+pub fn nosqlPut(ctx: *Context) !void {
+    if (ctx.NoSQL) |n| {
+        try n.put(ctx, "users", "alice", "{\"age\":30}");
+        try ctx.response.json(.{ .status = "stored" }, .{});
+    } else {
+        ctx.response.setStatus(.not_implemented);
+        try ctx.response.json(.{ .message = "CASSANDRA_CONTACT_POINTS not configured" }, .{});
+    }
+}
+
+pub fn nosqlGet(ctx: *Context) !void {
+    if (ctx.NoSQL) |n| {
+        const doc = try n.get(ctx, "users", "alice");
+        if (doc) |d| {
+            defer ctx.allocator.free(d);
+            try ctx.response.json(.{ .doc = d }, .{});
+        } else {
+            try ctx.response.json(.{ .doc = null }, .{});
+        }
+    } else {
+        ctx.response.setStatus(.not_implemented);
+        try ctx.response.json(.{ .message = "CASSANDRA_CONTACT_POINTS not configured" }, .{});
+    }
+}
+
+// --- Round 1: in-process OLAP SQL (DuckDB) ---
+
+pub fn duckdbWrite(ctx: *Context) !void {
+    _ = try ctx.SQL.exec(ctx, "CREATE TABLE IF NOT EXISTS duck_users (id INTEGER, name VARCHAR)", .{});
+    _ = try ctx.SQL.exec(ctx, "DELETE FROM duck_users", .{});
+    _ = try ctx.SQL.exec(ctx, "INSERT INTO duck_users VALUES (1, 'alice')", .{});
+    try ctx.response.json(.{ .status = "written" }, .{});
+}
+
+pub fn duckdbQuery(ctx: *Context) !void {
+    _ = try ctx.SQL.exec(ctx, "CREATE TABLE IF NOT EXISTS duck_users (id INTEGER, name VARCHAR)", .{});
+    const DuckUser = struct { id: i32, name: []const u8 };
+    const user = try ctx.SQL.queryRow(ctx, DuckUser, "SELECT id, name FROM duck_users LIMIT 1", .{});
+    if (user) |u| {
+        defer ctx.allocator.free(u.name);
+        try ctx.response.json(u, .{});
+    } else {
+        try ctx.response.json(.{ .message = "no rows" }, .{});
+    }
 }

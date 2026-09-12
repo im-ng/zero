@@ -22,6 +22,9 @@ pub const Context = struct {
     SQL: root.Datasource = undefined,
     KV: ?*root.KVStore = null,
     FileStore: ?*root.FileStore = null,
+    Timeseries: ?*root.Timeseries = null,
+    Search: ?*root.Search = null,
+    NoSQL: ?*root.NoSQL = null,
     provider: *root.AuthProvider = undefined,
     MQ: *root.MQTT = undefined,
     KF: *root.kafka = undefined,
@@ -48,12 +51,24 @@ pub const Context = struct {
             .response = res,
         };
 
-        if (container.SQL != null or container.SQLite != null) {
+        if (container.SQL != null or container.SQLite != null or container.DuckDB != null) {
             c.SQL = container.datasource;
         }
 
         if (container.defaultKV) |kv| {
             c.KV = kv;
+        }
+
+        if (container.Timeseries) |ts| {
+            c.Timeseries = ts;
+        }
+
+        if (container.Search) |s| {
+            c.Search = s;
+        }
+
+        if (container.NoSQL) |n| {
+            c.NoSQL = n;
         }
 
         if (container.defaultFileStore) |fs| {

@@ -71,7 +71,7 @@ _*An `experimental` support has been added to achieve the zig version 0.16 addit
 | Auth Middleware | ✅     | Basic, API Key, OAuth 2.0                       |
 | CORS            | ✅     | Configurable CORS middleware                    |
 | Panic Recovery  | ✅     | Automatic panic recovery                        |
-| Databases       | ✅     | PostgreSQL, SQLite, Redis                       |
+| Databases       | ✅     | PostgreSQL, SQLite, Redis, DuckDB, InfluxDB, Solr, Cassandra |
 | Pub/Sub         | ✅     | MQTT, NATS, Kafka (via librdkafka), Redis        |
 | Migrations      | ✅     | DB migrations + seed on startup                 |
 | HTTP Client     | ✅     | Register multiple external services             |
@@ -184,7 +184,7 @@ See [full documentation](https://zerofmk.in/) for detailed guides on authenticat
 
 | Directory         | Purpose                                     |
 | ----------------- | ------------------------------------------- |
-| `src/datasource/` | PostgreSQL (`SQL`), Redis (`Cache`)         |
+| `src/datasource/` | PostgreSQL/SQLite (`SQL`), DuckDB (`SQL`), Redis (`Cache`), Cassandra (`NoSQL`), specialized (InfluxDB/Solr) |
 | `src/pubsub/`     | MQTT, NATS and Kafka publishers/subscribers |
 | `src/cronz/`      | Cron scheduler and job execution            |
 | `src/migration/`  | Database migrations and seeding             |
@@ -230,6 +230,26 @@ LOG_LEVEL=debug
 # REDIS_PASSWORD=password
 # REDIS_DB=0
 # REDIS_TLS_ENABLED=false
+
+# DuckDB (in-process OLAP SQL; reuses the relational ctx.SQL interface)
+# DUCKDB_PATH=./data/app.db            # DuckDB file; in-memory when unset/empty
+
+# InfluxDB (time-series, specialized surface ctx.Timeseries; HTTP via zul)
+# INFLUXDB_URL=http://localhost:8086
+# INFLUXDB_ORG=my-org
+# INFLUXDB_BUCKET=my-bucket
+# INFLUXDB_TOKEN=my-token
+
+# Solr (search, specialized surface ctx.Search; HTTP via zul)
+# SOLR_URL=http://localhost:8983/solr
+# SOLR_DEFAULT_COLLECTION=my-collection
+# SOLR_BASIC_AUTH=user:pass            # optional HTTP Basic for the Solr endpoint
+
+# Cassandra (wide-column NoSQL, surface ctx.NoSQL; native protocol v4 client)
+# CASSANDRA_CONTACT_POINTS=127.0.0.1:9042
+# CASSANDRA_KEYSPACE=my_keyspace
+# CASSANDRA_USER=cassandra              # optional
+# CASSANDRA_PASSWORD=cassandra          # optional
 
 # Kafka
 # KAFKA_BROKER=localhost:9092
@@ -775,11 +795,14 @@ See [`examples/zero-proto`](./examples/zero-proto) for a runnable example.
 
 ## Examples
 
-18 example applications are available in the `examples/` directory:
+21 example applications are available in the `examples/` directory:
 
 | Example                 | Description                            |
 | ----------------------- | -------------------------------------- |
-| `zero-basic`            | Minimal HTTP server                    |
+| `zero-basic`            | Minimal HTTP server + datasource demos (DuckDB/InfluxDB/Solr/Cassandra) |
+| `zero-nosql`            | NoSQL CRUD over Cassandra (collection/:key REST routes) |
+| `zero-timeseries`       | Time-series CRUD over InfluxDB (write + Flux query) |
+| `zero-search`           | Search + persistence over Solr (index/get/delete/query) |
 | `zero-graphql`          | GraphQL-over-HTTP engine               |
 | `zero-proto`            | Protobuf-over-HTTP (codegen + bind)    |
 | `zero-auth`             | Authentication (Basic, API Key, OAuth) |
@@ -803,7 +826,7 @@ Each example has its own `build.zig` and `build.zig.zon`.
 ## Testing
 
 ```bash
-zig build test              # run unit tests (101 tests — framework + linked dependency suites)
+zig build test              # run unit tests (129 tests — framework + linked dependency suites)
 zig build --release=fast    # release build
 make clean                  # remove build artifacts
 ```
