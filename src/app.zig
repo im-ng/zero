@@ -53,6 +53,11 @@ pub fn new(allocator: std.mem.Allocator, em: *EnvMap) !*App {
         root.logger.setJsonFormat(true);
     }
 
+    // log timestamps use the system local zone by default; ZERO_LOG_TIMEZONE can
+    // force a specific zone ("utc" | "local" | IANA name). Set this before config
+    // creation so even the first log line ("Loaded config from file") honors it.
+    root.utils.setLogTimezone(em.get("ZERO_LOG_TIMEZONE") orelse "local");
+
     const config = try root.config.create(.{
         .allocator = allocator,
         .log = log,
@@ -64,11 +69,6 @@ pub fn new(allocator: std.mem.Allocator, em: *EnvMap) !*App {
         "LOG_LEVEL",
         "info",
     ));
-
-    // also honor LOG_FORMAT when it is supplied via a loaded config file
-    if (std.mem.eql(u8, config.getOrDefault("LOG_FORMAT", "text"), "json")) {
-        root.logger.setJsonFormat(true);
-    }
 
     const container = try root.container.create(.{
         .allocator = allocator,

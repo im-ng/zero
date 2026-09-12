@@ -51,14 +51,41 @@ pub fn toStringFromInt(allocator: std.mem.Allocator, comptime format: []const u8
     return buffer;
 }
 
+/// Resolved log timezone, cached for the process lifetime. `null` means "not
+/// yet resolved" — `logTimezone()` then falls back to the system local zone, and
+/// ultimately to UTC. A `Timezone` built with a `null` allocator uses the fixed
+/// size `tzif` structure (no heap), so caching it here leaks nothing.
+var log_tz: ?root.zdt.Timezone = null;
+
+/// Set the timezone used for log timestamps from `ZERO_LOG_TIMEZONE`:
+/// `"utc"` → UTC, `"local"`/empty → system zone (`/etc/localtime`), otherwise an
+/// IANA name resolved from the embedded tz database. Resolution failure is
+/// ignored (falls back to the system local zone at first use).
+pub fn setLogTimezone(name: []const u8) void {
+    if (name.len == 0 or std.mem.eql(u8, name, "local")) {
+        log_tz = root.zdt.Timezone.tzLocal(utils.io, null) catch null;
+        return;
+    }
+    if (std.mem.eql(u8, name, "utc")) {
+        log_tz = root.zdt.Timezone.UTC;
+        return;
+    }
+    log_tz = root.zdt.Timezone.fromTzdata(utils.io, name, null) catch null;
+}
+
+/// Return the timezone for log timestamps, resolving the system local zone lazily
+/// on first use and falling back to UTC if even that is unavailable.
+fn logTimezone() *const root.zdt.Timezone {
+    if (log_tz == null) {
+        log_tz = root.zdt.Timezone.tzLocal(utils.io, null) catch null;
+    }
+    if (log_tz) |*tz| return tz;
+    return &root.zdt.Timezone.UTC;
+}
+
 pub fn timestampz(allocator: std.mem.Allocator) ![]const u8 {
-    const now = @as(u64, @intCast(@divTrunc(nowReal().nanoseconds, 1_000_000_000)));
-    const epoch_seconds = std.time.epoch.EpochSeconds{ .secs = now };
-    const time = epoch_seconds.getDaySeconds();
-    const hour = time.getHoursIntoDay();
-    const minute = time.getMinutesIntoHour();
-    const second = time.getSecondsIntoMinute();
-    return try std.fmt.allocPrint(allocator, "{d:0>2}:{d:0>2}:{d:0>2}", .{ hour, minute, second });
+    const now = dateTime.now(utils.io, .{ .tz = logTimezone() }) catch dateTime.nowUTC(utils.io);
+    return try std.fmt.allocPrint(allocator, "{d:0>2}:{d:0>2}:{d:0>2}", .{ now.hour, now.minute, now.second });
 }
 
 pub fn sqlTimestampz(allocator: std.mem.Allocator) ![]const u8 {
