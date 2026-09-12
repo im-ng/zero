@@ -207,12 +207,12 @@ fn loadAuthProviderConfig(self: *Self) anyerror!?*authProvider {
                 return null;
             }
 
-            var keys = std.StringHashMap([]const u8).init(self.container.allocator);
+            var keys = std.StringHashMap([]const u8).init(self.container.bootstrap);
             var encodedKeys = std.mem.splitAny(u8, keyConfig, ",");
 
             while (encodedKeys.next()) |key| {
                 var scalerKey: []u8 = undefined;
-                scalerKey = try self.container.allocator.alloc(u8, key.len);
+                scalerKey = try self.container.bootstrap.alloc(u8, key.len);
                 _ = std.mem.replace(u8, key, " ", "", scalerKey[0..key.len]);
 
                 try keys.put(scalerKey, "");
@@ -244,7 +244,7 @@ fn loadAuthProviderConfig(self: *Self) anyerror!?*authProvider {
             provider.?.mutex = .init;
             provider.?.pathUrl = jwksUrl;
             provider.?.refreshInterval = refreshAt;
-            provider.?.pubKeys = std.StringHashMap(PubKey).init(self.container.allocator);
+            provider.?.pubKeys = std.StringHashMap(PubKey).init(self.container.bootstrap);
 
             self.container.log.info("auth oauth initialized");
 
@@ -257,13 +257,13 @@ fn loadAuthProviderConfig(self: *Self) anyerror!?*authProvider {
                 return null;
             }
 
-            var keys = std.StringHashMap([]const u8).init(self.container.allocator);
+            var keys = std.StringHashMap([]const u8).init(self.container.bootstrap);
 
             var encodedKeys = std.mem.splitAny(u8, keyConfig, ",");
 
             while (encodedKeys.next()) |key| {
                 var payload: []u8 = undefined;
-                payload = self.container.allocator.alloc(u8, 1024) catch unreachable;
+                payload = self.container.bootstrap.alloc(u8, 1024) catch unreachable;
 
                 const codecs = std.base64.standard;
                 try codecs.Decoder.decode(payload, key);
@@ -275,11 +275,11 @@ fn loadAuthProviderConfig(self: *Self) anyerror!?*authProvider {
                 var configPassword: []const u8 = undefined;
                 while (splitValues.next()) |value| {
                     if (index == 1) {
-                        configPassword = try self.container.allocator.alloc(u8, value.len);
+                        configPassword = try self.container.bootstrap.alloc(u8, value.len);
                         configPassword = value;
                         break;
                     }
-                    configKey = try self.container.allocator.alloc(u8, value.len);
+                    configKey = try self.container.bootstrap.alloc(u8, value.len);
                     configKey = value;
                     index += 1;
                 }

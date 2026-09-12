@@ -75,6 +75,14 @@ appName: []const u8 = undefined,
 appVersion: []const u8 = undefined,
 allocator: std.mem.Allocator,
 
+/// Optional pre-allocated bootstrap arena (Tier A). When null it falls back to
+/// `allocator`. Set by `App.new` from `ZERO_FRAMEWORK_MEM_SIZE`; used for
+/// framework-internal bootstrap wiring (maps, auth keys, startup log buffers)
+/// that is never tied to a request lifecycle.
+bootstrap_allocator: ?std.mem.Allocator = null,
+/// Resolved bootstrap allocator (`bootstrap_allocator` orelse `allocator`).
+bootstrap: std.mem.Allocator = undefined,
+
 log: *root.logger = undefined,
 config: *root.config = undefined,
 metricz: *root.metricz = undefined,
@@ -127,25 +135,26 @@ pub fn create(self: Self) anyerror!*container {
         .allocator = self.allocator,
         .log = self.log,
         .config = self.config,
+        .bootstrap = if (self.bootstrap_allocator) |b| b else self.allocator,
     };
 
     c.appName = c.config.getOrDefault(constants.APP_NAME, "zero");
     c.appVersion = c.config.getOrDefault(constants.APP_VERSION, "dev");
 
     // initialize service client handler maps
-    c.services = std.StringHashMap(*zeroClient).init(self.allocator);
+    c.services = std.StringHashMap(*zeroClient).init(c.bootstrap);
 
     // initialize kv stores (backends registered via App.addKVStore / loadRedis)
-    c.kvStores = std.StringHashMap(*root.KVStore).init(self.allocator);
+    c.kvStores = std.StringHashMap(*root.KVStore).init(c.bootstrap);
 
     // initialize file stores (backends registered via App.addFileStore / loadFileStore)
-    c.fileStores = std.StringHashMap(*root.FileStore).init(self.allocator);
+    c.fileStores = std.StringHashMap(*root.FileStore).init(c.bootstrap);
 
     // initialize user-registered health checks
-    c.healthChecks = std.array_list.Managed(container.HealthCheck).init(self.allocator);
+    c.healthChecks = std.array_list.Managed(container.HealthCheck).init(c.bootstrap);
 
     // initialize user-registered static mounts
-    c.staticMounts = std.array_list.Managed(container.StaticMount).init(self.allocator);
+    c.staticMounts = std.array_list.Managed(container.StaticMount).init(c.bootstrap);
 
     // initialize metricz
     try c.loadMetricz();
@@ -228,7 +237,7 @@ pub fn destroy(self: *Self) void {
 
 fn loadPubSub(self: *Self) !void {
     var buffer: []u8 = undefined;
-    buffer = try self.allocator.alloc(u8, 512);
+    buffer = try self.bootstrap.alloc(u8, 512);
 
     const pubsub = self.config.get("PUBSUB_BACKEND");
     if (std.mem.eql(u8, pubsub, "") == true) {
@@ -255,7 +264,7 @@ fn loadKafkaPubSub(self: *Self) !void {
     var mode: c_uint = rdkafka.RD_KAFKA_PRODUCER;
 
     var buffer: []u8 = undefined;
-    buffer = try self.allocator.alloc(u8, 1024);
+    buffer = try self.bootstrap.alloc(u8, 1024);
 
     var error_message: [512]u8 = undefined;
     const servers = self.config.get("PUBSUB_BROKER");
@@ -443,19 +452,19 @@ fn loadKafkaPubSub(self: *Self) !void {
         self.log.err(buffer);
     }
 
-    buffer = try self.allocator.alloc(u8, 256);
+    buffer = try self.bootstrap.alloc(u8, 256);
     buffer = try std.fmt.bufPrint(buffer, "connecting to kafka at '{s}'", .{servers});
     self.log.info(buffer);
 
     self.Kakfa = kafka.create(self, config, null, mode) catch |err| {
-        buffer = try self.allocator.alloc(u8, 1024);
+        buffer = try self.bootstrap.alloc(u8, 1024);
         buffer = try std.fmt.bufPrint(buffer, "could not connect to kafka at '{s}'", .{servers});
         self.log.err(buffer);
         self.log.any(err);
         return;
     };
 
-    buffer = try self.allocator.alloc(u8, 256);
+    buffer = try self.bootstrap.alloc(u8, 256);
     buffer = try std.fmt.bufPrint(buffer, "connected to kafka at '{s}'", .{servers});
     self.log.info(buffer);
 
@@ -479,7 +488,7 @@ fn loadKafkaPubSub(self: *Self) !void {
 
 fn loadMqttPubSub(self: *Self) !void {
     var buffer: []u8 = undefined;
-    buffer = try self.allocator.alloc(u8, 512);
+    buffer = try self.bootstrap.alloc(u8, 512);
 
     const pubsub = self.config.get("PUBSUB_BACKEND");
     if (std.mem.eql(u8, pubsub, "") == true) {
@@ -530,12 +539,12 @@ fn loadMqttPubSub(self: *Self) !void {
         .connectionTimeout = 10_000,
     };
 
-    buffer = try self.allocator.alloc(u8, 256);
+    buffer = try self.bootstrap.alloc(u8, 256);
     buffer = try std.fmt.bufPrint(buffer, "connecting to MQTT at '{s}:{d}'", .{ hostname, portAsInt });
     self.log.info(buffer);
 
     self.mqtt = MQTT.create(self, config) catch |err| {
-        buffer = try self.allocator.alloc(u8, 256);
+        buffer = try self.bootstrap.alloc(u8, 256);
         buffer = try std.fmt.bufPrint(buffer, "could not connect to MQTT at '{s}:{d}'", .{ hostname, portAsInt });
         self.log.err(buffer);
         self.log.any(err);
@@ -546,7 +555,7 @@ fn loadMqttPubSub(self: *Self) !void {
         try pb.mqtt.ping(.{});
     }
 
-    buffer = try self.allocator.alloc(u8, 256);
+    buffer = try self.bootstrap.alloc(u8, 256);
     buffer = try std.fmt.bufPrint(buffer, "connected to MQTT at '{s}:{d}'", .{ hostname, portAsInt });
     self.log.info(buffer);
 
@@ -558,7 +567,7 @@ fn loadMqttPubSub(self: *Self) !void {
 
 fn loadNatsPubSub(self: *Self) !void {
     var buffer: []u8 = undefined;
-    buffer = try self.allocator.alloc(u8, 512);
+    buffer = try self.bootstrap.alloc(u8, 512);
 
     const url = self.config.get("PUBSUB_BROKER");
     if (std.mem.eql(u8, url, "") == true) {
@@ -585,7 +594,7 @@ fn loadNatsPubSub(self: *Self) !void {
     };
 
     self.Nats = root.nats.create(self, &config) catch |err| {
-        buffer = try self.allocator.alloc(u8, 256);
+        buffer = try self.bootstrap.alloc(u8, 256);
         buffer = try std.fmt.bufPrint(buffer, "could not connect to NATS at '{s}'", .{url});
         self.log.err(buffer);
         self.log.any(err);
@@ -600,7 +609,7 @@ fn loadNatsPubSub(self: *Self) !void {
 
 fn loadRedisPubSub(self: *Self) !void {
     var buffer: []u8 = undefined;
-    buffer = try self.allocator.alloc(u8, 256);
+    buffer = try self.bootstrap.alloc(u8, 256);
 
     const hostname = self.config.get("REDIS_HOST");
     if (std.mem.eql(u8, hostname, "") == true) {
@@ -668,7 +677,7 @@ fn loadMetricz(self: *Self) !void {
 
 fn loadRedis(self: *Self) !void {
     var buffer: []u8 = undefined;
-    buffer = try self.allocator.alloc(u8, 512);
+    buffer = try self.bootstrap.alloc(u8, 512);
 
     const hostname = self.config.get("REDIS_HOST");
     if (std.mem.eql(u8, hostname, "") == true) {
@@ -725,11 +734,11 @@ fn loadRedis(self: *Self) !void {
     const ping = try self.redis.?.sendAlloc([]u8, self.allocator, .{"ping"});
     defer self.allocator.free(ping);
 
-    buffer = try self.allocator.alloc(u8, 256);
+    buffer = try self.bootstrap.alloc(u8, 256);
     buffer = try std.fmt.bufPrint(buffer, "ping status {s}", .{ping});
     self.log.info(buffer);
 
-    buffer = try self.allocator.alloc(u8, 256);
+    buffer = try self.bootstrap.alloc(u8, 256);
     buffer = try std.fmt.bufPrint(buffer, "connected to redis at '{s}:{d}' on database {d}", .{ hostname, portInt, dbInt });
     self.log.info(buffer);
 
@@ -746,7 +755,7 @@ fn loadRedis(self: *Self) !void {
 
 fn loadSQL(self: *Self) !void {
     var buffer: []u8 = undefined;
-    buffer = try self.allocator.alloc(u8, 512);
+    buffer = try self.bootstrap.alloc(u8, 512);
 
     const dialect = self.config.get("DB_DIALECT");
     if (std.mem.eql(u8, dialect, "") == true) {
@@ -870,7 +879,7 @@ fn loadSQL(self: *Self) !void {
     buffer = try std.fmt.bufPrint(buffer, "generating database connection string for {s}", .{dialect});
     self.log.info(buffer);
 
-    buffer = try self.allocator.alloc(u8, 256);
+    buffer = try self.bootstrap.alloc(u8, 256);
     buffer = try std.fmt.bufPrint(buffer, "connected to {s} user to {s} database at '{s}:{s}'", .{ user, db, hostname, port });
     self.log.info(buffer);
 
@@ -881,7 +890,7 @@ fn loadSQL(self: *Self) !void {
 
 fn loadSQLite(self: *Self) !void {
     var buffer: []u8 = undefined;
-    buffer = try self.allocator.alloc(u8, 512);
+    buffer = try self.bootstrap.alloc(u8, 512);
 
     const dbPath = self.config.get("SQLITE_PATH");
     if (std.mem.eql(u8, dbPath, "") == true) {
@@ -948,8 +957,8 @@ fn loadDuckDB(self: *Self) !void {
             null,
     );
 
-    const msg = try std.fmt.allocPrint(self.allocator, "connected to duckdb at '{s}'", .{if (path.len == 0) ":memory:" else path});
-    defer self.allocator.free(msg);
+    const msg = try std.fmt.allocPrint(self.bootstrap, "connected to duckdb at '{s}'", .{if (path.len == 0) ":memory:" else path});
+    defer self.bootstrap.free(msg);
     self.log.info(msg);
 
     // Auto-register a SQL (duckdb) dependency health probe.
@@ -979,7 +988,7 @@ fn loadTimeseries(self: *Self) !void {
         .token = if (std.mem.eql(u8, self.config.get("INFLUXDB_TOKEN"), "")) null else self.config.get("INFLUXDB_TOKEN"),
     });
     self.Timeseries = handle;
-    self.log.info(try std.fmt.allocPrint(self.allocator, "connected to influxdb at '{s}' (org '{s}', bucket '{s}')", .{ url, org, bucket }));
+    self.log.info(try std.fmt.allocPrint(self.bootstrap, "connected to influxdb at '{s}' (org '{s}', bucket '{s}')", .{ url, org, bucket }));
 }
 
 // Auto-wire the search datasource when SOLR_URL is set.
@@ -1003,7 +1012,7 @@ fn loadSearch(self: *Self) !void {
         .basic_auth = if (std.mem.eql(u8, auth_val, "")) null else auth_val,
     });
     self.Search = handle;
-    self.log.info(try std.fmt.allocPrint(self.allocator, "connected to solr at '{s}' (default collection '{s}')", .{ url, collection }));
+    self.log.info(try std.fmt.allocPrint(self.bootstrap, "connected to solr at '{s}' (default collection '{s}')", .{ url, collection }));
 }
 
 // Auto-wire the NoSQL datasource when CASSANDRA_CONTACT_POINTS is set.
@@ -1029,7 +1038,7 @@ fn loadNoSQL(self: *Self) !void {
         .password = if (std.mem.eql(u8, pass_val, "")) null else pass_val,
     });
     self.NoSQL = handle;
-    self.log.info(try std.fmt.allocPrint(self.allocator, "connected to cassandra at '{s}' (keyspace '{s}')", .{ contact_points, keyspace }));
+    self.log.info(try std.fmt.allocPrint(self.bootstrap, "connected to cassandra at '{s}' (keyspace '{s}')", .{ contact_points, keyspace }));
 }
 
 pub fn registerZeroClient(self: *Self, service: *zeroClient) !void {

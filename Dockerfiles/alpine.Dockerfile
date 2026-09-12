@@ -56,7 +56,7 @@ RUN wget -q https://install.duckdb.org/v1.5.5/libduckdb-linux-amd64.zip \
 FROM alpine:latest 
 LABEL maintainer="im-ng"
 LABEL description="Multi-version Zig CI container with kcov coverage support"
-LABEL version="0.2"
+LABEL version="0.3.4"
 
 # Update dependencies for zig, zero, kcov
 RUN apk add --no-cache \
@@ -65,7 +65,7 @@ RUN apk add --no-cache \
     jq \
     openssh \
     libssh libssh2 libssh2-dev \
-    musl-dev \
+    musl-dev libc6-compat \
     ca-certificates \
     librdkafka librdkafka-dev \
     binutils-dev curl-dev elfutils-dev
@@ -79,8 +79,9 @@ COPY --from=builder /opt/zig-0.16.0 /usr/local/zig-0.16.0/
 # RUN ls -alt /usr/local/zig-0.15.2/
 # RUN ls -alth
 
-COPY --from=builder /opt/libduckdb/duckdb.h /app/libs/duckdb.h
-COPY --from=builder /opt/libduckdb/libduckdb.so /app/libs/libduckdb.so
+COPY /libs/duckdb-alpine.h /usr/local/lib/duckdb.h
+COPY /libs/libduckdb-alpine.so /usr/local/lib/libduckdb.so
+COPY /libs/libduckdb-alpine.so /usr/local/lib/libduckdb.so.1.5
 
 # Set environment variables for Zig versions
 # ENV ZIG151=/opt/zig/zig-0.15.1
@@ -94,6 +95,7 @@ RUN ln -s /usr/local/zig-0.16.0/zig /usr/local/bin/zig
 # ENV PATH="${ZIG}:${PATH}"
 
 WORKDIR /app
+RUN ls -alth /usr/local/lib/
 RUN tree -a
 
 CMD ["/bin/bash"]

@@ -34,8 +34,19 @@ httpServer: *root.httpServer = undefined,
 metriczThread: ?std.Thread = null,
 migrations: *root.migration = undefined,
 cronz: ?*root.cronz = null,
-startupHook: ?*const fn (*root.Context) anyerror!void = null,
-reload_thread: ?std.Thread = null,
+    startupHook: ?*const fn (*root.Context) anyerror!void = null,
+    reload_thread: ?std.Thread = null,
+
+    /// Runtime allocator (request/response + datasource clients). Distinct from the
+    /// bootstrap arena below.
+    allocator: std.mem.Allocator = undefined,
+    /// Tier A: a single pre-allocated fixed region holding framework-internal
+    /// bootstrap allocations (container wiring, auth keys, startup log buffers,
+    /// cron scheduler). Sized by `ZERO_FRAMEWORK_MEM_SIZE` (MiB). Never tied to a
+    /// request lifecycle; fail-fast if exhausted at startup.
+    bootstrap_fba: std.heap.FixedBufferAllocator = undefined,
+    bootstrap_allocator: std.mem.Allocator = undefined,
+    bootstrap_backing: []u8 = undefined,
 
 var hServer: ?*root.httpServer = undefined;
 var AppInstance: *Self = undefined;
@@ -70,26 +81,58 @@ pub fn new(allocator: std.mem.Allocator, em: *EnvMap) !*App {
         "info",
     ));
 
-    const container = try root.container.create(.{
+    // --- Tier A: pre-allocated bootstrap arena ---------------------------------
+    // One fixed region, sized by ZERO_FRAMEWORK_MEM_SIZE (MiB, default 8), holding
+    // all framework-internal bootstrap allocations. It is never tied to a request
+    // lifecycle. If it is exhausted during bootstrap we fail fast with a clear
+    // error rather than grow unpredictably (RSS stays bounded).
+    const framework_mem_mib: usize = blk: {
+        const v = config.getAsInt("ZERO_FRAMEWORK_MEM_SIZE") catch 0;
+        break :blk if (v == 0) @as(usize, 8) else @as(usize, v);
+    };
+    const backing = try allocator.alloc(u8, framework_mem_mib * 1024 * 1024);
+    errdefer allocator.free(backing);
+    // The allocator state must live in the heap-resident App struct (field below),
+    // so its vtable/ptr survive after `new` returns. Computed before the struct
+    // literal assignment so `bootstrap_allocator` can reference it.
+    app.bootstrap_fba = std.heap.FixedBufferAllocator.init(backing);
+    const bootstrap_alloc = app.bootstrap_fba.allocator();
+
+    const container = root.container.create(.{
         .allocator = allocator,
         .log = log,
         .config = config,
-    });
+        .bootstrap_allocator = bootstrap_alloc,
+    }) catch |e| switch (e) {
+        error.OutOfMemory => return error.BootstrapArenaExhausted,
+        else => return e,
+    };
 
     const migrations = try migration.create(container);
 
+    // Single struct-literal assignment: this applies the declared defaults (null)
+    // to every field not listed, so e.g. `startupHook` is properly null rather
+    // than retaining uninitialized memory. The Tier A bootstrap fields are included
+    // explicitly so they are not reset to `undefined`.
     app.* = .{
         .log = log,
         .config = config,
         .container = container,
         .migrations = migrations,
+        .allocator = allocator,
+        .bootstrap_backing = backing,
+        .bootstrap_fba = app.bootstrap_fba,
+        .bootstrap_allocator = bootstrap_alloc,
     };
 
     // register metrics server
     app.metriczServer = try root.metriczServer.create(allocator, container);
 
     // register http server
-    app.httpServer = try root.httpServer.create(allocator, container);
+    app.httpServer = root.httpServer.create(allocator, container) catch |e| switch (e) {
+        error.OutOfMemory => return error.BootstrapArenaExhausted,
+        else => return e,
+    };
     hServer = app.httpServer;
 
     // register auth provider refresher job
@@ -116,6 +159,13 @@ pub fn new(allocator: std.mem.Allocator, em: *EnvMap) !*App {
     }
 
     return app;
+}
+
+/// Frees the Tier A bootstrap arena backing. Call only after all framework
+/// subsystems have been torn down (end of `run`), since the container's maps and
+/// other bootstrap singletons live inside that region.
+pub fn deinit(self: *Self) void {
+    self.allocator.free(self.bootstrap_backing);
 }
 
 fn getLogLevel(_: *Self, level: []const u8) u8 {
@@ -403,6 +453,9 @@ pub fn run(self: *Self) !void {
     }
 
     self.container.destroy();
+
+    // All framework subsystems are torn down; release the Tier A bootstrap arena.
+    self.deinit();
 }
 
 fn startPubSubSubscriptions(self: Self) !void {

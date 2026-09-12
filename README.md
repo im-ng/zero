@@ -295,6 +295,27 @@ SQL_CIRCUIT_BREAKER_ENABLE=true      # guard Postgres/SQLite queries & writes
 CACHE_CIRCUIT_BREAKER_ENABLE=true    # guard KV store (Redis) operations
 ```
 
+### Framework-internal bootstrap arena (Tier A)
+
+Framework-internal bootstrap allocations — container wiring, auth-provider keys,
+startup log buffers, the cron scheduler — are served from a single
+**pre-allocated fixed region** created once at startup, deliberately kept
+**outside** the request lifecycle (it is *not* the per-request httpz arena). This
+removes heap churn and per-log-line allocations from the framework's own setup and
+bounds its resident memory.
+
+The region is sized by `ZERO_FRAMEWORK_MEM_SIZE` **in MiB** (default `8`):
+
+```bash
+ZERO_FRAMEWORK_MEM_SIZE=8            # MiB; fail-fast if exhausted at startup
+```
+
+It is a hard cap: if bootstrap exhausts the region the app fails fast with
+`error.BootstrapArenaExhausted` at startup rather than growing unpredictably.
+Runtime paths (datasource clients, metricz labels, the httpz server and its
+middleware, request handlers) intentionally stay on the ordinary runtime
+allocator, so request traffic never touches the arena.
+
 ### Pub/Sub reconnect & dead-letter
 
 MQTT, NATS, Redis and Kafka consumers transparently **reconnect and

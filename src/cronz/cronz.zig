@@ -40,13 +40,13 @@ request: *httpz.Request = undefined,
 response: *httpz.Response = undefined,
 
 pub fn create(container: *root.container) !*Cronz {
-    const c = try container.allocator.create(Cronz);
-    errdefer container.allocator.destroy(c);
+    const c = try container.bootstrap.create(Cronz);
+    errdefer container.bootstrap.destroy(c);
 
     c.mu = .init;
     c.running = Atomic(bool).init(true);
     c.container = container;
-    c.jobs = std.array_list.Managed(job).init(container.allocator);
+    c.jobs = std.array_list.Managed(job).init(container.bootstrap);
     c.thread = try Thread.spawn(.{}, Cronz.runSchedules, .{ c, @as(i128, utils.nowReal().nanoseconds) });
 
     return c;

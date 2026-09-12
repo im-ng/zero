@@ -88,6 +88,14 @@ pub fn timestampz(allocator: std.mem.Allocator) ![]const u8 {
     return try std.fmt.allocPrint(allocator, "{d:0>2}:{d:0>2}:{d:0>2}", .{ now.hour, now.minute, now.second });
 }
 
+/// Like `timestampz` but formats into a caller-provided buffer (no heap
+/// allocation). Used by the logger so each log line performs zero allocations
+/// on the request/allocator path.
+pub fn timestampzBuf(buf: []u8) []const u8 {
+    const now = dateTime.now(utils.io, .{ .tz = logTimezone() }) catch dateTime.nowUTC(utils.io);
+    return std.fmt.bufPrint(buf, "{d:0>2}:{d:0>2}:{d:0>2}", .{ now.hour, now.minute, now.second }) catch "";
+}
+
 pub fn sqlTimestampz(allocator: std.mem.Allocator) ![]const u8 {
     const now = dateTime.nowUTC(utils.io);
     const yr = @as(u64, @intCast(now.year));
