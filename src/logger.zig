@@ -106,9 +106,9 @@ pub fn debug(self: Self, message: []const u8) void {
         return;
     }
 
-    const timestamp = utils.timestampz(self.allocator) catch "";
-
-    std.log.debug(debugFormat, .{ timestamp, message });
+    const ts = utils.timestampz(self.allocator) catch null;
+    defer if (ts) |t| self.allocator.free(t);
+    std.log.debug(debugFormat, .{ ts orelse "", message });
 }
 
 pub fn info(self: Self, message: []const u8) void {
@@ -116,9 +116,9 @@ pub fn info(self: Self, message: []const u8) void {
         return;
     }
 
-    const timestamp = utils.timestampz(self.allocator) catch "";
-
-    std.log.info(infoFormat, .{ timestamp, message });
+    const ts = utils.timestampz(self.allocator) catch null;
+    defer if (ts) |t| self.allocator.free(t);
+    std.log.info(infoFormat, .{ ts orelse "", message });
 }
 
 pub fn any(self: Self, message: anytype) void {
@@ -126,18 +126,19 @@ pub fn any(self: Self, message: anytype) void {
         return;
     }
 
-    const timestamp = utils.timestampz(self.allocator) catch "";
-
-    std.log.info(anyFormat, .{ timestamp, message });
+    const ts = utils.timestampz(self.allocator) catch null;
+    defer if (ts) |t| self.allocator.free(t);
+    std.log.info(anyFormat, .{ ts orelse "", message });
 }
 
 pub fn warn(self: Self, message: []const u8) void {
     if (self.logLevel > 2) {
         return;
     }
-    const timestamp = utils.timestampz(self.allocator) catch "";
+    const ts = utils.timestampz(self.allocator) catch null;
+    defer if (ts) |t| self.allocator.free(t);
 
-    std.log.warn(warnFormat, .{ timestamp, message });
+    std.log.warn(warnFormat, .{ ts orelse "", message });
 }
 
 pub fn err(self: Self, message: []const u8) void {
@@ -145,9 +146,9 @@ pub fn err(self: Self, message: []const u8) void {
         return;
     }
 
-    const timestamp = utils.timestampz(self.allocator) catch "";
-
-    std.log.err(errFormat, .{ timestamp, message });
+    const ts = utils.timestampz(self.allocator) catch null;
+    defer if (ts) |t| self.allocator.free(t);
+    std.log.err(errFormat, .{ ts orelse "", message });
 }
 
 pub fn fatal(self: Self, message: []const u8) void {
@@ -155,9 +156,9 @@ pub fn fatal(self: Self, message: []const u8) void {
         return;
     }
 
-    const timestamp = utils.timestampz(self.allocator) catch "";
-
-    std.log.err(fatalFormat, .{ timestamp, message });
+    const ts = utils.timestampz(self.allocator) catch null;
+    defer if (ts) |t| self.allocator.free(t);
+    std.log.err(fatalFormat, .{ ts orelse "", message });
 }
 
 pub fn Debug(self: *Self, allocator: std.mem.Allocator, message: []const u8) void {
@@ -165,10 +166,10 @@ pub fn Debug(self: *Self, allocator: std.mem.Allocator, message: []const u8) voi
         return;
     }
 
-    const timestamp = utils.timestampz(allocator) catch "";
-    defer allocator.free(timestamp);
+    const ts = utils.timestampz(allocator) catch null;
+    defer if (ts) |t| allocator.free(t);
 
-    std.log.debug(debugFormat, .{ timestamp, message });
+    std.log.debug(debugFormat, .{ ts orelse "", message });
 }
 
 pub fn Info(self: *Self, allocator: std.mem.Allocator, message: []const u8) void {
@@ -176,10 +177,10 @@ pub fn Info(self: *Self, allocator: std.mem.Allocator, message: []const u8) void
         return;
     }
 
-    const timestamp = utils.timestampz(allocator) catch "";
-    defer allocator.free(timestamp);
+    const ts = utils.timestampz(allocator) catch null;
+    defer if (ts) |t| allocator.free(t);
 
-    std.log.info(infoFormat, .{ timestamp, message });
+    std.log.info(infoFormat, .{ ts orelse "", message });
 }
 
 pub fn Any(self: *Self, allocator: std.mem.Allocator, message: anytype) void {
@@ -187,10 +188,10 @@ pub fn Any(self: *Self, allocator: std.mem.Allocator, message: anytype) void {
         return;
     }
 
-    const timestamp = utils.timestampz(allocator) catch "";
-    defer allocator.free(timestamp);
+    const ts = utils.timestampz(allocator) catch null;
+    defer if (ts) |t| allocator.free(t);
 
-    std.log.info(anyFormat, .{ timestamp, message });
+    std.log.info(anyFormat, .{ ts orelse "", message });
 }
 
 pub fn Warn(self: *Self, allocator: std.mem.Allocator, message: []const u8) void {
@@ -198,10 +199,10 @@ pub fn Warn(self: *Self, allocator: std.mem.Allocator, message: []const u8) void
         return;
     }
 
-    const timestamp = utils.timestampz(allocator) catch "";
-    defer allocator.free(timestamp);
+    const ts = utils.timestampz(allocator) catch null;
+    defer if (ts) |t| allocator.free(t);
 
-    std.log.warn(warnFormat, .{ timestamp, message });
+    std.log.warn(warnFormat, .{ ts orelse "", message });
 }
 
 pub fn Err(self: *Self, allocator: std.mem.Allocator, message: []const u8) void {
@@ -209,10 +210,10 @@ pub fn Err(self: *Self, allocator: std.mem.Allocator, message: []const u8) void 
         return;
     }
 
-    const timestamp = utils.timestampz(allocator) catch "";
-    defer allocator.free(timestamp);
+    const ts = utils.timestampz(allocator) catch null;
+    defer if (ts) |t| allocator.free(t);
 
-    std.log.err(errFormat, .{ timestamp, message });
+    std.log.err(errFormat, .{ ts orelse "", message });
 }
 
 pub fn Fatal(self: *Self, allocator: std.mem.Allocator, message: []const u8) void {
@@ -220,10 +221,10 @@ pub fn Fatal(self: *Self, allocator: std.mem.Allocator, message: []const u8) voi
         return;
     }
 
-    const timestamp = utils.timestampz(allocator) catch "";
-    defer allocator.free(timestamp);
+    const ts = utils.timestampz(allocator) catch null;
+    defer if (ts) |t| allocator.free(t);
 
-    std.log.err(errFormat, .{ timestamp, message });
+    std.log.err(errFormat, .{ ts orelse "", message });
 }
 
 test "create returns logger with default logLevel 1" {
