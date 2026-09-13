@@ -19,6 +19,16 @@ fn panic(msg: []const u8, return_address: ?usize) noreturn {
     std.process.exit(1);
 }
 
+const Query = struct {
+    hello: *const fn (*Context, void) anyerror![]const u8,
+};
+
+fn helloResolver(_: *Context, _: void) anyerror![]const u8 {
+    return "hello";
+}
+
+var query_root = Query{ .hello = helloResolver };
+
 pub fn main(init: std.process.Init) !void {
     utils.setIo(init.io);
 
@@ -26,6 +36,8 @@ pub fn main(init: std.process.Init) !void {
     const allocator = gpa.allocator();
 
     const app = try App.new(allocator, init.environ_map);
+
+    app.onStartup(prepareDatasources);
 
     try app.addFileStore("local", .local, .{ .root = "./data/basic-store" });
 
@@ -51,23 +63,24 @@ pub fn main(init: std.process.Init) !void {
 
     try app.post("/filestore", filestorePost);
 
-    // Round 1 specialized / nosql datasources (require INFLUXDB_URL / SOLR_URL /
-    // CASSANDRA_CONTACT_POINTS to be configured; otherwise they report 501).
     try app.get("/ts/write", tsWrite);
+
     try app.get("/ts/query", tsQuery);
+
     try app.get("/solr/index", solrIndex);
+
     try app.get("/solr/query", solrQuery);
+
     try app.get("/nosql/put", nosqlPut);
+
     try app.get("/nosql/get", nosqlGet);
 
-    // Round 1: in-process OLAP SQL (DuckDB). Opened in-memory so the demo works
-    // with no external service; use app.addDuckDB("/path/to/file.db") for a
-    // persistent database.
-    try app.addDuckDB(":memory:");
-    try app.get("/duckdb/write", duckdbWrite);
-    try app.get("/duckdb/query", duckdbQuery);
-
     try app.run();
+}
+
+pub fn prepareDatasources(ctx: *Context) !void {
+    _ = try ctx.SQL.exec(ctx, "CREATE TABLE IF NOT EXISTS users (id INTEGER, name VARCHAR)", .{});
+    _ = try ctx.SQL.exec(ctx, "INSERT INTO users SELECT 1, 'alice' WHERE NOT EXISTS (SELECT 1 FROM users)", .{});
 }
 
 pub fn memoryUsage(ctx: *Context) !void {
@@ -115,15 +128,6 @@ pub fn protoPost(ctx: *Context) !void {
     ctx.response.setStatus(.ok);
     try ctx.response.writer().writeAll(body);
 }
-
-const Query = struct {
-    hello: *const fn (*Context, void) anyerror![]const u8,
-};
-fn helloResolver(_: *Context, _: void) anyerror![]const u8 {
-    return "hello";
-}
-
-var query_root = Query{ .hello = helloResolver };
 
 pub fn filestoreGet(ctx: *Context) !void {
     const key = blk: {
@@ -183,11 +187,13 @@ const User = struct {
 };
 
 pub fn dbResponse(ctx: *Context) !void {
-    const stmt = "select id, name from users limit 1";
-
-    const user = try ctx.SQL.queryRow(ctx, User, stmt, .{}) orelse unreachable;
-
-    try ctx.response.json(user, .{});
+    const user = try ctx.SQL.queryRow(ctx, User, "SELECT id, name FROM users LIMIT 1", .{});
+    if (user) |u| {
+        defer ctx.allocator.free(u.name);
+        try ctx.response.json(u, .{});
+    } else {
+        try ctx.response.json(.{ .id = 0, .name = "nobody" }, .{});
+    }
 }
 
 // --- Round 1: time-series (InfluxDB) ---
@@ -260,26 +266,5 @@ pub fn nosqlGet(ctx: *Context) !void {
     } else {
         ctx.response.setStatus(.not_implemented);
         try ctx.response.json(.{ .message = "CASSANDRA_CONTACT_POINTS not configured" }, .{});
-    }
-}
-
-// --- Round 1: in-process OLAP SQL (DuckDB) ---
-
-pub fn duckdbWrite(ctx: *Context) !void {
-    _ = try ctx.SQL.exec(ctx, "CREATE TABLE IF NOT EXISTS duck_users (id INTEGER, name VARCHAR)", .{});
-    _ = try ctx.SQL.exec(ctx, "DELETE FROM duck_users", .{});
-    _ = try ctx.SQL.exec(ctx, "INSERT INTO duck_users VALUES (1, 'alice')", .{});
-    try ctx.response.json(.{ .status = "written" }, .{});
-}
-
-pub fn duckdbQuery(ctx: *Context) !void {
-    _ = try ctx.SQL.exec(ctx, "CREATE TABLE IF NOT EXISTS duck_users (id INTEGER, name VARCHAR)", .{});
-    const DuckUser = struct { id: i32, name: []const u8 };
-    const user = try ctx.SQL.queryRow(ctx, DuckUser, "SELECT id, name FROM duck_users LIMIT 1", .{});
-    if (user) |u| {
-        defer ctx.allocator.free(u.name);
-        try ctx.response.json(u, .{});
-    } else {
-        try ctx.response.json(.{ .message = "no rows" }, .{});
     }
 }

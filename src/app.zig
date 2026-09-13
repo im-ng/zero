@@ -15,6 +15,25 @@ const Cronz = root.cronz;
 const AuthProvider = root.AuthProvider;
 const favoriteIcon = root.favIcon;
 
+/// Signature for a CLI subcommand handler. The handler uses `ctx` to access
+/// datasources (`ctx.SQL`, `ctx.Cache`, …), parsed flags (`ctx.Param`), the
+/// logger (`ctx.Logger` / `ctx.info`), and prints output via `ctx.println`.
+pub const CliHandler = *const fn (*root.Context) anyerror!void;
+
+/// Optional metadata for a subcommand.
+pub const SubCommandOpts = struct {
+    description: []const u8 = "",
+    help: []const u8 = "",
+};
+
+/// Internal registry entry for a registered subcommand.
+const CliSubCommand = struct {
+    name: []const u8,
+    handler: CliHandler,
+    description: []const u8,
+    help: []const u8,
+};
+
 pub const indexCss = root.indexCss;
 pub const indexHtml = root.indexHtml;
 pub const oauthRedirect = root.oauthRedirect;
@@ -37,6 +56,9 @@ cronz: ?*root.cronz = null,
     startupHook: ?*const fn (*root.Context) anyerror!void = null,
     reload_thread: ?std.Thread = null,
 
+    /// Registered CLI subcommands (populated by `SubCommand` for `newCmd` apps).
+    subcommands: std.StringHashMap(CliSubCommand) = undefined,
+
     /// Runtime allocator (request/response + datasource clients). Distinct from the
     /// bootstrap arena below.
     allocator: std.mem.Allocator = undefined,
@@ -51,7 +73,10 @@ cronz: ?*root.cronz = null,
 var hServer: ?*root.httpServer = undefined;
 var AppInstance: *Self = undefined;
 
-pub fn new(allocator: std.mem.Allocator, em: *EnvMap) !*App {
+/// Shared setup for both HTTP (`new`) and CLI (`newCmd`) applications: config,
+/// logging, the bootstrap arena, container/datasources, migrations, and
+/// fail-fast config checks. Does NOT create the HTTP or metrics servers.
+fn initBase(allocator: std.mem.Allocator, em: *EnvMap) !*App {
     const app = try allocator.create(App);
     errdefer allocator.destroy(app);
 
@@ -124,12 +149,40 @@ pub fn new(allocator: std.mem.Allocator, em: *EnvMap) !*App {
         .bootstrap_fba = app.bootstrap_fba,
         .bootstrap_allocator = bootstrap_alloc,
     };
+    app.subcommands = std.StringHashMap(CliSubCommand).init(allocator);
+
+    // Fail-fast on missing required config keys. Opt-in via REQUIRED_CONFIG_KEYS
+    // (comma-separated). Empty by default so existing apps/tests are unaffected.
+    const reqKeys = config.getOrDefault("REQUIRED_CONFIG_KEYS", "");
+    if (reqKeys.len > 0) {
+        var it = std.mem.splitScalar(u8, reqKeys, ',');
+        while (it.next()) |k| {
+            const trimmed = std.mem.trim(u8, k, " ");
+            if (trimmed.len == 0) continue;
+            if (config.get(trimmed).len == 0) {
+                const msg = try utils.combine(container.allocator, "required config key missing or empty: {s}", .{trimmed});
+                log.err(msg);
+                return error.MissingRequiredConfig;
+            }
+        }
+    }
+
+    try app.printPid();
+    AppInstance = app;
+
+    return app;
+}
+
+/// Create the full application: config, logging, container/datasources, and the
+/// HTTP + metrics servers. Call `run()` to start serving.
+pub fn new(allocator: std.mem.Allocator, em: *EnvMap) !*App {
+    const app = try initBase(allocator, em);
 
     // register metrics server
-    app.metriczServer = try root.metriczServer.create(allocator, container);
+    app.metriczServer = try root.metriczServer.create(allocator, app.container);
 
     // register http server
-    app.httpServer = root.httpServer.create(allocator, container) catch |e| switch (e) {
+    app.httpServer = root.httpServer.create(allocator, app.container) catch |e| switch (e) {
         error.OutOfMemory => return error.BootstrapArenaExhausted,
         else => return e,
     };
@@ -138,27 +191,15 @@ pub fn new(allocator: std.mem.Allocator, em: *EnvMap) !*App {
     // register auth provider refresher job
     try app.addOAuthKeyRefresher();
 
-    try app.printPid();
-
-    AppInstance = app;
-
-    // Fail-fast on missing required config keys. Opt-in via REQUIRED_CONFIG_KEYS
-    // (comma-separated). Empty by default so existing apps/tests are unaffected.
-    const reqKeys = app.config.getOrDefault("REQUIRED_CONFIG_KEYS", "");
-    if (reqKeys.len > 0) {
-        var it = std.mem.splitScalar(u8, reqKeys, ',');
-        while (it.next()) |k| {
-            const trimmed = std.mem.trim(u8, k, " ");
-            if (trimmed.len == 0) continue;
-            if (app.config.get(trimmed).len == 0) {
-                const msg = try utils.combine(app.container.allocator, "required config key missing or empty: {s}", .{trimmed});
-                app.log.err(msg);
-                return error.MissingRequiredConfig;
-            }
-        }
-    }
-
     return app;
+}
+
+/// Create an application for command-line (non-HTTP) use. Everything is wired up
+/// (config, logging, container/datasources, migrations) but no HTTP server or
+/// metrics server is started. Register subcommands with `SubCommand` and invoke
+/// with `runCmd`.
+pub fn newCmd(allocator: std.mem.Allocator, em: *EnvMap) !*App {
+    return initBase(allocator, em);
 }
 
 /// Frees the Tier A bootstrap arena backing. Call only after all framework
@@ -203,6 +244,99 @@ pub fn parseLogLevel(level: []const u8) ?u8 {
         return 99;
     }
     return null;
+}
+
+/// Register a CLI subcommand. `name` is the token the user passes after the
+/// program (e.g. `myapp migrate`). `handler` receives a `Context` whose
+/// `params` map holds parsed `--flag value` / `--flag=value` pairs.
+pub fn SubCommand(self: *App, name: []const u8, handler: CliHandler, opts: SubCommandOpts) !void {
+    try self.subcommands.put(name, .{
+        .name = name,
+        .handler = handler,
+        .description = opts.description,
+        .help = opts.help,
+    });
+}
+
+/// Run a command-line application: parse argv, dispatch to a registered
+/// subcommand, and execute its handler with a pre-built CLI `Context`.
+/// `args` is typically `init.minimal.args` from a `std.process.Init` main
+/// parameter.
+pub fn runCmd(self: *App, args: std.process.Args) !void {
+    var it = std.process.Args.Iterator.init(args);
+
+    // skip the program name (argv[0]).
+    _ = it.next() orelse {
+        self.printCliHelp();
+        return;
+    };
+
+    const sub = it.next() orelse {
+        self.printCliHelp();
+        return;
+    };
+
+    if (std.mem.eql(u8, sub, "help") or std.mem.eql(u8, sub, "--help") or std.mem.eql(u8, sub, "-h")) {
+        self.printCliHelp();
+        return;
+    }
+
+    const entry = self.subcommands.get(sub) orelse {
+        const errout = std.Io.File.stderr();
+        errout.writeStreamingAll(utils.io, "unknown command: ") catch {};
+        errout.writeStreamingAll(utils.io, sub) catch {};
+        errout.writeStreamingAll(utils.io, "\n") catch {};
+        self.printCliHelp();
+        return error.UnknownCliCommand;
+    };
+
+    // run registered startup hooks (e.g. migrations) before the command body.
+    if (self.startupHook) |hook| {
+        var hctx = try root.Context.initCli(self.allocator, self.container);
+        defer hctx.params.deinit();
+        try hook(&hctx);
+    }
+
+    // build the command context and parse remaining args into params.
+    var ctx = try root.Context.initCli(self.allocator, self.container);
+    defer ctx.params.deinit();
+    while (it.next()) |raw| {
+        const arg = raw;
+        if (std.mem.startsWith(u8, arg, "--")) {
+            const kv = arg[2..];
+            if (std.mem.indexOfScalar(u8, kv, '=')) |idx| {
+                try ctx.params.put(kv[0..idx], kv[idx + 1 ..]);
+            } else {
+                const val = it.next() orelse "";
+                try ctx.params.put(kv, val);
+            }
+        } else if (std.mem.startsWith(u8, arg, "-")) {
+            const key = arg[1..];
+            const val = it.next() orelse "";
+            try ctx.params.put(key, val);
+        }
+    }
+
+    try entry.handler(&ctx);
+}
+
+/// Print the CLI usage banner and the list of registered subcommands.
+pub fn printCliHelp(self: *App) void {
+    const out = std.Io.File.stdout();
+    const io = utils.io;
+    out.writeStreamingAll(io, "Usage:\n  ") catch {};
+    out.writeStreamingAll(io, self.config.getOrDefault("APP_NAME", "zero")) catch {};
+    out.writeStreamingAll(io, " <command> [flags]\n\nCommands:\n") catch {};
+    var it = self.subcommands.iterator();
+    if (self.subcommands.count() == 0) {
+        out.writeStreamingAll(io, "  (none registered)\n") catch {};
+        return;
+    }
+    while (it.next()) |e| {
+        var buf: [256]u8 = undefined;
+        const line = std.fmt.bufPrint(&buf, "  {s:<16} {s}\n", .{ e.key_ptr.*, e.value_ptr.*.description }) catch "  (entry too long)\n";
+        out.writeStreamingAll(io, line) catch {};
+    }
 }
 
 /// Maps a numeric log level back to its name.

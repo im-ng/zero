@@ -37,6 +37,9 @@ pub const Context = struct {
     wsClient: *root.httpz.websocket.Conn = undefined,
     action: *const fn (*root.Context) anyerror!void = undefined,
 
+    /// CLI command parameters parsed from argv (e.g. `--name John` -> "John").
+    params: std.StringHashMap([]const u8) = undefined,
+
     /// initialize context
     pub fn init(
         allocator: std.mem.Allocator,
@@ -92,6 +95,56 @@ pub const Context = struct {
         }
 
         return c;
+    }
+
+    /// Initialize a context for CLI / non-HTTP use. Derives the same datasource
+    /// handles as `init` but requires no httpz Request/Response.
+    pub fn initCli(allocator: std.mem.Allocator, container: *root.container) !Context {
+        var c = Context{
+            .allocator = allocator,
+            .container = container,
+            .params = std.StringHashMap([]const u8).init(allocator),
+        };
+
+        if (container.SQL != null or container.SQLite != null or container.DuckDB != null) {
+            c.SQL = container.datasource;
+        }
+        if (container.defaultKV) |kv| c.KV = kv;
+        if (container.Timeseries) |ts| c.Timeseries = ts;
+        if (container.Search) |s| c.Search = s;
+        if (container.NoSQL) |n| c.NoSQL = n;
+        if (container.defaultFileStore) |fs| c.FileStore = fs;
+        if (container.mqtt) |pb| c.MQ = pb;
+        if (container.Kakfa) |k| c.KF = k;
+        if (container.Nats) |n| c.NATS = n;
+        if (container.pubSub) |ps| c.pubsub = ps;
+
+        return c;
+    }
+
+    /// Get a parsed CLI flag value (e.g. `--name John` -> Param("name") == "John").
+    pub fn Param(self: *Context, name: []const u8) ?[]const u8 {
+        return self.params.get(name);
+    }
+
+    /// Print to stdout without a trailing newline.
+    pub fn print(self: *Context, comptime fmt: []const u8, args: anytype) void {
+        const out = std.Io.File.stdout();
+        const msg = std.fmt.allocPrint(self.allocator, fmt, args) catch return;
+        defer self.allocator.free(msg);
+        out.writeStreamingAll(root.utils.io, msg) catch {};
+    }
+
+    /// Print a line to stdout.
+    pub fn println(self: *Context, comptime fmt: []const u8, args: anytype) void {
+        self.print(fmt, args);
+        const out = std.Io.File.stdout();
+        out.writeStreamingAll(root.utils.io, "\n") catch {};
+    }
+
+    /// Access the framework logger.
+    pub fn Logger(self: *Context) *root.logger {
+        return self.container.log;
     }
 
     /// log debug message through context allocator

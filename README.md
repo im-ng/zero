@@ -50,6 +50,7 @@ _*An `experimental` support has been added to achieve the zig version 0.16 addit
 - [Resilience](#resilience)
 - [Metrics](#metrics)
 - [Examples](#examples)
+- [CLI Application Mode](#cli-application-mode)
 - [GraphQL](#graphql)
 - [Protobuf](#protobuf)
 - [Testing](#testing)
@@ -832,6 +833,7 @@ See [`examples/zero-proto`](./examples/zero-proto) for a runnable example.
 | ----------------------- | -------------------------------------- |
 | `zero-basic`            | Minimal HTTP server + datasource demos (DuckDB/InfluxDB/Solr/Cassandra) |
 | `zero-duckdb`           | DuckDB (in-process OLAP SQL) CRUD over a `users` table (REST routes) |
+| `zero-cli`              | CLI application mode — subcommands reusing datasources/config/logger |
 | `zero-nosql`            | NoSQL CRUD over Cassandra (collection/:key REST routes) |
 | `zero-timeseries`       | Time-series CRUD over InfluxDB (write + Flux query) |
 | `zero-search`           | Search + persistence over Solr (index/get/delete/query) |
@@ -853,9 +855,81 @@ See [`examples/zero-proto`](./examples/zero-proto) for a runnable example.
 | `zero-todo-htmx`        | HTMX-powered CRUD app                  |
 | `zero-websocket`        | WebSocket connections                  |
 
-Each example has its own `build.zig` and `build.zig.zon`.
+ Each example has its own `build.zig` and `build.zig.zon`.
 
-## Testing
+ ## CLI Application Mode
+
+ Zero can run as a **command-line application** — no HTTP server, no metrics
+ server — while still reusing the full set of built-ins (config, logging,
+ datasources, migrations, the container, scheduled jobs). Build with
+ `App.newCmd` instead of `App.new`, register subcommands with `app.SubCommand`,
+ and dispatch from `main` with `app.runCmd`.
+
+ ```zig
+ const std = @import("std");
+ const zero = @import("zero");
+
+ const App = zero.App;
+ const Context = zero.Context;
+ const utils = zero.utils;
+
+ pub fn main(init: std.process.Init) !void {
+     utils.setIo(init.io);
+     var gpa: std.heap.DebugAllocator(.{}) = .init;
+     const allocator = gpa.allocator();
+
+     // newCmd wires config/logging/container/datasources but starts NO HTTP server.
+     const app = try App.newCmd(allocator, init.environ_map);
+     try app.addDuckDB("app.db");
+
+     try app.SubCommand("seed", seed, .{ .description = "populate the demo table" });
+     try app.SubCommand("list", list, .{ .description = "list rows" });
+     try app.SubCommand("greet", greet, .{ .description = "echo --name <who>" });
+
+     // init.minimal.args is the global argv iterator.
+     try app.runCmd(init.minimal.args);
+ }
+
+ fn seed(ctx: *Context) !void {
+     _ = try ctx.SQL.exec(ctx, "CREATE TABLE IF NOT EXISTS t (id INTEGER, name VARCHAR)", .{});
+     _ = try ctx.SQL.exec(ctx, "INSERT INTO t VALUES (1, 'alice')", .{});
+     ctx.println("seeded", .{});
+ }
+
+ fn list(ctx: *Context) !void {
+     const rows = try ctx.SQL.queryRows(ctx, struct { id: i64, name: []const u8 },
+         "SELECT id, name FROM t ORDER BY id", .{});
+     defer ctx.allocator.free(rows);
+     for (rows) |r| ctx.println("{d} {s}", .{ r.id, r.name });
+ }
+
+ fn greet(ctx: *Context) !void {
+     // Flags after the command become ctx.params: `--name John` -> ctx.Param("name").
+     ctx.println("hello, {s}!", .{ctx.Param("name") orelse "world"});
+ }
+ ```
+
+ Run it:
+
+ ```bash
+ zig build            # in examples/zero-cli
+ ./zig-out/bin/cli                 # prints usage + registered commands
+ ./zig-out/bin/cli seed
+ ./zig-out/bin/cli list
+ ./zig-out/bin/cli greet --name Zig
+ ```
+
+ Notes:
+ - `App.newCmd` is strictly additive: `App.new` → `app.run()` keeps its exact
+   HTTP behavior. No HTTP or metrics server is created in CLI mode.
+ - `ctx` in a handler is a `Context` built without an HTTP request/response; it
+   still exposes `ctx.SQL`, `ctx.Cache`, `ctx.NoSQL`, `ctx.FileStore`, the
+   logger (`ctx.Logger()`), and parsed flags (`ctx.Param`).
+ - Flags use GNU/POSIX styles: `--flag value`, `--flag=value`, or `-f value`.
+ - Migrations are not auto-run in CLI mode (consistent with the core); call
+   `app.runMigrations()` from a subcommand or a `registerStartupHook` if needed.
+
+ ## Testing
 
 ```bash
 zig build test              # run unit tests (129 tests — framework + linked dependency suites)

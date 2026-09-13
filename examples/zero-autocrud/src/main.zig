@@ -24,8 +24,11 @@ pub fn main(init: std.process.Init) !void {
 
     const app = try App.new(allocator, init.environ_map);
 
+    // propogate error up
+    app.onStartup(initDb);
+
     try app.get("/", index);
-    try app.get("/init", initDb);
+
     // One line wires up list / get / create / update / delete for `User`.
     try app.addRestHandlers(User, .{ .resource = "users" });
 
@@ -48,7 +51,6 @@ pub fn index(ctx: *Context) !void {
 }
 
 pub fn initDb(ctx: *Context) !void {
-    ctx.response.setStatus(.ok);
     _ = try ctx.SQL.exec(ctx,
         \\CREATE TABLE IF NOT EXISTS users (
         \\    id INTEGER PRIMARY KEY,
@@ -56,5 +58,4 @@ pub fn initDb(ctx: *Context) !void {
         \\    email TEXT NOT NULL
         \\)
     , .{});
-    try ctx.json(.{ .message = "users table ready" });
 }

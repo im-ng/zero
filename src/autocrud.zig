@@ -5,6 +5,7 @@ const App = root.App;
 const Context = root.Context;
 const SQL = root.SQL;
 const SQLite = root.SQLite;
+const DuckDB = root.DuckDB;
 const Datasource = root.Datasource;
 const MockBackend = root.datasourceInterface.MockBackend;
 
@@ -124,6 +125,10 @@ fn backendSqlite(ctx: *Context) *SQLite {
     return @as(*SQLite, @ptrCast(@alignCast(ctx.SQL.ptr)));
 }
 
+fn backendDuckDB(ctx: *Context) *DuckDB {
+    return @as(*DuckDB, @ptrCast(@alignCast(ctx.SQL.ptr)));
+}
+
 fn listHandler(comptime T: type, comptime st: Stmts) *const fn (*Context) anyerror!void {
     const impl = struct {
         fn call(ctx: *Context) anyerror!void {
@@ -134,6 +139,10 @@ fn listHandler(comptime T: type, comptime st: Stmts) *const fn (*Context) anyerr
                 },
                 .sqlite => {
                     const rows = try backendSqlite(ctx).queryRows(ctx, T, st.list, .{});
+                    try ctx.json(rows);
+                },
+                .duckdb => {
+                    const rows = try backendDuckDB(ctx).queryRows(ctx, T, st.list, .{});
                     try ctx.json(rows);
                 },
                 .mock => {
@@ -159,6 +168,7 @@ fn getHandler(comptime T: type, comptime st: Stmts, comptime id_idx: usize) *con
             const row = switch (ctx.SQL.dialect) {
                 .postgres => try backendPg(ctx).queryRow(ctx, T, st.get_pg, .{idv}),
                 .sqlite => try backendSqlite(ctx).queryRow(ctx, T, st.get_q, .{idv}),
+                .duckdb => try backendDuckDB(ctx).queryRow(ctx, T, st.get_q, .{idv}),
                 .mock => try @as(*MockBackend, @ptrCast(@alignCast(ctx.SQL.ptr))).queryRow(ctx, T, st.get_q, .{idv}),
             };
             if (row) |r| {
@@ -189,6 +199,7 @@ fn createHandler(comptime T: type, comptime st: Stmts) *const fn (*Context) anye
             switch (ctx.SQL.dialect) {
                 .postgres => _ = try backendPg(ctx).execWithContext(ctx, st.insert_pg, args),
                 .sqlite => _ = try backendSqlite(ctx).execWithContext(ctx, st.insert_q, args),
+                .duckdb => _ = try backendDuckDB(ctx).execWithContext(ctx, st.insert_q, args),
                 .mock => _ = try @as(*MockBackend, @ptrCast(@alignCast(ctx.SQL.ptr))).execWithContext(ctx, st.insert_q, args),
             }
             try ctx.json(o);
@@ -222,6 +233,7 @@ fn updateHandler(comptime T: type, comptime st: Stmts, comptime id_idx: usize) *
             const updated = switch (ctx.SQL.dialect) {
                 .postgres => (try backendPg(ctx).execWithContext(ctx, st.update_pg, args)) > 0,
                 .sqlite => (try backendSqlite(ctx).execWithContext(ctx, st.update_q, args)) > 0,
+                .duckdb => (try backendDuckDB(ctx).execWithContext(ctx, st.update_q, args)) > 0,
                 .mock => (try @as(*MockBackend, @ptrCast(@alignCast(ctx.SQL.ptr))).execWithContext(ctx, st.update_q, args)) > 0,
             };
             if (!updated) {
@@ -232,6 +244,7 @@ fn updateHandler(comptime T: type, comptime st: Stmts, comptime id_idx: usize) *
             const row = switch (ctx.SQL.dialect) {
                 .postgres => try backendPg(ctx).queryRow(ctx, T, st.get_pg, .{idv}),
                 .sqlite => try backendSqlite(ctx).queryRow(ctx, T, st.get_q, .{idv}),
+                .duckdb => try backendDuckDB(ctx).queryRow(ctx, T, st.get_q, .{idv}),
                 .mock => try @as(*MockBackend, @ptrCast(@alignCast(ctx.SQL.ptr))).queryRow(ctx, T, st.get_q, .{idv}),
             };
             if (row) |r| {
@@ -264,6 +277,10 @@ fn deleteHandler(comptime T: type, comptime st: Stmts, comptime id_idx: usize) *
                     _ = try backendSqlite(ctx).execWithContext(ctx, st.delete_q, .{idv});
                     break :blk backendSqlite(ctx).rowsAffected();
                 },
+                .duckdb => blk: {
+                    _ = try backendDuckDB(ctx).execWithContext(ctx, st.delete_q, .{idv});
+                    break :blk backendDuckDB(ctx).rowsAffected();
+                },
                 .mock => blk: {
                     _ = try @as(*MockBackend, @ptrCast(@alignCast(ctx.SQL.ptr))).execWithContext(ctx, st.delete_q, .{idv});
                     break :blk @as(*MockBackend, @ptrCast(@alignCast(ctx.SQL.ptr))).rowsAffected();
@@ -281,8 +298,8 @@ fn deleteHandler(comptime T: type, comptime st: Stmts, comptime id_idx: usize) *
 }
 
 /// Registers list/get/create/update/delete REST handlers for struct `T` against
-/// the configured SQL datasource (Postgres or SQLite — both are generated and
-/// dispatched at runtime on `ctx.SQL.dialect`).
+/// the configured SQL datasource (Postgres, SQLite, or DuckDB — all are
+/// generated and dispatched at runtime on `ctx.SQL.dialect`).
 pub fn addRestHandlers(self: *App, comptime T: type, comptime opts: AutoCrudOptions) !void {
     const table = if (opts.table.len > 0) opts.table else opts.resource;
     const id_field = opts.id_field;
