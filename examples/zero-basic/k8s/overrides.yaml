@@ -1,0 +1,154 @@
+namespace: default
+nameOverride: "zero-basic"
+
+app:
+  name: zero-basic
+  version: "1.0.0"
+  logLevel: INFO
+  logFormat: text            # text | json
+  authMode: ""               # "" | Basic | APIKey | OAuth
+  healthPath: /.well-known/health
+  metricsPath: /metrics
+  port: 8080
+  metricsPort: 2121
+
+image:
+  registry: gitea.pi/ng
+  repository: "zero-basic"
+  tag: "v1.0"
+
+replicaCount: 1
+
+strategy:
+  type: RollingUpdate
+  maxSurge: 1
+  maxUnavailable: 0
+
+# -- Plain env vars (highest precedence; override embedded configMap values)
+# env:
+#   APP_NAME: zero-basic
+#   APP_VERSION: "1.0.0"
+#   LOG_LEVEL: INFO
+#   LOG_FORMAT: text
+
+# -- Individual secret-referenced env vars (e.g. DB / S3 / service credentials)
+secretEnv:
+  - name: DB_PASSWORD
+    secretName: zero-basic-secret
+    key: DB_PASSWORD
+ 
+# -- Embedded ConfigMap auto-loaded as envFrom (named "zero-basic-cm")
+configMap:
+  enabled: true
+  data:
+    APP_NAME: zero-basic
+    APP_VERSION: "1.0.0"
+    LOG_LEVEL: INFO
+    LOG_FORMAT: text
+    HTTP_PORT: '8080'
+    ZERO_REQUEST_TIMEOUT_MS: '30000'
+    INBOUND_MAX_CONCURRENT: '0'
+    ZERO_HTTP_LARGE_BUFFER_SIZE: '1048576'    # 1 MiB
+    ZERO_HTTP_LARGE_BUFFER_COUNT: '8'
+    # --- Inbound rate limiting (fixed-window) ---
+    # RATE_LIMIT_ENABLE: 'false'
+    # RATE_LIMIT_MAX: '100'
+    # RATE_LIMIT_WINDOW: '1m'
+    # RATE_LIMIT_KEY: 'ip'                      # ip | header:<name>
+    # --- SQL datasource ---
+    DB_HOST: 'postgres-service'
+    DB_PORT: '5432'
+    DB_NAME: 'demo'
+    DB_USER: 'postgres'
+    DB_DIALECT: 'postgres'
+    # DB_SSL_MODE: 'require'
+    # SQL_CIRCUIT_BREAKER_ENABLE: 'true'
+    # --- Required config keys (comma-separated; framework fails fast if missing) ---
+    REQUIRED_CONFIG_KEYS: 'DB_HOST,HTTP_PORT'
+
+# -- Embedded Secret auto-loaded as envFrom (named "zero-basic-secret")
+secret:
+  enabled: true
+  type: Opaque
+  stringData:
+    DB_PASSWORD: password
+
+# -- Resource sizing for zero 0.16 steady-state RSS (~16-65MiB)
+resources:
+  requests:
+    cpu: 100m
+    memory: 64Mi
+  limits:
+    cpu: 200m
+    memory: 128Mi
+
+# -- Persist SQLite / file-store data
+volumeMounts:
+  - name: zero-data
+    mountPath: /app/data
+volumes:
+  - name: zero-data
+    persistentVolumeClaim:
+      claimName: zero-local-storage
+
+ingress:
+  enabled: true
+  className: traefik
+  host: zero.pi
+  path: /
+  pathType: Prefix
+  tls:
+    enabled: true
+    secretName: zero.crt
+
+service:
+  type: ClusterIP
+  labels:
+    app: zero-basic
+
+serviceMonitor:
+  enabled: true
+  interval: 15s
+  labels:
+    app: zero-basic
+    team: zero
+
+# -- Prometheus alert rules (standalone Prometheus, rule ConfigMap form)
+alerts:
+  enabled: true
+  namespace: monitoring
+  labels:
+    app: zero-basic
+  groups:
+    - name: zero-basic
+      rules:
+        - alert: ZeroAppDown
+          expr: up{job="zero-basic"} == 0
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Zero app is down"
+            description: "Zero app {{ $labels.job }} unreachable for 5 minutes."
+
+autoscaling:
+  enabled: false
+  minReplicas: 1
+  maxReplicas: 4
+  targetCPUUtilizationPercentage: 70
+  targetMemoryUtilizationPercentage: 80
+
+serviceAccount:
+  create: false
+
+podSecurityContext:
+  runAsNonRoot: true
+  fsGroup: 1000
+
+securityContext:
+  runAsUser: 1000
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop:
+      - ALL

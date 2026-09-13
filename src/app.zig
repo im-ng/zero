@@ -53,22 +53,22 @@ httpServer: *root.httpServer = undefined,
 metriczThread: ?std.Thread = null,
 migrations: *root.migration = undefined,
 cronz: ?*root.cronz = null,
-    startupHook: ?*const fn (*root.Context) anyerror!void = null,
-    reload_thread: ?std.Thread = null,
+startupHook: ?*const fn (*root.Context) anyerror!void = null,
+reload_thread: ?std.Thread = null,
 
-    /// Registered CLI subcommands (populated by `SubCommand` for `newCmd` apps).
-    subcommands: std.StringHashMap(CliSubCommand) = undefined,
+/// Registered CLI subcommands (populated by `SubCommand` for `newCmd` apps).
+subcommands: std.StringHashMap(CliSubCommand) = undefined,
 
-    /// Runtime allocator (request/response + datasource clients). Distinct from the
-    /// bootstrap arena below.
-    allocator: std.mem.Allocator = undefined,
-    /// Tier A: a single pre-allocated fixed region holding framework-internal
-    /// bootstrap allocations (container wiring, auth keys, startup log buffers,
-    /// cron scheduler). Sized by `ZERO_FRAMEWORK_MEM_SIZE` (MiB). Never tied to a
-    /// request lifecycle; fail-fast if exhausted at startup.
-    bootstrap_fba: std.heap.FixedBufferAllocator = undefined,
-    bootstrap_allocator: std.mem.Allocator = undefined,
-    bootstrap_backing: []u8 = undefined,
+/// Runtime allocator (request/response + datasource clients). Distinct from the
+/// bootstrap arena below.
+allocator: std.mem.Allocator = undefined,
+/// Tier A: a single pre-allocated fixed region holding framework-internal
+/// bootstrap allocations (container wiring, auth keys, startup log buffers,
+/// cron scheduler). Sized by `ZERO_FRAMEWORK_MEM_SIZE` (MiB). Never tied to a
+/// request lifecycle; fail-fast if exhausted at startup.
+bootstrap_fba: std.heap.FixedBufferAllocator = undefined,
+bootstrap_allocator: std.mem.Allocator = undefined,
+bootstrap_backing: []u8 = undefined,
 
 var hServer: ?*root.httpServer = undefined;
 var AppInstance: *Self = undefined;
@@ -876,28 +876,28 @@ pub fn health(ctx: *Context) !void {
     };
 
     const http_status = if (all_up) std.http.Status.ok else std.http.Status.service_unavailable;
-    const status = if (all_up) up else down;
 
+    // const status = if (all_up) up else down;
     // Content negotiation: serve an HTML status page when the client asks for
     // `text/html`; otherwise respond with JSON (the default).
-    const accept = ctx.request.header("accept") orelse "";
-    if (std.ascii.indexOfIgnoreCase(accept, "text/html") != null) {
-        var w: std.Io.Writer.Allocating = .init(ctx.allocator);
-        try w.writer.print(
-            \\<!doctype html>
-            \\<html><head><meta charset="utf-8"><title>{s} Health</title></head>
-            \\<body><h1>Status: {s}</h1><ul>
-        , .{ ctx.container.appName, status });
-        var it = components.iterator();
-        while (it.next()) |kv| {
-            try w.writer.print("<li>{s}: {s}</li>", .{ kv.key_ptr.*, kv.value_ptr.*.string });
-        }
-        try w.writer.writeAll("</ul></body></html>");
-        ctx.response.setStatus(http_status);
-        ctx.response.content_type = .HTML;
-        ctx.response.body = w.written();
-        return;
-    }
+    // const accept = ctx.request.header("accept") orelse "";
+    // if (std.ascii.indexOfIgnoreCase(accept, "text/html") != null) {
+    //     var w: std.Io.Writer.Allocating = .init(ctx.allocator);
+    //     try w.writer.print(
+    //         \\<!doctype html>
+    //         \\<html><head><meta charset="utf-8"><title>{s} Health</title></head>
+    //         \\<body><h1>Status: {s}</h1><ul>
+    //     , .{ ctx.container.appName, status });
+    //     var it = components.iterator();
+    //     while (it.next()) |kv| {
+    //         try w.writer.print("<li>{s}: {s}</li>", .{ kv.key_ptr.*, kv.value_ptr.*.string });
+    //     }
+    //     try w.writer.writeAll("</ul></body></html>");
+    //     ctx.response.setStatus(http_status);
+    //     ctx.response.content_type = .HTML;
+    //     ctx.response.body = w.written();
+    //     return;
+    // }
 
     ctx.response.setStatus(http_status);
     try ctx.response.json(services, .{});
@@ -1155,7 +1155,7 @@ pub fn addStaticFiles(self: *Self, prefix: []const u8, dir: []const u8) !void {
 }
 
 /// Registers list/get/create/update/delete REST handlers for struct `T`
-/// (see `zero.autocrud`). Mirrors GoFr's `AddRESTHandlers`.
+/// (see `zero.autocrud`).
 pub fn addRestHandlers(self: *Self, comptime T: type, comptime opts: root.AutoCrudOptions) !void {
     return root.addRestHandlers(self, T, opts);
 }

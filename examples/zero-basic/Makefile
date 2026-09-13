@@ -8,7 +8,7 @@ top:
 	top -pid $(pgrep -d',' basic)
 	
 release: 
-	zig build --release=fast --summary all
+	zig build -Dcpu=baseline -release=fast --summary all
 
-release-safe:
-	zig build -Doptimize=ReleaseSafe --summary all
+release-base:
+	zig build -Dcpu=baseline --release=safe --summary all

@@ -50,6 +50,7 @@ _*An `experimental` support has been added to achieve the zig version 0.16 addit
 - [Resilience](#resilience)
 - [Metrics](#metrics)
 - [Examples](#examples)
+- [Container Deployment](#container-deployment)
 - [CLI Application Mode](#cli-application-mode)
 - [GraphQL](#graphql)
 - [Protobuf](#protobuf)
@@ -62,26 +63,26 @@ _*An `experimental` support has been added to achieve the zig version 0.16 addit
 
 ## Features
 
-| Category        | Status | Details                                         |
-| --------------- | ------ | ----------------------------------------------- |
-| REST / CRUD     | ✅     | Build standard REST endpoints out-of-box        |
-| Configuration   | ✅     | `.env` with per-environment overrides           |
-| Logging         | ✅     | Structured, UTC timestamps                      |
-| Metrics         | ✅     | App, HTTP, SQL, KV + process/memory stats       |
-| Tracing         | ✅     | TraceID middleware, request-level tracing       |
-| Auth Middleware | ✅     | Basic, API Key, OAuth 2.0                       |
-| CORS            | ✅     | Configurable CORS middleware                    |
-| Panic Recovery  | ✅     | Automatic panic recovery                        |
+| Category        | Status | Details                                                      |
+| --------------- | ------ | ------------------------------------------------------------ |
+| REST / CRUD     | ✅     | Build standard REST endpoints out-of-box                     |
+| Configuration   | ✅     | `.env` with per-environment overrides                        |
+| Logging         | ✅     | Structured, UTC timestamps                                   |
+| Metrics         | ✅     | App, HTTP, SQL, KV + process/memory stats                    |
+| Tracing         | ✅     | TraceID middleware, request-level tracing                    |
+| Auth Middleware | ✅     | Basic, API Key, OAuth 2.0                                    |
+| CORS            | ✅     | Configurable CORS middleware                                 |
+| Panic Recovery  | ✅     | Automatic panic recovery                                     |
 | Databases       | ✅     | PostgreSQL, SQLite, Redis, DuckDB, InfluxDB, Solr, Cassandra |
-| Pub/Sub         | ✅     | MQTT, NATS, Kafka (via librdkafka), Redis        |
-| Migrations      | ✅     | DB migrations + seed on startup                 |
-| HTTP Client     | ✅     | Register multiple external services             |
-| Cron Jobs       | ✅     | `* * * * *` + second-level + range support      |
-| WebSockets      | ✅     | Built-in WebSocket support                      |
-| Static Files    | ✅     | Serve static assets + Swagger UI; `addStaticFiles` mounts   |
-| Health Checks   | ✅     | Liveness + status endpoints                     |
-| GraphQL         | ✅     | Schema-less resolvers over HTTP (POST/GET)      |
-| Protobuf        | ✅     | proto3 codegen + bind/decode & encode over HTTP |
+| Pub/Sub         | ✅     | MQTT, NATS, Kafka (via librdkafka), Redis                    |
+| Migrations      | ✅     | DB migrations + seed on startup                              |
+| HTTP Client     | ✅     | Register multiple external services                          |
+| Cron Jobs       | ✅     | `* * * * *` + second-level + range support                   |
+| WebSockets      | ✅     | Built-in WebSocket support                                   |
+| Static Files    | ✅     | Serve static assets + Swagger UI; `addStaticFiles` mounts    |
+| Health Checks   | ✅     | Liveness + status endpoints                                  |
+| GraphQL         | ✅     | Schema-less resolvers over HTTP (POST/GET)                   |
+| Protobuf        | ✅     | proto3 codegen + bind/decode & encode over HTTP              |
 
 See [feature_parity.md](./feature_parity.md) for the full roadmap and upcoming features.
 
@@ -183,17 +184,17 @@ See [full documentation](https://zerofmk.in/) for detailed guides on authenticat
 
 ## Project Structure
 
-| Directory         | Purpose                                     |
-| ----------------- | ------------------------------------------- |
+| Directory         | Purpose                                                                                                      |
+| ----------------- | ------------------------------------------------------------------------------------------------------------ |
 | `src/datasource/` | PostgreSQL/SQLite (`SQL`), DuckDB (`SQL`), Redis (`Cache`), Cassandra (`NoSQL`), specialized (InfluxDB/Solr) |
-| `src/pubsub/`     | MQTT, NATS and Kafka publishers/subscribers |
-| `src/cronz/`      | Cron scheduler and job execution            |
-| `src/migration/`  | Database migrations and seeding             |
-| `src/mw/`         | Middleware: auth, tracing, websocket        |
-| `src/service/`    | HTTP client for external services           |
-| `src/http/`       | Error types and HTTP utilities              |
-| `src/zsutil/`     | System utils: memory, CPU, process, host    |
-| `src/static/`     | Embedded Swagger UI assets                  |
+| `src/pubsub/`     | MQTT, NATS and Kafka publishers/subscribers                                                                  |
+| `src/cronz/`      | Cron scheduler and job execution                                                                             |
+| `src/migration/`  | Database migrations and seeding                                                                              |
+| `src/mw/`         | Middleware: auth, tracing, websocket                                                                         |
+| `src/service/`    | HTTP client for external services                                                                            |
+| `src/http/`       | Error types and HTTP utilities                                                                               |
+| `src/zsutil/`     | System utils: memory, CPU, process, host                                                                     |
+| `src/static/`     | Embedded Swagger UI assets                                                                                   |
 
 Key entry points:
 
@@ -298,7 +299,7 @@ preserve prior behavior), so existing apps are unaffected; enable them via
 The SQL datasource (`ctx.SQL`) and the KV/Redis cache (`ctx.KV`) can each be
 guarded by a circuit breaker — the same `circuit_breaker.zig` used for outbound
 services. After `failure_threshold` (5) consecutive failures the breaker trips
-*open* and calls fail fast with `error.CircuitOpen` until the cooldown (`30s`)
+_open_ and calls fail fast with `error.CircuitOpen` until the cooldown (`30s`)
 elapses and a half-open trial succeeds:
 
 ```bash
@@ -311,7 +312,7 @@ CACHE_CIRCUIT_BREAKER_ENABLE=true    # guard KV store (Redis) operations
 Framework-internal bootstrap allocations — container wiring, auth-provider keys,
 startup log buffers, the cron scheduler — are served from a single
 **pre-allocated fixed region** created once at startup, deliberately kept
-**outside** the request lifecycle (it is *not* the per-request httpz arena). This
+**outside** the request lifecycle (it is _not_ the per-request httpz arena). This
 removes heap churn and per-log-line allocations from the framework's own setup and
 bounds its resident memory.
 
@@ -382,7 +383,7 @@ is a Go library and cannot be used from pure Zig without cgo.
 
 ## File Store
 
- `zero` exposes a unified `FileStore` interface for blob storage, plus helpers
+`zero` exposes a unified `FileStore` interface for blob storage, plus helpers
 for handling `multipart/form-data` uploads and serving downloads. The `local`
 backend (rooted at `FILE_STORE_ROOT`, with `..` traversal protection) is
 implemented; `FTP`/`SFTP` backends are **deferred** (no vendored Zig libs; SFTP
@@ -451,8 +452,7 @@ The HTTP server enables `multipart/form-data` parsing by default (32 MB body /
 
 ## Auto CRUD
 
-`zero` can scaffold REST handlers for a struct in one line, mirroring GoFr's
-`AddRESTHandlers`:
+`zero` can scaffold REST handlers for a struct in one line using `AddRESTHandlers`:
 
 ```zig
 const User = struct { id: i64, name: []const u8, email: []const u8 };
@@ -637,7 +637,7 @@ SERVICE_PAYMENTS_RATE_LIMIT_WINDOW_MS=60000  # window length in ms (default 6000
 
 ### RBAC (role-based access control)
 
-A config-driven RBAC middleware runs *after* authentication. It reads the `role` claim from the
+A config-driven RBAC middleware runs _after_ authentication. It reads the `role` claim from the
 verified JWT and allows the request only when that role is granted the current `method`+`path`
 by a registered rule. Routes with no matching rule are public; a route with at least one rule
 requires the caller's role to match one of them. A request without a `role` claim (or without an
@@ -680,10 +680,11 @@ strings:
 
 ```json
 [
-  { "role": "ADMIN", "method": "*",        "path": "/api/*" },
-  { "role": "USER",  "method": "GET",      "path": "/api/resource" }
+  { "role": "ADMIN", "method": "*", "path": "/api/*" },
+  { "role": "USER", "method": "GET", "path": "/api/resource" }
 ]
 ```
+
 ```json
 { "ADMIN": ["GET:/api/*", "POST:/api/*"], "USER": ["GET:/api/resource"] }
 ```
@@ -829,107 +830,159 @@ See [`examples/zero-proto`](./examples/zero-proto) for a runnable example.
 
 21 example applications are available in the `examples/` directory:
 
-| Example                 | Description                            |
-| ----------------------- | -------------------------------------- |
+| Example                 | Description                                                             |
+| ----------------------- | ----------------------------------------------------------------------- |
 | `zero-basic`            | Minimal HTTP server + datasource demos (DuckDB/InfluxDB/Solr/Cassandra) |
-| `zero-duckdb`           | DuckDB (in-process OLAP SQL) CRUD over a `users` table (REST routes) |
-| `zero-cli`              | CLI application mode — subcommands reusing datasources/config/logger |
-| `zero-nosql`            | NoSQL CRUD over Cassandra (collection/:key REST routes) |
-| `zero-timeseries`       | Time-series CRUD over InfluxDB (write + Flux query) |
-| `zero-search`           | Search + persistence over Solr (index/get/delete/query) |
-| `zero-graphql`          | GraphQL-over-HTTP engine               |
-| `zero-proto`            | Protobuf-over-HTTP (codegen + bind)    |
-| `zero-auth`             | Authentication (Basic, API Key, OAuth) |
-| `zero-cronz`            | Cron job scheduling                    |
-| `zero-kafka-publisher`  | Kafka message publishing               |
-| `zero-kafka-subscriber` | Kafka message consumption              |
-| `zero-mqtt-publisher`   | MQTT message publishing                |
-| `zero-mqtt-subscriber`  | MQTT message consumption               |
-| `zero-nats-publisher`   | NATS message publishing                |
-| `zero-nats-subscriber`  | NATS message consumption               |
-| `zero-redis`            | Redis cache operations                 |
-| `zero-sqlite`           | SQLite database usage                  |
-| `zero-migration`        | Database migrations                    |
-| `zero-service-client`   | External HTTP service client           |
-| `zero-stream`           | Streaming responses                    |
-| `zero-todo-htmx`        | HTMX-powered CRUD app                  |
-| `zero-websocket`        | WebSocket connections                  |
+| `zero-duckdb`           | DuckDB (in-process OLAP SQL) CRUD over a `users` table (REST routes)    |
+| `zero-cli`              | CLI application mode — subcommands reusing datasources/config/logger    |
+| `zero-nosql`            | NoSQL CRUD over Cassandra (collection/:key REST routes)                 |
+| `zero-timeseries`       | Time-series CRUD over InfluxDB (write + Flux query)                     |
+| `zero-search`           | Search + persistence over Solr (index/get/delete/query)                 |
+| `zero-graphql`          | GraphQL-over-HTTP engine                                                |
+| `zero-proto`            | Protobuf-over-HTTP (codegen + bind)                                     |
+| `zero-auth`             | Authentication (Basic, API Key, OAuth)                                  |
+| `zero-cronz`            | Cron job scheduling                                                     |
+| `zero-kafka-publisher`  | Kafka message publishing                                                |
+| `zero-kafka-subscriber` | Kafka message consumption                                               |
+| `zero-mqtt-publisher`   | MQTT message publishing                                                 |
+| `zero-mqtt-subscriber`  | MQTT message consumption                                                |
+| `zero-nats-publisher`   | NATS message publishing                                                 |
+| `zero-nats-subscriber`  | NATS message consumption                                                |
+| `zero-redis`            | Redis cache operations                                                  |
+| `zero-sqlite`           | SQLite database usage                                                   |
+| `zero-migration`        | Database migrations                                                     |
+| `zero-service-client`   | External HTTP service client                                            |
+| `zero-stream`           | Streaming responses                                                     |
+| `zero-todo-htmx`        | HTMX-powered CRUD app                                                   |
+| `zero-websocket`        | WebSocket connections                                                   |
 
- Each example has its own `build.zig` and `build.zig.zon`.
+Each example has its own `build.zig` and `build.zig.zon`.
 
- ## CLI Application Mode
+## Container Deployment
 
- Zero can run as a **command-line application** — no HTTP server, no metrics
- server — while still reusing the full set of built-ins (config, logging,
- datasources, migrations, the container, scheduled jobs). Build with
- `App.newCmd` instead of `App.new`, register subcommands with `app.SubCommand`,
- and dispatch from `main` with `app.runCmd`.
+The `examples/zero-basic` app ships a multi-stage `Dockerfile.multi-stage` that
+builds the example **natively for musl on Alpine** (no cross-target needed): the
+glibc zig 0.16.0 binary runs under Alpine's `libc6-compat`, and `apk` provides
+the musl-built `librdkafka`/`openssl` shared libs; the DuckDB `.so` is dropped in
+from `examples/zero-basic/libs/`. The result is a minimal runtime image that runs
+the `basic` binary on port `8080` and reads its config from `/app/configs/.env`.
 
- ```zig
- const std = @import("std");
- const zero = @import("zero");
+> The image/registry names below (`gitea.pi/ng/...`) are placeholders — substitute
+> your own container registry and tag.
 
- const App = zero.App;
- const Context = zero.Context;
- const utils = zero.utils;
+### 1. Build the image
 
- pub fn main(init: std.process.Init) !void {
-     utils.setIo(init.io);
-     var gpa: std.heap.DebugAllocator(.{}) = .init;
-     const allocator = gpa.allocator();
+```bash
+podman build -f examples/zero-basic/Dockerfile.multi-stage -t gitea.pi/ng/zero-basic:v1.0 .
+```
 
-     // newCmd wires config/logging/container/datasources but starts NO HTTP server.
-     const app = try App.newCmd(allocator, init.environ_map);
-     try app.addDuckDB("app.db");
+This runs the builder stage (installs zig 0.16.0, links the musl shared libs,
+and `zig build -Dcpu=baseline --release=safe`), then copies only the `basic`
+binary plus the runtime libs into the slim Alpine runtime image.
 
-     try app.SubCommand("seed", seed, .{ .description = "populate the demo table" });
-     try app.SubCommand("list", list, .{ .description = "list rows" });
-     try app.SubCommand("greet", greet, .{ .description = "echo --name <who>" });
+### 2. Push to a registry
 
-     // init.minimal.args is the global argv iterator.
-     try app.runCmd(init.minimal.args);
- }
+```bash
+podman push gitea.pi/ng/zero-basic:v1.0
+```
 
- fn seed(ctx: *Context) !void {
-     _ = try ctx.SQL.exec(ctx, "CREATE TABLE IF NOT EXISTS t (id INTEGER, name VARCHAR)", .{});
-     _ = try ctx.SQL.exec(ctx, "INSERT INTO t VALUES (1, 'alice')", .{});
-     ctx.println("seeded", .{});
- }
+### 3. Run the container
 
- fn list(ctx: *Context) !void {
-     const rows = try ctx.SQL.queryRows(ctx, struct { id: i64, name: []const u8 },
-         "SELECT id, name FROM t ORDER BY id", .{});
-     defer ctx.allocator.free(rows);
-     for (rows) |r| ctx.println("{d} {s}", .{ r.id, r.name });
- }
+```bash
+podman run --rm -it --name zero-basic \
+  --security-opt seccomp=unconfined \
+  -v "${PWD}/configs:/app/configs:rw" \
+  "gitea.pi/ng/zero-basic:v1.0"
+```
 
- fn greet(ctx: *Context) !void {
-     // Flags after the command become ctx.params: `--name John` -> ctx.Param("name").
-     ctx.println("hello, {s}!", .{ctx.Param("name") orelse "world"});
- }
- ```
+- `-v "${PWD}/configs:/app/configs:rw"` — mounts your local `configs/` directory
+  into the container so the app loads `./configs/.env` (and any per-environment
+  overrides) at startup. Edit `configs/.env` on the host to change `APP_ENV`,
+  datasource URLs, auth mode, etc. without rebuilding.
+- `--security-opt seccomp=unconfined` — required because the musl-built binary
+  issues syscalls (e.g. `rseq`/`clone` variants) that podman's default seccomp
+  profile blocks; without it the process can crash or fail to start threads.
+- The image sets `APP_ENV=prod` and `EXPOSE 8080`; reach the app on
+  `http://localhost:8080` (health/liveness at `/.well-known/health`).
 
- Run it:
+The same image works with `docker` by swapping `podman` → `docker` (and
+`docker` already applies an unconfined-equivalent default for many setups, but
+the seccomp flag is harmless to keep).
 
- ```bash
- zig build            # in examples/zero-cli
- ./zig-out/bin/cli                 # prints usage + registered commands
- ./zig-out/bin/cli seed
- ./zig-out/bin/cli list
- ./zig-out/bin/cli greet --name Zig
- ```
+## CLI Application Mode
 
- Notes:
- - `App.newCmd` is strictly additive: `App.new` → `app.run()` keeps its exact
-   HTTP behavior. No HTTP or metrics server is created in CLI mode.
- - `ctx` in a handler is a `Context` built without an HTTP request/response; it
-   still exposes `ctx.SQL`, `ctx.Cache`, `ctx.NoSQL`, `ctx.FileStore`, the
-   logger (`ctx.Logger()`), and parsed flags (`ctx.Param`).
- - Flags use GNU/POSIX styles: `--flag value`, `--flag=value`, or `-f value`.
- - Migrations are not auto-run in CLI mode (consistent with the core); call
-   `app.runMigrations()` from a subcommand or a `registerStartupHook` if needed.
+Zero can run as a **command-line application** — no HTTP server, no metrics
+server — while still reusing the full set of built-ins (config, logging,
+datasources, migrations, the container, scheduled jobs). Build with
+`App.newCmd` instead of `App.new`, register subcommands with `app.SubCommand`,
+and dispatch from `main` with `app.runCmd`.
 
- ## Testing
+```zig
+const std = @import("std");
+const zero = @import("zero");
+
+const App = zero.App;
+const Context = zero.Context;
+const utils = zero.utils;
+
+pub fn main(init: std.process.Init) !void {
+    utils.setIo(init.io);
+    var gpa: std.heap.DebugAllocator(.{}) = .init;
+    const allocator = gpa.allocator();
+
+    // newCmd wires config/logging/container/datasources but starts NO HTTP server.
+    const app = try App.newCmd(allocator, init.environ_map);
+    try app.addDuckDB("app.db");
+
+    try app.SubCommand("seed", seed, .{ .description = "populate the demo table" });
+    try app.SubCommand("list", list, .{ .description = "list rows" });
+    try app.SubCommand("greet", greet, .{ .description = "echo --name <who>" });
+
+    // init.minimal.args is the global argv iterator.
+    try app.runCmd(init.minimal.args);
+}
+
+fn seed(ctx: *Context) !void {
+    _ = try ctx.SQL.exec(ctx, "CREATE TABLE IF NOT EXISTS t (id INTEGER, name VARCHAR)", .{});
+    _ = try ctx.SQL.exec(ctx, "INSERT INTO t VALUES (1, 'alice')", .{});
+    ctx.println("seeded", .{});
+}
+
+fn list(ctx: *Context) !void {
+    const rows = try ctx.SQL.queryRows(ctx, struct { id: i64, name: []const u8 },
+        "SELECT id, name FROM t ORDER BY id", .{});
+    defer ctx.allocator.free(rows);
+    for (rows) |r| ctx.println("{d} {s}", .{ r.id, r.name });
+}
+
+fn greet(ctx: *Context) !void {
+    // Flags after the command become ctx.params: `--name John` -> ctx.Param("name").
+    ctx.println("hello, {s}!", .{ctx.Param("name") orelse "world"});
+}
+```
+
+Run it:
+
+```bash
+zig build            # in examples/zero-cli
+./zig-out/bin/cli                 # prints usage + registered commands
+./zig-out/bin/cli seed
+./zig-out/bin/cli list
+./zig-out/bin/cli greet --name Zig
+```
+
+Notes:
+
+- `App.newCmd` is strictly additive: `App.new` → `app.run()` keeps its exact
+  HTTP behavior. No HTTP or metrics server is created in CLI mode.
+- `ctx` in a handler is a `Context` built without an HTTP request/response; it
+  still exposes `ctx.SQL`, `ctx.Cache`, `ctx.NoSQL`, `ctx.FileStore`, the
+  logger (`ctx.Logger()`), and parsed flags (`ctx.Param`).
+- Flags use GNU/POSIX styles: `--flag value`, `--flag=value`, or `-f value`.
+- Migrations are not auto-run in CLI mode (consistent with the core); call
+  `app.runMigrations()` from a subcommand or a `registerStartupHook` if needed.
+
+## Testing
 
 ```bash
 zig build test              # run unit tests (129 tests — framework + linked dependency suites)

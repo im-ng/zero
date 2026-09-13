@@ -30,6 +30,7 @@ clean:
 	rm -rf examples/zero-filestore/.zig-cache examples/zero-filestore/zig-out examples/zero-filestore/zig-pkg
 	rm -rf examples/zero-s3/.zig-cache examples/zero-s3/zig-out examples/zero-s3/zig-pkg
 	rm -rf examples/zero-autocrud/.zig-cache examples/zero-autocrud/zig-out examples/zero-autocrud/zig-pkg
+	rm -rf examples/zero-cli/.zig-cache examples/zero-cli/zig-out examples/zero-cli/zig-pkg
 
 release:
 	zig build --release=fast
@@ -37,6 +38,9 @@ release:
 release-prod:
 	zig build --release=small --summary all
 
+release-base:
+	zig build -Dcpu=baseline --release=safe --summary all
+	
 ut:
 	zig build test -Dcoverage --summary all
 

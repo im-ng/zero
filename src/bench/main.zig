@@ -588,6 +588,14 @@ pub fn main(init: std.process.Init) !void {
     var debug_alloc = false;
     var server_mode = false;
 
+    // Targeted-run options. `target_csv` selects scenario categories; `host`
+    // switches to external-server mode (no embedded app is booted).
+    var target_csv: ?[]const u8 = null;
+    var host: ?[]const u8 = null;
+    var port_opt: ?[]const u8 = null;
+    var vusers: ?usize = null;
+    var json_report = true; // report.json is always written; --json is accepted for CI parity
+
     var arg_it = std.process.Args.Iterator.init(init.minimal.args);
     while (arg_it.next()) |arg| {
         if (std.mem.startsWith(u8, arg, "--duration=")) {
@@ -606,10 +614,44 @@ pub fn main(init: std.process.Init) !void {
             path = std.heap.page_allocator.dupe(u8, arg[7..]) catch "/.well-known/health";
         } else if (std.mem.eql(u8, arg, "--suite")) {
             suite = true;
+        } else if (std.mem.startsWith(u8, arg, "--target=")) {
+            target_csv = arg[9..];
+        } else if (std.mem.startsWith(u8, arg, "--host=")) {
+            host = arg[7..];
+        } else if (std.mem.startsWith(u8, arg, "--port=")) {
+            port_opt = arg[7..];
+        } else if (std.mem.startsWith(u8, arg, "--vusers=")) {
+            vusers = std.fmt.parseInt(usize, arg[9..], 10) catch null;
+        } else if (std.mem.eql(u8, arg, "--json")) {
+            json_report = true;
         } else if (std.mem.eql(u8, arg, "--debug-alloc")) {
             debug_alloc = true;
         } else if (std.mem.eql(u8, arg, "--server")) {
             server_mode = true;
+        }
+    }
+
+    // --vusers=N expands to a ramp 1, N/4, N/2, N (rounded, unique, min 1) so the
+    // RSS plateau / leak heuristic stays meaningful. --levels wins if both set.
+    if (vusers) |n| {
+        if (level_count == 7 and levels[0] == 1 and levels[6] == 1000) {
+            var ramp: [4]usize = undefined;
+            ramp[0] = 1;
+            ramp[1] = @max(1, n / 4);
+            ramp[2] = @max(1, n / 2);
+            ramp[3] = @max(1, n);
+            // De-duplicate preserving order.
+            level_count = 0;
+            for (ramp) |v| {
+                var seen = false;
+                for (levels[0..level_count]) |existing| {
+                    if (existing == v) seen = true;
+                }
+                if (!seen) {
+                    levels[level_count] = v;
+                    level_count += 1;
+                }
+            }
         }
     }
 
@@ -624,137 +666,214 @@ pub fn main(init: std.process.Init) !void {
         try init.environ_map.put("RATE_LIMIT_ENABLE", "false");
     }
 
-    const app = try App.new(allocator, init.environ_map);
-    if (quiet) app.log.logLevel = 99;
+    // External-target mode: `--host` points the harness at an already-running
+    // zero server (e.g. one started with `./zig-out/bin/bench --server`, or a
+    // separate instance). We don't boot our own embedded app; we just wait for
+    // its health endpoint and drive the routes it exposes.
+    const external = host != null;
 
-    // Register the zero-basic workload so the suite/k6 can exercise resource
-    // endpoints (index/html, text, json, keys, db, proto get+post, graphql get+post,
-    // filestore get+post, and the Round-1 datasource routes: duckdb write/query,
-    // ts write/query, solr index/query, nosql put/get) — see plan: benchmark target
-    // = bench server (option B).
-    try app.addFileStore("bench", .local, .{ .root = "./data/bench" });
+    var base_url: []const u8 = undefined;
+    var health_url: []const u8 = undefined;
 
-    // Seed a filestore file so GET /filestore?key=bench-seed returns data.
-    {
-        const io = init.io;
-        std.Io.Dir.cwd().createDirPath(io, "./data/bench") catch |err| {
-            if (err != error.PathAlreadyExists) std.debug.print("bench seed dir warn: {any}\n", .{err});
-        };
-        std.Io.Dir.cwd().writeFile(io, .{ .sub_path = "./data/bench/bench-seed", .data = "bench-seed-payload" }) catch |err| {
-            std.debug.print("bench seed warn: {any}\n", .{err});
-        };
-    }
+    if (external) {
+        const port_resolved = port_opt orelse "8080";
+        base_url = try std.fmt.allocPrint(allocator, "http://{s}:{s}", .{ host.?, port_resolved });
+        health_url = try std.fmt.allocPrint(allocator, "http://{s}:{s}/.well-known/health", .{ host.?, port_resolved });
+        waitReady(init.io, health_url);
+    } else {
+        const app = try App.new(allocator, init.environ_map);
+        if (quiet) app.log.logLevel = 99;
 
-    try app.get("/", indexHandler);
-    try app.get("/text", textHandler);
-    try app.get("/json", jsonHandler);
-    try app.get("/keys", keysHandler);
-    try app.get("/db", dbHandler);
-    try app.get("/proto", protoGetHandler);
-    try app.post("/proto", protoPostHandler);
-    try app.graphql("/graphql", Query, null, &query_root, null);
-    try app.get("/filestore", filestoreGetHandler);
-    try app.post("/filestore", filestorePostHandler);
+        // Register the zero-basic workload so the suite/k6 can exercise resource
+        // endpoints (index/html, text, json, keys, db, proto get+post, graphql get+post,
+        // filestore get+post, and the Round-1 datasource routes: duckdb write/query,
+        // ts write/query, solr index/query, nosql put/get) — see plan: benchmark target
+        // = bench server (option B).
+        try app.addFileStore("bench", .local, .{ .root = "./data/bench" });
 
-    // Round-1 datasource routes (501 when the backend isn't configured).
-    try app.addDuckDB(":memory:");
-    try app.get("/duckdb/write", duckdbWriteHandler);
-    try app.get("/duckdb/query", duckdbQueryHandler);
-    try app.get("/ts/write", tsWriteHandler);
-    try app.get("/ts/query", tsQueryHandler);
-    try app.get("/solr/index", solrIndexHandler);
-    try app.get("/solr/query", solrQueryHandler);
-    try app.get("/nosql/put", nosqlPutHandler);
-    try app.get("/nosql/get", nosqlGetHandler);
+        // Seed a filestore file so GET /filestore?key=bench-seed returns data.
+        {
+            const io = init.io;
+            std.Io.Dir.cwd().createDirPath(io, "./data/bench") catch |err| {
+                if (err != error.PathAlreadyExists) std.debug.print("bench seed dir warn: {any}\n", .{err});
+            };
+            std.Io.Dir.cwd().writeFile(io, .{ .sub_path = "./data/bench/bench-seed", .data = "bench-seed-payload" }) catch |err| {
+                std.debug.print("bench seed warn: {any}\n", .{err});
+            };
+        }
 
-    const srv_thread = try std.Thread.spawn(.{}, appRun, .{app});
+        try app.get("/", indexHandler);
+        try app.get("/text", textHandler);
+        try app.get("/json", jsonHandler);
+        try app.get("/keys", keysHandler);
+        try app.get("/db", dbHandler);
+        try app.get("/proto", protoGetHandler);
+        try app.post("/proto", protoPostHandler);
+        try app.graphql("/graphql", Query, null, &query_root, null);
+        try app.get("/filestore", filestoreGetHandler);
+        try app.post("/filestore", filestorePostHandler);
 
-    const port = app.httpServer.port;
-    const health_url = try std.fmt.allocPrint(allocator, "http://127.0.0.1:{d}/.well-known/health", .{port});
-    waitReady(init.io, health_url);
+        // Round-1 datasource routes (501 when the backend isn't configured).
+        try app.addDuckDB(":memory:");
+        try app.get("/duckdb/write", duckdbWriteHandler);
+        try app.get("/duckdb/query", duckdbQueryHandler);
+        try app.get("/ts/write", tsWriteHandler);
+        try app.get("/ts/query", tsQueryHandler);
+        try app.get("/solr/index", solrIndexHandler);
+        try app.get("/solr/query", solrQueryHandler);
+        try app.get("/nosql/put", nosqlPutHandler);
+        try app.get("/nosql/get", nosqlGetHandler);
 
-    // Server mode: keep the app (with the suite routes) running so an external
-    // load generator such as k6 can drive it locally. Blocks until Ctrl-C.
-    if (server_mode) {
-        std.debug.print("\nzero bench server listening on port {d} (Ctrl-C to stop)\n", .{port});
-        std.debug.print("  health       {s}\n", .{health_url});
-        std.debug.print("  health-json  {s}   (Accept: application/json)\n", .{health_url});
-        std.debug.print("  health-html  {s}   (Accept: text/html)\n", .{health_url});
-        std.debug.print("  proto        http://127.0.0.1:{d}/proto   (GET/POST, application/x-protobuf)\n", .{port});
-        std.debug.print("  graphql      http://127.0.0.1:{d}/graphql (GET ?query= / POST, application/json)\n", .{port});
-        std.debug.print("  filestore    http://127.0.0.1:{d}/filestore (GET ?key= / POST)\n", .{port});
-        std.debug.print("  duckdb       http://127.0.0.1:{d}/duckdb/write | /duckdb/query\n", .{port});
-        std.debug.print("  ts           http://127.0.0.1:{d}/ts/write | /ts/query (needs INFLUXDB_URL)\n", .{port});
-        std.debug.print("  solr         http://127.0.0.1:{d}/solr/index | /solr/query (needs SOLR_URL)\n", .{port});
-        std.debug.print("  nosql        http://127.0.0.1:{d}/nosql/put | /nosql/get (needs CASSANDRA_CONTACT_POINTS)\n", .{port});
-        std.debug.print("\nRun:  k6 run bench/k6/baseline.js\n", .{});
-        srv_thread.join();
-        std.process.exit(0);
+        const srv_thread = try std.Thread.spawn(.{}, appRun, .{app});
+
+        const port = app.httpServer.port;
+        base_url = try std.fmt.allocPrint(allocator, "http://127.0.0.1:{d}", .{port});
+        health_url = try std.fmt.allocPrint(allocator, "http://127.0.0.1:{d}/.well-known/health", .{port});
+        waitReady(init.io, health_url);
+
+        // Server mode: keep the app (with the suite routes) running so an external
+        // load generator such as k6 can drive it locally. Blocks until Ctrl-C.
+        if (server_mode) {
+            std.debug.print("\nzero bench server listening on port {d} (Ctrl-C to stop)\n", .{port});
+            std.debug.print("  health       {s}\n", .{health_url});
+            std.debug.print("  health-json  {s}   (Accept: application/json)\n", .{health_url});
+            std.debug.print("  health-html  {s}   (Accept: text/html)\n", .{health_url});
+            std.debug.print("  proto        http://127.0.0.1:{d}/proto   (GET/POST, application/x-protobuf)\n", .{port});
+            std.debug.print("  graphql      http://127.0.0.1:{d}/graphql (GET ?query= / POST, application/json)\n", .{port});
+            std.debug.print("  filestore    http://127.0.0.1:{d}/filestore (GET ?key= / POST)\n", .{port});
+            std.debug.print("  duckdb       http://127.0.0.1:{d}/duckdb/write | /duckdb/query\n", .{port});
+            std.debug.print("  ts           http://127.0.0.1:{d}/ts/write | /ts/query (needs INFLUXDB_URL)\n", .{port});
+            std.debug.print("  solr         http://127.0.0.1:{d}/solr/index | /solr/query (needs SOLR_URL)\n", .{port});
+            std.debug.print("  nosql        http://127.0.0.1:{d}/nosql/put | /nosql/get (needs CASSANDRA_CONTACT_POINTS)\n", .{port});
+            std.debug.print("\nRun:  k6 run bench/k6/baseline.js\n", .{});
+            srv_thread.join();
+            std.process.exit(0);
+        }
     }
 
     const duration_ns = @as(u64, @intFromFloat(duration_s * 1_000_000_000.0));
     var peak_rss: u64 = 0;
 
-    // Build the scenario list: the built-in suite, or a single custom path.
+    // Build the scenario list. Each scenario is tagged with a category so the
+    // harness can run a subset via --target=<csv> (or --suite / --target=all).
     var scenarios = std.array_list.Managed(ScenarioReport).init(allocator);
 
+    const proto_body = try encodeTestMsg(allocator);
+    const graphql_body = "{\"query\":\"{ hello }\"}";
+
+    // One entry per benchmarkable route. `category` selects it; `gated_env` (when
+    // set) skips the scenario unless that env var is configured, so the committed
+    // CI baseline stays stable without external services.
+    const Spec = struct {
+        name: []const u8,
+        category: []const u8,
+        method: std.http.Method,
+        path: []const u8,
+        body: ?[]const u8 = null,
+        content_type: ?[]const u8 = null,
+        accept: ?[]const u8 = null,
+        expect_ct: ?[]const u8 = null,
+        gated_env: ?[]const u8 = null,
+    };
+
+    const raw_specs = [_]Spec{
+        .{ .name = "health", .category = "health", .method = .GET, .path = "/.well-known/health" },
+        .{ .name = "health-json", .category = "health", .method = .GET, .path = "/.well-known/health", .accept = "application/json", .expect_ct = "application/json" },
+        .{ .name = "health-html", .category = "health", .method = .GET, .path = "/.well-known/health", .accept = "text/html", .expect_ct = "text/html" },
+        .{ .name = "index", .category = "http", .method = .GET, .path = "/", .expect_ct = "text/html" },
+        .{ .name = "text", .category = "http", .method = .GET, .path = "/text", .expect_ct = "text/plain" },
+        .{ .name = "json", .category = "http", .method = .GET, .path = "/json", .expect_ct = "application/json" },
+        .{ .name = "keys", .category = "http", .method = .GET, .path = "/keys", .expect_ct = "application/json" },
+        .{ .name = "db", .category = "http", .method = .GET, .path = "/db", .expect_ct = "application/json" },
+        // sql: in-memory DuckDB read path only (the write path trips the leak
+        // heuristic; exercised via --server/k6 instead).
+        .{ .name = "duckdb-query", .category = "sql", .method = .GET, .path = "/duckdb/query", .expect_ct = "application/json" },
+        .{ .name = "proto-get", .category = "proto", .method = .GET, .path = "/proto", .expect_ct = "application/x-protobuf" },
+        .{ .name = "proto", .category = "proto", .method = .POST, .path = "/proto", .body = proto_body, .content_type = "application/x-protobuf" },
+        .{ .name = "graphql-get", .category = "graphql", .method = .GET, .path = "/graphql?query=%7B%20hello%20%7D", .expect_ct = "application/json" },
+        .{ .name = "graphql", .category = "graphql", .method = .POST, .path = "/graphql", .body = graphql_body, .content_type = "application/json" },
+        .{ .name = "filestore-get", .category = "filestore", .method = .GET, .path = "/filestore?key=bench-seed", .expect_ct = "application/octet-stream" },
+        .{ .name = "filestore", .category = "filestore", .method = .POST, .path = "/filestore", .body = "x" },
+        .{ .name = "ts-write", .category = "timeseries", .method = .GET, .path = "/ts/write", .expect_ct = "application/json", .gated_env = "INFLUXDB_URL" },
+        .{ .name = "ts-query", .category = "timeseries", .method = .GET, .path = "/ts/query", .expect_ct = "application/json", .gated_env = "INFLUXDB_URL" },
+        .{ .name = "solr-index", .category = "search", .method = .GET, .path = "/solr/index", .expect_ct = "application/json", .gated_env = "SOLR_URL" },
+        .{ .name = "solr-query", .category = "search", .method = .GET, .path = "/solr/query", .expect_ct = "application/json", .gated_env = "SOLR_URL" },
+        .{ .name = "nosql-put", .category = "nosql", .method = .GET, .path = "/nosql/put", .expect_ct = "application/json", .gated_env = "CASSANDRA_CONTACT_POINTS" },
+        .{ .name = "nosql-get", .category = "nosql", .method = .GET, .path = "/nosql/get", .expect_ct = "application/json", .gated_env = "CASSANDRA_CONTACT_POINTS" },
+    };
+
+    // Resolve the requested categories. --suite or --target=all => every category.
+    // Otherwise the comma-separated --target list; an empty target means a single
+    // custom --path run (handled below).
+    var selected_buf: [16][]const u8 = undefined;
+    var selected_count: usize = 0;
     if (suite) {
-        const proto_body = try encodeTestMsg(allocator);
-        const graphql_body = "{\"query\":\"{ hello }\"}";
+        const all = [_][]const u8{ "health", "http", "sql", "nosql", "timeseries", "search", "proto", "graphql", "filestore" };
+        for (all) |c| {
+            if (selected_count < selected_buf.len) {
+                selected_buf[selected_count] = c;
+                selected_count += 1;
+            }
+        }
+    } else if (target_csv) |csv| {
+        var it = std.mem.tokenizeScalar(u8, csv, ',');
+        while (it.next()) |tok| {
+            const c = std.mem.trim(u8, tok, " ");
+            if (std.mem.eql(u8, c, "all")) {
+                const all = [_][]const u8{ "health", "http", "sql", "nosql", "timeseries", "search", "proto", "graphql", "filestore" };
+                for (all) |a| {
+                    if (selected_count < selected_buf.len) {
+                        selected_buf[selected_count] = a;
+                        selected_count += 1;
+                    }
+                }
+                break;
+            }
+            if (c.len > 0 and selected_count < selected_buf.len) {
+                selected_buf[selected_count] = c;
+                selected_count += 1;
+            }
+        }
+    }
 
-        const specs = [_]struct { name: []const u8, req: Req }{
-            .{ .name = "health", .req = .{ .method = .GET, .url = health_url } },
-            .{ .name = "health-json", .req = .{ .method = .GET, .url = health_url, .accept = "application/json", .expect_ct = "application/json" } },
-            .{ .name = "health-html", .req = .{ .method = .GET, .url = health_url, .accept = "text/html", .expect_ct = "text/html" } },
-            .{ .name = "index", .req = .{ .method = .GET, .url = try std.fmt.allocPrint(allocator, "http://127.0.0.1:{d}/", .{port}), .expect_ct = "text/html" } },
-            .{ .name = "text", .req = .{ .method = .GET, .url = try std.fmt.allocPrint(allocator, "http://127.0.0.1:{d}/text", .{port}), .expect_ct = "text/plain" } },
-            .{ .name = "json", .req = .{ .method = .GET, .url = try std.fmt.allocPrint(allocator, "http://127.0.0.1:{d}/json", .{port}), .expect_ct = "application/json" } },
-            .{ .name = "keys", .req = .{ .method = .GET, .url = try std.fmt.allocPrint(allocator, "http://127.0.0.1:{d}/keys", .{port}), .expect_ct = "application/json" } },
-            .{ .name = "db", .req = .{ .method = .GET, .url = try std.fmt.allocPrint(allocator, "http://127.0.0.1:{d}/db", .{port}), .expect_ct = "application/json" } },
-            .{ .name = "proto-get", .req = .{ .method = .GET, .url = try std.fmt.allocPrint(allocator, "http://127.0.0.1:{d}/proto", .{port}), .expect_ct = "application/x-protobuf" } },
-            .{ .name = "proto", .req = .{ .method = .POST, .url = try std.fmt.allocPrint(allocator, "http://127.0.0.1:{d}/proto", .{port}), .body = proto_body, .content_type = "application/x-protobuf" } },
-            .{ .name = "graphql-get", .req = .{ .method = .GET, .url = try std.fmt.allocPrint(allocator, "http://127.0.0.1:{d}/graphql?query=%7B%20hello%20%7D", .{port}), .expect_ct = "application/json" } },
-            .{ .name = "graphql", .req = .{ .method = .POST, .url = try std.fmt.allocPrint(allocator, "http://127.0.0.1:{d}/graphql", .{port}), .body = graphql_body, .content_type = "application/json" } },
-            .{ .name = "filestore-get", .req = .{ .method = .GET, .url = try std.fmt.allocPrint(allocator, "http://127.0.0.1:{d}/filestore?key=bench-seed", .{port}), .expect_ct = "application/octet-stream" } },
-            .{ .name = "filestore", .req = .{ .method = .POST, .url = try std.fmt.allocPrint(allocator, "http://127.0.0.1:{d}/filestore", .{port}), .body = "x" } },
+    const targeted = selected_count > 0;
 
-            // Round-1 datasources. DuckDB is in-memory (offline-safe); the rest
-            // are only benchmarked when their backend env vars are present, so the
-            // committed CI baseline stays stable without external services. Only the
-            // bounded read path is in the suite — the DuckDB in-memory write path
-            // grows the engine's buffer pool under load (a known false-positive for
-            // the leak heuristic), so writes are exercised via --server/k6 instead.
-            .{ .name = "duckdb-query", .req = .{ .method = .GET, .url = try std.fmt.allocPrint(allocator, "http://127.0.0.1:{d}/duckdb/query", .{port}), .expect_ct = "application/json" } },
-        };
-
-        std.debug.print("\nzero framework HTTP benchmark (suite)\n", .{});
-        std.debug.print("duration={d}s/level  logging={s}\n\n", .{ duration_s, if (quiet) "off" else "on" });
-
-        for (specs) |sp| {
-            const rep = try runScenario(allocator, init.io, &peak_rss, sp.name, sp.req, duration_ns, levels[0..level_count]);
+    if (targeted) {
+        std.debug.print("\nzero framework HTTP benchmark (targeted)\n", .{});
+        const targets_label = if (target_csv) |c| c else "all (--suite)";
+        std.debug.print("targets={s}  duration={}s/level  logging={s}\n\n", .{ targets_label, duration_s, if (quiet) "off" else "on" });
+        for (raw_specs) |sp| {
+            // Skip scenarios whose category wasn't requested.
+            var want = false;
+            for (selected_buf[0..selected_count]) |c| {
+                if (std.mem.eql(u8, c, sp.category)) want = true;
+            }
+            if (!want) continue;
+            // Skip backend-gated scenarios when their service isn't configured.
+            if (sp.gated_env) |env| {
+                if (!envConfigured(init, env)) continue;
+            }
+            const url = try std.fmt.allocPrint(allocator, "{s}{s}", .{ base_url, sp.path });
+            const req: Req = .{
+                .method = sp.method,
+                .url = url,
+                .body = sp.body,
+                .content_type = sp.content_type,
+                .accept = sp.accept,
+                .expect_ct = sp.expect_ct,
+            };
+            const rep = try runScenario(allocator, init.io, &peak_rss, sp.name, req, duration_ns, levels[0..level_count]);
             try scenarios.append(rep);
         }
-
-        // Backend-gated datasource scenarios: only run when the backend env is set,
-        // so the committed CI baseline stays stable without external services.
-        if (envConfigured(init, "INFLUXDB_URL")) {
-            try runExtraScenario(allocator, init.io, &peak_rss, "ts-write", .{ .method = .GET, .url = try std.fmt.allocPrint(allocator, "http://127.0.0.1:{d}/ts/write", .{port}), .expect_ct = "application/json" }, duration_ns, levels[0..level_count], &scenarios);
-            try runExtraScenario(allocator, init.io, &peak_rss, "ts-query", .{ .method = .GET, .url = try std.fmt.allocPrint(allocator, "http://127.0.0.1:{d}/ts/query", .{port}), .expect_ct = "application/json" }, duration_ns, levels[0..level_count], &scenarios);
-        }
-        if (envConfigured(init, "SOLR_URL")) {
-            try runExtraScenario(allocator, init.io, &peak_rss, "solr-index", .{ .method = .GET, .url = try std.fmt.allocPrint(allocator, "http://127.0.0.1:{d}/solr/index", .{port}), .expect_ct = "application/json" }, duration_ns, levels[0..level_count], &scenarios);
-            try runExtraScenario(allocator, init.io, &peak_rss, "solr-query", .{ .method = .GET, .url = try std.fmt.allocPrint(allocator, "http://127.0.0.1:{d}/solr/query", .{port}), .expect_ct = "application/json" }, duration_ns, levels[0..level_count], &scenarios);
-        }
-        if (envConfigured(init, "CASSANDRA_CONTACT_POINTS")) {
-            try runExtraScenario(allocator, init.io, &peak_rss, "nosql-put", .{ .method = .GET, .url = try std.fmt.allocPrint(allocator, "http://127.0.0.1:{d}/nosql/put", .{port}), .expect_ct = "application/json" }, duration_ns, levels[0..level_count], &scenarios);
-            try runExtraScenario(allocator, init.io, &peak_rss, "nosql-get", .{ .method = .GET, .url = try std.fmt.allocPrint(allocator, "http://127.0.0.1:{d}/nosql/get", .{port}), .expect_ct = "application/json" }, duration_ns, levels[0..level_count], &scenarios);
-        }
-    } else {
-        const url = try std.fmt.allocPrint(allocator, "http://127.0.0.1:{d}{s}", .{ port, path });
+    } else if (!external) {
+        const url = try std.fmt.allocPrint(allocator, "{s}{s}", .{ base_url, path });
         std.debug.print("\nzero framework HTTP benchmark\n", .{});
         std.debug.print("target={s}  duration={d}s/level  logging={s}\n\n", .{ url, duration_s, if (quiet) "off" else "on" });
         const rep = try runScenario(allocator, init.io, &peak_rss, path, .{ .method = .GET, .url = url }, duration_ns, levels[0..level_count]);
         try scenarios.append(rep);
+    } else {
+        std.debug.print("\nerror: --host set but no --target given. Pick a category, e.g. --target=all\n", .{});
+        std.process.exit(1);
     }
 
     writeReport(allocator, scenarios.items);
