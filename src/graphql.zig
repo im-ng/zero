@@ -550,6 +550,10 @@ const TestQuery = struct {
     user: *const fn (*TestCtx, TestArgs) anyerror!TestUser = testUserResolver,
 };
 
+
+// ===================== Tests =====================
+
+
 test "graphql: resolve query with constant, resolver and arguments" {
     const testing = std.testing;
     const alloc = testing.allocator;

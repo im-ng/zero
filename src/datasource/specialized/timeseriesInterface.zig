@@ -114,6 +114,10 @@ pub const MockBackend = struct {
     }
 };
 
+
+// ===================== Tests =====================
+
+
 test "Timeseries dispatches through the type-erased handle" {
     var mock: MockBackend = .{ .last_measurement = "" };
     var ts = Timeseries.init(&mock, .mock, null);

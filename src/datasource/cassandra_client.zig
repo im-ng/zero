@@ -514,6 +514,10 @@ fn writeValue(list: *List, alloc: std.mem.Allocator, cell: Cell) !void {
     }
 }
 
+
+// ===================== Tests =====================
+
+
 test "cassandra live round-trip (set CASSANDRA_TEST=1 to run)" {
     if (std.testing.environ.getPosix("CASSANDRA_TEST")) |_| {} else return;
     var conn = Connection.init(std.testing.allocator, "127.0.0.1:9042", "cassandra", "cassandra");

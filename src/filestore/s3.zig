@@ -396,6 +396,10 @@ pub fn signAuthorization(
     , .{ access_key, scope, sh, sig_hex });
 }
 
+
+// ===================== Tests =====================
+
+
 test "FileStoreS3: hmac-sha256 (RFC 4231 case 2)" {
     const key = [_]u8{0x0b} ** 20;
     const data = "Hi There";

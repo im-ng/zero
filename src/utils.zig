@@ -128,6 +128,10 @@ pub fn toCString(allocator: std.mem.Allocator, value: []const u8) [*c]const u8 {
     return @constCast(buffer.ptr);
 }
 
+
+// ===================== Tests =====================
+
+
 test "combine produces correct output" {
     const allocator = std.heap.page_allocator;
     const result = try combine(allocator, "hello {s}", .{"world"});

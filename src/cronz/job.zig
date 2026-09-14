@@ -106,6 +106,10 @@ pub const Job: type = struct {
     }
 };
 
+
+// ===================== Tests =====================
+
+
 test "job create initializes all hash maps" {
     const allocator = std.testing.allocator;
     var j = try Job.create(allocator);

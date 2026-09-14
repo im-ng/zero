@@ -170,6 +170,10 @@ fn calculateCpuUsage(prev: CpuUsage, curr: CpuUsage) f32 {
     return res;
 }
 
+
+// ===================== Tests =====================
+
+
 test "getFirstNumber finds first digit" {
     try std.testing.expectEqual(@as(usize, 5), getFirstNumber("cpu  1234 5678"));
     try std.testing.expectEqual(@as(usize, 3), getFirstNumber("cpu1234 5678"));

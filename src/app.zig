@@ -396,89 +396,6 @@ pub fn startRemoteLogLevel(self: *Self) !void {
     try self.addCronJob(schedule, "remote-log-level-sync", remoteLogLevelSync);
 }
 
-test "parseLogLevel / logLevelName round-trip" {
-    try std.testing.expectEqual(@as(?u8, 0), parseLogLevel("debug"));
-    try std.testing.expectEqual(@as(?u8, 1), parseLogLevel("info"));
-    try std.testing.expectEqual(@as(?u8, 2), parseLogLevel("warn"));
-    try std.testing.expectEqual(@as(?u8, 3), parseLogLevel("error"));
-    try std.testing.expectEqual(@as(?u8, 4), parseLogLevel("fatal"));
-    try std.testing.expectEqual(@as(?u8, 99), parseLogLevel("none"));
-    try std.testing.expectEqual(@as(?u8, null), parseLogLevel("verbose"));
-    try std.testing.expectEqual(@as(?u8, null), parseLogLevel(""));
-
-    try std.testing.expectEqualStrings("debug", logLevelName(0));
-    try std.testing.expectEqualStrings("info", logLevelName(1));
-    try std.testing.expectEqualStrings("warn", logLevelName(2));
-    try std.testing.expectEqualStrings("error", logLevelName(3));
-    try std.testing.expectEqualStrings("fatal", logLevelName(4));
-    try std.testing.expectEqualStrings("none", logLevelName(99));
-    try std.testing.expectEqualStrings("none", logLevelName(7));
-}
-
-test "app: health aggregates custom checks and reports 503 on failure" {
-    const t = httpz.testing;
-    var testing = t.init(.{});
-    defer testing.deinit();
-
-    var c: root.container = .{ .allocator = testing.arena };
-    c.appName = "demo";
-    c.appVersion = "9.9";
-    c.healthChecks = std.array_list.Managed(root.container.HealthCheck).init(testing.arena);
-
-    const ok: *const fn (*root.container) anyerror!void = struct {
-        fn f(_: *root.container) anyerror!void {}
-    }.f;
-    const bad: *const fn (*root.container) anyerror!void = struct {
-        fn f(_: *root.container) anyerror!void {
-            return error.Sick;
-        }
-    }.f;
-
-    try c.healthChecks.append(.{ .name = "cache", .check = ok });
-    try c.healthChecks.append(.{ .name = "billing", .check = bad });
-
-    var ctx: Context = undefined;
-    ctx.allocator = testing.arena;
-    ctx.container = &c;
-    ctx.request = testing.req;
-    ctx.response = testing.res;
-
-    try health(&ctx);
-    const pr = try testing.parseResponse();
-    try std.testing.expectEqual(@as(u16, 503), pr.status);
-    try std.testing.expect(std.mem.indexOf(u8, pr.body, "DOWN") != null);
-    try std.testing.expect(std.mem.indexOf(u8, pr.body, "billing") != null);
-    try std.testing.expect(std.mem.indexOf(u8, pr.body, "cache") != null);
-}
-
-test "app: health reports 200 UP when all custom checks pass" {
-    const t = httpz.testing;
-    var testing = t.init(.{});
-    defer testing.deinit();
-
-    var c: root.container = .{ .allocator = testing.arena };
-    c.appName = "demo";
-    c.appVersion = "9.9";
-    c.healthChecks = std.array_list.Managed(root.container.HealthCheck).init(testing.arena);
-
-    const ok: *const fn (*root.container) anyerror!void = struct {
-        fn f(_: *root.container) anyerror!void {}
-    }.f;
-    try c.healthChecks.append(.{ .name = "cache", .check = ok });
-
-    var ctx: Context = undefined;
-    ctx.allocator = testing.arena;
-    ctx.container = &c;
-    ctx.request = testing.req;
-    ctx.response = testing.res;
-
-    try health(&ctx);
-    const pr = try testing.parseResponse();
-    try std.testing.expectEqual(@as(u16, 200), pr.status);
-    try std.testing.expect(std.mem.indexOf(u8, pr.body, "UP") != null);
-    try std.testing.expect(std.mem.indexOf(u8, pr.body, "cache") != null);
-}
-
 pub fn onStartup(self: *Self, hook: fn (*root.Context) anyerror!void) void {
     self.startupHook = &hook;
 }
@@ -1228,4 +1145,90 @@ pub fn addOAuthKeyRefresher(self: *Self) anyerror!void {
             },
         }
     }
+}
+
+// ===================== Tests =====================
+
+
+test "parseLogLevel / logLevelName round-trip" {
+    try std.testing.expectEqual(@as(?u8, 0), parseLogLevel("debug"));
+    try std.testing.expectEqual(@as(?u8, 1), parseLogLevel("info"));
+    try std.testing.expectEqual(@as(?u8, 2), parseLogLevel("warn"));
+    try std.testing.expectEqual(@as(?u8, 3), parseLogLevel("error"));
+    try std.testing.expectEqual(@as(?u8, 4), parseLogLevel("fatal"));
+    try std.testing.expectEqual(@as(?u8, 99), parseLogLevel("none"));
+    try std.testing.expectEqual(@as(?u8, null), parseLogLevel("verbose"));
+    try std.testing.expectEqual(@as(?u8, null), parseLogLevel(""));
+
+    try std.testing.expectEqualStrings("debug", logLevelName(0));
+    try std.testing.expectEqualStrings("info", logLevelName(1));
+    try std.testing.expectEqualStrings("warn", logLevelName(2));
+    try std.testing.expectEqualStrings("error", logLevelName(3));
+    try std.testing.expectEqualStrings("fatal", logLevelName(4));
+    try std.testing.expectEqualStrings("none", logLevelName(99));
+    try std.testing.expectEqualStrings("none", logLevelName(7));
+}
+
+test "app: health aggregates custom checks and reports 503 on failure" {
+    const t = httpz.testing;
+    var testing = t.init(.{});
+    defer testing.deinit();
+
+    var c: root.container = .{ .allocator = testing.arena };
+    c.appName = "demo";
+    c.appVersion = "9.9";
+    c.healthChecks = std.array_list.Managed(root.container.HealthCheck).init(testing.arena);
+
+    const ok: *const fn (*root.container) anyerror!void = struct {
+        fn f(_: *root.container) anyerror!void {}
+    }.f;
+    const bad: *const fn (*root.container) anyerror!void = struct {
+        fn f(_: *root.container) anyerror!void {
+            return error.Sick;
+        }
+    }.f;
+
+    try c.healthChecks.append(.{ .name = "cache", .check = ok });
+    try c.healthChecks.append(.{ .name = "billing", .check = bad });
+
+    var ctx: Context = undefined;
+    ctx.allocator = testing.arena;
+    ctx.container = &c;
+    ctx.request = testing.req;
+    ctx.response = testing.res;
+
+    try health(&ctx);
+    const pr = try testing.parseResponse();
+    try std.testing.expectEqual(@as(u16, 503), pr.status);
+    try std.testing.expect(std.mem.indexOf(u8, pr.body, "DOWN") != null);
+    try std.testing.expect(std.mem.indexOf(u8, pr.body, "billing") != null);
+    try std.testing.expect(std.mem.indexOf(u8, pr.body, "cache") != null);
+}
+
+test "app: health reports 200 UP when all custom checks pass" {
+    const t = httpz.testing;
+    var testing = t.init(.{});
+    defer testing.deinit();
+
+    var c: root.container = .{ .allocator = testing.arena };
+    c.appName = "demo";
+    c.appVersion = "9.9";
+    c.healthChecks = std.array_list.Managed(root.container.HealthCheck).init(testing.arena);
+
+    const ok: *const fn (*root.container) anyerror!void = struct {
+        fn f(_: *root.container) anyerror!void {}
+    }.f;
+    try c.healthChecks.append(.{ .name = "cache", .check = ok });
+
+    var ctx: Context = undefined;
+    ctx.allocator = testing.arena;
+    ctx.container = &c;
+    ctx.request = testing.req;
+    ctx.response = testing.res;
+
+    try health(&ctx);
+    const pr = try testing.parseResponse();
+    try std.testing.expectEqual(@as(u16, 200), pr.status);
+    try std.testing.expect(std.mem.indexOf(u8, pr.body, "UP") != null);
+    try std.testing.expect(std.mem.indexOf(u8, pr.body, "cache") != null);
 }

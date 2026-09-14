@@ -87,6 +87,10 @@ pub const Host = struct {
     hostname: []const u8 = "",
 };
 
+
+// ===================== Tests =====================
+
+
 test "setValue parses NAME field with quotes" {
     const allocator = std.testing.allocator;
     var val: []const u8 = "";

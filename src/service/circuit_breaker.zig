@@ -106,6 +106,10 @@ pub const CircuitBreaker = struct {
     }
 };
 
+
+// ===================== Tests =====================
+
+
 test "circuit breaker stays closed then opens after threshold" {
     var cb = CircuitBreaker.init(.{});
     try cb.before();

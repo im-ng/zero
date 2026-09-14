@@ -341,6 +341,10 @@ pub fn refreshKeys(ctx: *Context) !void {
     ctx.info("oatuh keys refreshed");
 }
 
+
+// ===================== Tests =====================
+
+
 test "AuthMode.str returns correct strings" {
     try std.testing.expectEqualStrings("Basic", AuthMode.Basic.str());
     try std.testing.expectEqualStrings("APIKey", AuthMode.APIKey.str());

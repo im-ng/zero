@@ -190,25 +190,6 @@ pub fn create(self: Self) anyerror!*container {
     return c;
 }
 
-test "staticResolve matches mount with path boundary" {
-    const mounts = [_]StaticMount{
-        .{ .prefix = "/assets", .dir = "/var/www" },
-        .{ .prefix = "/public", .dir = "/srv" },
-    };
-    const hit = staticResolve(&mounts, "/assets/logo.png").?;
-    try std.testing.expectEqualStrings("/var/www", hit.mount.dir);
-    try std.testing.expectEqualStrings("/logo.png", hit.rel);
-
-    // mount root resolves with empty rel
-    const rmt = staticResolve(&mounts, "/public").?;
-    try std.testing.expectEqualStrings("/srv", rmt.mount.dir);
-    try std.testing.expectEqualStrings("", rmt.rel);
-
-    // prefix must be a path boundary, not a substring
-    try std.testing.expect(staticResolve(&mounts, "/assets2/x") == null);
-    try std.testing.expect(staticResolve(&mounts, "/nope/x") == null);
-}
-
 pub fn destroy(self: *Self) void {
     // recursively call internal sub containers to destroy themselves
 
@@ -746,7 +727,6 @@ fn loadRedis(self: *Self) !void {
     // reflects cache availability without a manual check.
     try self.healthChecks.append(.{ .name = "redis", .check = redisHealthCheck });
 
-
     // expose Redis through the unified KV store interface (default store)
     const redisStore = try root.kvstore.build(self, .redis, .{});
     try self.kvStores.put("cache", redisStore);
@@ -1076,4 +1056,26 @@ fn loadFileStore(self: *Self) !void {
     if (self.defaultFileStore == null) self.defaultFileStore = store;
 
     self.log.info("connected to local file store");
+}
+
+// ===================== Tests =====================
+
+
+test "staticResolve matches mount with path boundary" {
+    const mounts = [_]StaticMount{
+        .{ .prefix = "/assets", .dir = "/var/www" },
+        .{ .prefix = "/public", .dir = "/srv" },
+    };
+    const hit = staticResolve(&mounts, "/assets/logo.png").?;
+    try std.testing.expectEqualStrings("/var/www", hit.mount.dir);
+    try std.testing.expectEqualStrings("/logo.png", hit.rel);
+
+    // mount root resolves with empty rel
+    const rmt = staticResolve(&mounts, "/public").?;
+    try std.testing.expectEqualStrings("/srv", rmt.mount.dir);
+    try std.testing.expectEqualStrings("", rmt.rel);
+
+    // prefix must be a path boundary, not a substring
+    try std.testing.expect(staticResolve(&mounts, "/assets2/x") == null);
+    try std.testing.expect(staticResolve(&mounts, "/nope/x") == null);
 }

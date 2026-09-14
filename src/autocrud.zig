@@ -326,6 +326,10 @@ pub fn addRestHandlers(self: *App, comptime T: type, comptime opts: AutoCrudOpti
 
 const Sample = struct { id: i64, name: []const u8, email: []const u8 };
 
+
+// ===================== Tests =====================
+
+
 test "AutoCrud generates dialect-correct SQL" {
     const st = comptime buildStmts(Sample, "users", "id", 0);
     try std.testing.expectEqualStrings(

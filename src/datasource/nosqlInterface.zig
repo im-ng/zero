@@ -150,6 +150,10 @@ pub const MockBackend = struct {
     }
 };
 
+
+// ===================== Tests =====================
+
+
 test "NoSQL dispatches through the type-erased handle" {
     var mock: MockBackend = .{ .last_value = "" };
     var n = NoSQL.init(&mock, .mock, null);

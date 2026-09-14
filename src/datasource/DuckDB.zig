@@ -218,6 +218,10 @@ fn mapRow(comptime Type: type, result: *c.duckdb_result, row: c.idx_t, alloc: st
     return value;
 }
 
+
+// ===================== Tests =====================
+
+
 test "DuckDB in-memory query maps onto a struct" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();

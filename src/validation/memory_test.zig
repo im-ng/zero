@@ -123,6 +123,10 @@ fn mockContainer(allocator: std.mem.Allocator) root.container {
     };
 }
 
+
+// ===================== Tests =====================
+
+
 // HTTP flow: Context.allocator is set to the per-request req.arena, which
 // httpz resets (deinit) after every request. Allocations made during the
 // request via ctx.allocator must therefore return to baseline.

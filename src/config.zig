@@ -132,6 +132,10 @@ pub fn getOrDefault(self: *Self, key: []const u8, default: []const u8) []const u
     return value.?;
 }
 
+
+// ===================== Tests =====================
+
+
 test "getAsBool returns false for unset env var" {
     const allocator = std.testing.allocator;
     const log = try root.logger.create(allocator);

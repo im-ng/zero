@@ -74,6 +74,10 @@ pub const KVMemory = struct {
     }
 };
 
+
+// ===================== Tests =====================
+
+
 test "KVMemory get/set/delete/exists/expire" {
     var gpa: std.heap.DebugAllocator(.{}) = .init;
     const allocator = gpa.allocator();

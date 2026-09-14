@@ -16,13 +16,12 @@ const User = struct {
 };
 
 pub fn main(init: std.process.Init) !void {
-    utils.setIo(init.io);
 
     var gpa: std.heap.DebugAllocator(.{}) = .init;
     const allocator = gpa.allocator();
     _ = gpa.detectLeaks();
 
-    const app = try App.new(allocator, init.environ_map);
+    const app = try App.new(allocator, init.io, init.environ_map);
 
     // propogate error up
     app.onStartup(initDb);

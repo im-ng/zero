@@ -10,13 +10,12 @@ pub const std_options: std.Options = .{
 };
 
 pub fn main(init: std.process.Init) !void {
-    utils.setIo(init.io);
 
     var gpa: std.heap.DebugAllocator(.{}) = .init;
     const allocator = gpa.allocator();
     _ = gpa.detectLeaks();
 
-    const app = try App.new(allocator, init.environ_map);
+    const app = try App.new(allocator, init.io, init.environ_map);
 
     try app.addCronJob("* * * * * *", "task-1", task1);
     app.container.log.info("task 1 occurs every 5 seconds of minutes");

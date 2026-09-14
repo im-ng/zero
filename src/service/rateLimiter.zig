@@ -53,6 +53,10 @@ pub const RateLimiter = struct {
     }
 };
 
+
+// ===================== Tests =====================
+
+
 test "RateLimiter: allows up to limit then trips, resets after window" {
     const testing = std.testing;
     var lim = RateLimiter.init(.{ .allocator = testing.allocator, .enabled = true, .limit = 2, .window_ms = 60_000 });

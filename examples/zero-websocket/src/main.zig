@@ -19,13 +19,12 @@ fn panic(_: []const u8, _: ?*std.builtin.StackTrace, _: ?usize) noreturn {
 }
 
 pub fn main(init: std.process.Init) !void {
-    utils.setIo(init.io);
 
     var gpa: std.heap.DebugAllocator(.{}) = .init;
     const allocator = gpa.allocator();
     _ = gpa.detectLeaks();
 
-    const app: *App = try App.new(allocator, init.environ_map);
+    const app: *App = try App.new(allocator, init.io, init.environ_map);
 
     try app.addWebsocket(socketHandler);
 

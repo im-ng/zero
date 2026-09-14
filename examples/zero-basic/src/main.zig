@@ -30,12 +30,11 @@ fn helloResolver(_: *Context, _: void) anyerror![]const u8 {
 var query_root = Query{ .hello = helloResolver };
 
 pub fn main(init: std.process.Init) !void {
-    utils.setIo(init.io);
 
     var gpa: std.heap.DebugAllocator(.{}) = .init;
     const allocator = gpa.allocator();
 
-    const app = try App.new(allocator, init.environ_map);
+    const app = try App.new(allocator, init.io, init.environ_map);
 
     app.onStartup(prepareDatasources);
 

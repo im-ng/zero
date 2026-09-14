@@ -328,6 +328,36 @@ pub fn addCron(self: *Self, schedule: []const u8, name: []const u8, hook: *const
     self.container.log.info(msg);
 }
 
+fn mockContainer(allocator: std.mem.Allocator) root.container {
+    return root.container{
+        .allocator = allocator,
+        .appName = undefined,
+        .appVersion = undefined,
+        .log = undefined,
+        .config = undefined,
+        .metricz = undefined,
+        .authProvider = undefined,
+        .redis = undefined,
+        .rdz = undefined,
+        .SQL = undefined,
+        .services = undefined,
+        .mqtt = null,
+        .Kakfa = null,
+        .Nats = null,
+        .pubSub = null,
+    };
+}
+
+/// Signal the scheduler loop to stop WITHOUT joining. Safe to call from a
+/// signal handler (joining a thread from a signal handler is UB/deadlock).
+/// The actual thread join happens later in normal execution via `destroy`.
+pub fn stop(self: *Self) void {
+    self.running.store(false, .release);
+}
+
+// ===================== Tests =====================
+
+
 test "expandOccurance fills range with step 1" {
     const allocator = std.testing.allocator;
     var map = std.AutoHashMap(u8, bool).init(allocator);
@@ -409,26 +439,6 @@ test "parseSchedule rejects too-long schedule" {
     };
     const result = c.parseSchedule("* * * * * * *");
     try std.testing.expectError(Error.CronError.BadScheduleFormat, result);
-}
-
-fn mockContainer(allocator: std.mem.Allocator) root.container {
-    return root.container{
-        .allocator = allocator,
-        .appName = undefined,
-        .appVersion = undefined,
-        .log = undefined,
-        .config = undefined,
-        .metricz = undefined,
-        .authProvider = undefined,
-        .redis = undefined,
-        .rdz = undefined,
-        .SQL = undefined,
-        .services = undefined,
-        .mqtt = null,
-        .Kakfa = null,
-        .Nats = null,
-        .pubSub = null,
-    };
 }
 
 test "expandRanges parses comma-separated values" {
@@ -586,11 +596,4 @@ test "parseSchedule accepts valid 6-field schedule with seconds" {
     try std.testing.expectEqual(@as(usize, 1), j.sec.count());
     try std.testing.expect(j.sec.contains(30));
     try std.testing.expectEqual(@as(usize, 60), j.min.count());
-}
-
-/// Signal the scheduler loop to stop WITHOUT joining. Safe to call from a
-/// signal handler (joining a thread from a signal handler is UB/deadlock).
-/// The actual thread join happens later in normal execution via `destroy`.
-pub fn stop(self: *Self) void {
-    self.running.store(false, .release);
 }

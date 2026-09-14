@@ -15,14 +15,13 @@ const User = struct {
 };
 
 pub fn main(init: std.process.Init) !void {
-    utils.setIo(init.io);
 
     var gpa: std.heap.DebugAllocator(.{}) = .init;
     const allocator = gpa.allocator();
 
     // CLI mode: wires up config, logging, container/datasources and migrations
     // but starts NO HTTP or metrics server. Dispatch commands with runCmd.
-    const app = try App.newCmd(allocator, init.environ_map);
+    const app = try App.newCmd(allocator, init.io, init.environ_map);
 
     // In-process OLAP SQL engine for the demo (no external service required).
     // A file path is used (not ":memory:") so `seed` and `list` share state

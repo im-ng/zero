@@ -137,6 +137,10 @@ pub const FileStoreLocal = struct {
     }
 };
 
+
+// ===================== Tests =====================
+
+
 test "FileStoreLocal: create/get/delete/list + path-traversal guard" {
     const ta = std.testing;
     const root_dir = ".ztmp-filestore-local";

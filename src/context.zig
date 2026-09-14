@@ -428,6 +428,10 @@ pub const Context = struct {
     }
 };
 
+
+// ===================== Tests =====================
+
+
 test "context: protobuf bindProto and protobuf round-trip" {
     const protobuf = @import("protobuf");
     const t = httpz.testing;
@@ -543,4 +547,3 @@ test "context: File serves a local file as a download" {
     try testing.expectHeader("content-type", "text/plain");
     try testing.expectBody("download me");
 }
-

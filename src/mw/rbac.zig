@@ -175,6 +175,10 @@ fn isWellKnownPath(_: *const rbac, req: *httpz.Request) bool {
     return false;
 }
 
+
+// ===================== Tests =====================
+
+
 test "rbac allows public route with no rule" {
     var rb = RBAC.init(std.testing.allocator);
     defer rb.deinit();

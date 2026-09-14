@@ -34,6 +34,10 @@ pub const Config = struct {
     allocator: std.mem.Allocator,
 };
 
+
+// ===================== Tests =====================
+
+
 test "tracz Config struct can be initialized" {
     const allocator = std.testing.allocator;
     const cfg = Config{ .allocator = allocator };

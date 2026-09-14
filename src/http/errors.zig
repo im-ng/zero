@@ -34,6 +34,10 @@ pub const ZeroError = error{
     PubSubClientNotAvailable,
 };
 
+
+// ===================== Tests =====================
+
+
 test "HttpError contains expected errors" {
     const fn_invalid: HttpError!void = error.InvalidParam;
     const fn_missing: HttpError!void = error.MissingParam;

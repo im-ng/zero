@@ -227,6 +227,10 @@ pub fn Fatal(self: *Self, _: std.mem.Allocator, message: []const u8) void {
     std.log.err(errFormat, .{ ts, message });
 }
 
+
+// ===================== Tests =====================
+
+
 test "create returns logger with default logLevel 1" {
     const allocator = std.testing.allocator;
     const log = try create(allocator);

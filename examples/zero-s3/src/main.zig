@@ -10,13 +10,12 @@ pub const std_options: std.Options = .{
 };
 
 pub fn main(init: std.process.Init) !void {
-    utils.setIo(init.io);
 
     var gpa: std.heap.DebugAllocator(.{}) = .init;
     const allocator = gpa.allocator();
     _ = gpa.detectLeaks();
 
-    const app = try App.new(allocator, init.environ_map);
+    const app = try App.new(allocator, init.io, init.environ_map);
 
     // Register an S3-compatible object store. Credentials/region/bucket come from
     // env (S3_REGION, S3_BUCKET, S3_ACCESS_KEY, S3_SECRET_KEY, S3_ENDPOINT).

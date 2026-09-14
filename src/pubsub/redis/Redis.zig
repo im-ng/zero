@@ -349,6 +349,15 @@ pub const vtable = root.pubsubInterface.Interface.VTable{
     }.call,
 };
 
+fn writtenLen(buf: []const u8) usize {
+    var i: usize = 0;
+    while (i < buf.len and buf[i] != 0) : (i += 1) {}
+    return i;
+}
+
+// ===================== Tests =====================
+
+
 test "redis readSubFrame parses a message push frame" {
     const payload = "*3\r\n$7\r\nmessage\r\n$5\r\nusers\r\n$11\r\nhello world\r\n";
     var r = std.Io.Reader.fixed(payload);
@@ -372,10 +381,4 @@ test "redis encodeCommand emits a valid RESP frame" {
     const written = writtenLen(&buf);
     const expected = "*3\r\n$7\r\nPUBLISH\r\n$5\r\nusers\r\n$2\r\nhi\r\n";
     try std.testing.expectEqualStrings(expected, buf[0..written]);
-}
-
-fn writtenLen(buf: []const u8) usize {
-    var i: usize = 0;
-    while (i < buf.len and buf[i] != 0) : (i += 1) {}
-    return i;
 }

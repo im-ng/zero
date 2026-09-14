@@ -689,6 +689,10 @@ fn getResponseTraceIDBuffer(_: *Self, allocator: std.mem.Allocator) ![]const u8 
     return try std.fmt.allocPrint(allocator, "{s:>36}", .{" "});
 }
 
+
+// ===================== Tests =====================
+
+
 test "client: downstream rate limiter is created from options and trips" {
     // Allocate everything in an arena and free the arena afterwards: a full
     // zul.Client.deinit() needs a live Io loop that unit tests don't provide,

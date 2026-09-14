@@ -155,23 +155,6 @@ fn isWellKnownPath(_: *const authz, req: *httpz.Request) bool {
     return false;
 }
 
-test "well-known path constants are correct" {
-    try std.testing.expectEqualStrings("/.well-known/health", constants.HEALTH_PATH);
-    try std.testing.expectEqualStrings("/.well-known/live", constants.LIVE_PATH);
-    try std.testing.expectEqualStrings("/metrics", constants.METRICS_PATH);
-    try std.testing.expectEqualStrings("./well-known/", constants.WELL_KNOWN);
-}
-
-test "authz Config struct can be initialized" {
-    const allocator = std.testing.allocator;
-    const cfg = Config{
-        .allocator = allocator,
-        .container = undefined,
-        .provider = null,
-    };
-    try std.testing.expect(cfg.provider == null);
-}
-
 /// Minimal container with a real logger so the authz middleware's logging
 /// paths (which dereference `self.container.?.log`) work in isolation.
 fn testContainer(allocator: std.mem.Allocator) !root.container {
@@ -189,6 +172,27 @@ const MockExecutor = struct {
         self.next_called.* = true;
     }
 };
+
+
+// ===================== Tests =====================
+
+
+test "well-known path constants are correct" {
+    try std.testing.expectEqualStrings("/.well-known/health", constants.HEALTH_PATH);
+    try std.testing.expectEqualStrings("/.well-known/live", constants.LIVE_PATH);
+    try std.testing.expectEqualStrings("/metrics", constants.METRICS_PATH);
+    try std.testing.expectEqualStrings("./well-known/", constants.WELL_KNOWN);
+}
+
+test "authz Config struct can be initialized" {
+    const allocator = std.testing.allocator;
+    const cfg = Config{
+        .allocator = allocator,
+        .container = undefined,
+        .provider = null,
+    };
+    try std.testing.expect(cfg.provider == null);
+}
 
 test "authz blocks request when api key header is missing" {
     const alloc = std.testing.allocator;
