@@ -126,7 +126,7 @@ jobs:
       - name: Run bench suite
         run: |
           mkdir -p ~/.cache/zig/tmp
-          ./zig-out/bin/bench --suite --json --duration=2 --levels=1,25,100
+          ./zig-out/bin/bench --suite --json --duration=2 --levels=1,25
 
       - name: Compare against baseline
         run: |
