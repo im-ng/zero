@@ -5,16 +5,23 @@ pub const constants = @import("constants.zig");
 pub const zul = @import("zul");
 pub const pgz = @import("pg");
 pub const httpz = @import("httpz");
-pub const metriks = @import("metriks");
+// pub const metriks = @import("metricz");
 pub const rediz = @import("rediz");
 pub const dotenv = @import("dotenv");
 pub const zdt = @import("zdt");
 pub const regexp = @import("regexp");
 pub const mqttz = @import("mqttz");
 pub const jwt = @import("jwt");
+pub const natslib = @import("nats");
+
+// GraphQL parser (graphql-zig) + zero's executor engine (src/graphql.zig).
+pub const graphql = @import("graphql");
+pub const gql = @import("graphql.zig");
 
 pub const rdkafka = @import("cimport.zig").librdkafka;
 pub const sqlitez = @import("sqlite");
+
+pub const protobuf = @import("protobuf");
 
 // zero internals
 pub const logger = @import("logger.zig");
@@ -29,17 +36,48 @@ pub const httpServer = @import("httpServer.zig");
 pub const handler = @import("handler.zig");
 pub const responder = @import("responder.zig");
 pub const tracz = @import("mw/tracz.zig");
+pub const rateLimiter = @import("mw/rateLimiter.zig");
+pub const kvstore = @import("kvstore/interface.zig");
+pub const KVStore = kvstore.KVStore;
+pub const filestore = @import("filestore/interface.zig");
+pub const FileStore = filestore.FileStore;
+pub const UploadedFile = filestore.UploadedFile;
+
+pub const autocrud = @import("autocrud.zig");
+pub const AutoCrudOptions = autocrud.AutoCrudOptions;
+pub const addRestHandlers = autocrud.addRestHandlers;
 pub const authz = @import("mw/authz.zig");
 pub const AuthProvider = @import("mw/authProvider.zig");
 pub const jwtClaims = AuthProvider.jwtClaims;
+pub const rbac = @import("mw/rbac.zig");
 
 pub const rdz = @import("datasource/rdz.zig");
 pub const SQL = @import("datasource/SQL.zig");
+
 pub const SQLite = @import("datasource/SQLite.zig");
+
+pub const DuckDB = @import("datasource/DuckDB.zig").DuckDB;
+pub const datasourceInterface = @import("datasource/interface.zig");
+pub const Datasource = datasourceInterface.Interface;
+
 pub const migration = @import("migration/migration.zig");
 pub const migrate = @import("migration/migrate.zig");
 
+// Specialized datasources (time-series / search) — Round 1 (InfluxDB, Solr).
+pub const timeseriesInterface = @import("datasource/specialized/timeseriesInterface.zig");
+pub const Timeseries = timeseriesInterface.Timeseries;
+pub const InfluxDB = @import("datasource/specialized/influxdb.zig").InfluxDB;
+pub const searchInterface = @import("datasource/specialized/searchInterface.zig");
+pub const Search = searchInterface.Search;
+pub const Solr = @import("datasource/specialized/solr.zig").Solr;
+
+// NoSQL datasource (document / wide-column) — Round 1 (Cassandra).
+pub const nosqlInterface = @import("datasource/nosqlInterface.zig");
+pub const NoSQL = nosqlInterface.NoSQL;
+pub const Cassandra = @import("datasource/cassandra.zig").Cassandra;
+
 pub const client = @import("service/client.zig");
+pub const circuit_breaker = @import("service/circuit_breaker.zig");
 pub const Error = @import("http/errors.zig");
 
 pub const scheduler = @import("cronz/scheduler.zig");
@@ -55,6 +93,17 @@ pub const MQTT = @import("pubsub/mqtt/MQTT.zig");
 pub const kafka = @import("pubsub/kafka/kafka.zig");
 pub const kafkaSubscriber = @import("pubsub/kafka/subscriber.zig");
 pub const kafkaMessage = @import("pubsub/kafka/message.zig").Message;
+
+pub const natsConfig = @import("pubsub/nats/config.zig").natsConfig;
+pub const natsSubscriber = @import("pubsub/nats/subscriber.zig").natsSubscriber;
+pub const natsMessage = @import("pubsub/nats/message.zig").natsMessage;
+pub const nats = @import("pubsub/nats/NATS.zig").NATS;
+
+pub const redisMessage = @import("pubsub/redis/message.zig").redisMessage;
+pub const redisPubSub = @import("pubsub/redis/Redis.zig").Redis;
+
+pub const pubsubInterface = @import("pubsub/interface.zig");
+pub const PubSub = pubsubInterface.Interface;
 
 pub const WSHandler = @import("websocket.zig");
 pub const WSMiddleware = @import("mw/ws.zig");
@@ -81,15 +130,14 @@ pub const App = @import("app.zig");
 
 pub const std_options: std.Options = .{
     .logFn = logger.custom,
+    .panicFn = panic,
 };
 
-fn panic(_: []const u8, _: ?*std.builtin.StackTrace, _: ?usize) noreturn {
-    var it = std.debug.StackIterator.init(@returnAddress(), null);
-    var ix: usize = 0;
+fn panic(msg: []const u8, return_address: ?usize) noreturn {
+    _ = msg;
     std.log.err("=== Stack Trace ==============", .{});
-    while (it.next()) |frame| : (ix += 1) {
-        std.log.err("#{d:0>2}: 0x{X:0>16}", .{ ix, frame });
-    }
+    std.debug.dumpCurrentStackTrace(.{ .first_address = return_address });
+    std.process.exit(1);
 }
 
 pub fn main() !void {}

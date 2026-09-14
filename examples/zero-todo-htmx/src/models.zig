@@ -18,7 +18,7 @@ pub const Todo = struct {
     id: ?i32 = 0,
     task: ?[]const u8 = undefined,
     description: ?[]const u8 = undefined,
-    isDone: ?bool = undefined,
+    is_done: ?bool = undefined,
     created_at: ?i64 = undefined,
 };
 

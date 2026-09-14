@@ -21,6 +21,9 @@ pub const ErrData = struct {
 
 pub const ClientError = error{
     ServiceNotReachable,
+    CircuitOpen,
+    RateLimited,
+    OAuthTokenFetchFailed,
 } || std.http.Client.FetchError || HttpError;
 
 pub const CronError = error{
@@ -30,6 +33,10 @@ pub const CronError = error{
 pub const ZeroError = error{
     PubSubClientNotAvailable,
 };
+
+
+// ===================== Tests =====================
+
 
 test "HttpError contains expected errors" {
     const fn_invalid: HttpError!void = error.InvalidParam;

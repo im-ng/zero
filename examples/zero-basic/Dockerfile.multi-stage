@@ -1,0 +1,83 @@
+# syntax=docker/dockerfile:1
+
+# ----------------------------------------------------------------------------
+# Stage 1: builder
+#   Runs the glibc zig 0.16.0 binary under Alpine's libc6-compat, and builds
+#   NATIVELY for musl (no -Dtarget needed). apk provides the musl-built
+#   rdkafka/openssl shared libs; duckdb is dropped in from the repo's alpine .so.
+# ----------------------------------------------------------------------------
+FROM gitea.pi/ng/alpine:3.24 AS builder
+
+LABEL maintainer="im-ng"
+LABEL description="Build zero-basic (zig 0.16.0, musl) and ship a minimal alpine runtime image"
+
+# Tools to fetch zig + clone git+https dependencies, and the musl dev libs
+# whose .so files the native build links against.
+RUN apk add --no-cache \
+    libc6-compat \
+    build-base \
+    wget \
+    ca-certificates \
+    git \
+    pkgconf \
+    librdkafka-dev \
+    openssl-dev
+
+# Install zig 0.16.0 (a glibc binary; runs fine under libc6-compat on musl).
+RUN mkdir -p /usr/local/zig \
+    && wget -q https://ziglang.org/download/0.16.0/zig-x86_64-linux-0.16.0.tar.xz \
+    && tar -xJf zig-x86_64-linux-0.16.0.tar.xz -C /usr/local/zig --strip-components=1 \
+    && rm zig-x86_64-linux-0.16.0.tar.xz \
+    && ln -s /usr/local/zig/zig /usr/local/bin/zig
+
+# Alpine-specific duckdb shared lib (needed at link + runtime).
+# Its SONAME is libduckdb.so.1.5, so ship it under that name with a .so symlink.
+COPY examples/zero-basic/libs/libduckdb-alpine.so /usr/local/lib/libduckdb.so.1.5
+RUN ln -sf libduckdb.so.1.5 /usr/local/lib/libduckdb.so && ldconfig
+
+# Bring in the zero framework root (the example's zon references `../../.`)
+# and the example itself.
+WORKDIR /src/zero
+COPY build.zig build.zig.zon ./
+COPY src ./src
+COPY examples/zero-basic ./examples/zero-basic
+
+WORKDIR /src/zero/examples/zero-basic
+RUN zig build -Dcpu=baseline --release=safe --summary all
+
+# ----------------------------------------------------------------------------
+# Stage 2: runtime
+#   Minimal alpine with only the shared libs the binary needs at runtime.
+# ----------------------------------------------------------------------------
+FROM gitea.pi/ng/alpine:3.24
+
+LABEL maintainer="im-ng"
+LABEL description="zero-basic runtime (musl)"
+
+RUN apk add --no-cache \
+    libc6-compat \
+    librdkafka \
+    openssl \
+    ca-certificates \
+    tzdata
+
+# duckdb runtime lib (SONAME libduckdb.so.1.5).
+COPY --from=builder /usr/local/lib/libduckdb.so.1.5 /usr/local/lib/libduckdb.so.1.5
+RUN ln -sf libduckdb.so.1.5 /usr/local/lib/libduckdb.so && ldconfig
+
+WORKDIR /app
+
+# App binary.
+COPY --from=builder /src/zero/examples/zero-basic/zig-out/bin/basic /app/basic
+
+# Config (loaded at ./configs/.env) comes from the repo root build context.
+RUN mkdir /app/configs
+RUN touch /app/configs/.env
+
+COPY --from=builder /src/zero/examples/zero-basic/static /app/static
+RUN mkdir -p /app/data/basic-store && chmod 777 /app/data /app/data/basic-store
+
+ENV APP_ENV=prod
+EXPOSE 8080
+
+CMD ["/app/basic"]

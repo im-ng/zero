@@ -1,11 +1,11 @@
 const std = @import("std");
-const metrics = @import("metriks");
 const root = @import("zero.zig");
 const builtin = @import("builtin");
 const Allocator = std.mem.Allocator;
 const Self = @This();
 const metricz = @This();
 const pgz = root.pgz;
+const metrics = root.httpz.metriks;
 const Context = root.Context;
 const Process = root.process;
 const utils = root.utils;
@@ -30,6 +30,32 @@ pub const PubSubPublisherSuccessLabel = struct { topic: []const u8 };
 
 pub const PubSubSubscriberTotalLabel = struct { topic: []const u8, consumer: []const u8 };
 pub const PubSubSubscriberSuccessLabel = struct { topic: []const u8, consumer: []const u8 };
+
+// failure metrics labels
+pub const CircuitOpenLabel = struct { name: []const u8 };
+pub const PubSubDLQLabel = PubSubSubscriberTotalLabel;
+
+// Type-erased handle for an app-registered custom metric. The metrics library
+// has no global registry, so custom metrics are kept in a dynamic list and
+// written alongside the built-ins. `ptr` points at the heap-allocated metric
+// `Impl`; `write` casts it back and serializes it.
+pub const CustomMetric = struct {
+    ptr: *anyopaque,
+    write: *const fn (*anyopaque, *std.Io.Writer) anyerror!void,
+};
+
+// Returns a writer shim for a concrete metric `Impl` type.
+fn writeCustom(comptime ImplT: type) *const fn (*anyopaque, *std.Io.Writer) anyerror!void {
+    return struct {
+        fn f(ptr: *anyopaque, w: *std.Io.Writer) !void {
+            const m = @as(*ImplT, @ptrCast(@alignCast(ptr)));
+            try m.write(w);
+        }
+    }.f;
+}
+
+custom: std.array_list.Managed(CustomMetric) = undefined,
+mut: std.Io.Mutex = .init,
 
 Info: metrics.CounterVec(
     u32,
@@ -151,6 +177,17 @@ PubSubSubscriberSuccess: metrics.CounterVec(
     PubSubSubscriberSuccessLabel,
 ).Impl,
 
+// failure metrics
+CircuitOpenTotal: metrics.CounterVec(
+    u64,
+    CircuitOpenLabel,
+).Impl,
+
+PubSubDLQTotal: metrics.CounterVec(
+    u64,
+    PubSubDLQLabel,
+).Impl,
+
 pub fn info(self: *Self, labels: AppInfoLabel) !void {
     return self.Info.incr(labels);
 }
@@ -199,12 +236,66 @@ pub fn SubscriberSuccess(self: *Self, labels: PubSubSubscriberSuccessLabel) !voi
     return self.PubSubSubscriberSuccess.incr(labels);
 }
 
+pub fn circuitOpen(self: *Self, labels: CircuitOpenLabel) !void {
+    return self.CircuitOpenTotal.incr(labels);
+}
+
+pub fn dlq(self: *Self, labels: PubSubDLQLabel) !void {
+    return self.PubSubDLQTotal.incr(labels);
+}
+
+/// Registers a custom counter with label struct `L` and returns the handle so
+/// the caller can `incr(label)` / `incrBy(label, n)` from request handlers.
+/// Appears on `/metrics` automatically.
+pub fn Counter(self: *Self, comptime L: type, allocator: Allocator, comptime name: []const u8, comptime help: ?[]const u8) !*metrics.CounterVec(u64, L).Impl {
+    const T = metrics.CounterVec(u64, L).Impl;
+    const impl = try allocator.create(T);
+    errdefer allocator.destroy(impl);
+    impl.* = try T.init(allocator, utils.io, name, .{ .help = help });
+    try self.addCustom(impl, writeCustom(T));
+    return impl;
+}
+
+/// Registers a custom gauge. Caller uses `set(label, value)` / `incr` / `dec`.
+pub fn Gauge(self: *Self, comptime L: type, allocator: Allocator, comptime name: []const u8, comptime help: ?[]const u8) !*metrics.GaugeVec(u64, L).Impl {
+    const T = metrics.GaugeVec(u64, L).Impl;
+    const impl = try allocator.create(T);
+    errdefer allocator.destroy(impl);
+    impl.* = try T.init(allocator, name, .{ .help = help });
+    try self.addCustom(impl, writeCustom(T));
+    return impl;
+}
+
+/// Registers a custom histogram with the given bucket boundaries (seconds).
+/// Caller uses `observe(label, value)`.
+pub fn Histogram(self: *Self, comptime L: type, allocator: Allocator, comptime name: []const u8, comptime buckets: []const f64, comptime help: ?[]const u8) !*metrics.HistogramVec(f64, L, buckets).Impl {
+    const T = metrics.HistogramVec(f64, L, buckets).Impl;
+    const impl = try allocator.create(T);
+    errdefer allocator.destroy(impl);
+    impl.* = try T.init(allocator, utils.io, name, .{ .help = help });
+    try self.addCustom(impl, writeCustom(T));
+    return impl;
+}
+
+fn addCustom(self: *Self, ptr: *anyopaque, write_fn: *const fn (*anyopaque, *std.Io.Writer) anyerror!void) !void {
+    self.mut.lockUncancelable(utils.io);
+    defer self.mut.unlock(utils.io);
+    try self.custom.append(.{ .ptr = ptr, .write = write_fn });
+}
+
 pub fn initialize(allocator: Allocator, comptime _: metrics.RegistryOpts) !*metricz {
+    metrics.setIo(utils.io);
     const m = try allocator.create(metricz);
     errdefer allocator.destroy(m);
 
+    // `allocator.create` returns uninitialized memory; the struct's default
+    // field initializers are NOT applied, so `mut` must be initialized here.
+    // Without this, `writeRaw`'s `self.mut.lockUncancelable` futex-waits
+    // forever on garbage state (manifesting as a hung `/metrics`).
+    m.mut = .init;
+
     m.Info = try metrics.CounterVec(u32, AppInfoLabel).Impl
-        .init(allocator, "app_info", .{ .help = "Info for app_name, app_version and framework_version." });
+        .init(allocator, utils.io, "app_info", .{ .help = "Info for app_name, app_version and framework_version." });
 
     m.Threads = try metrics.GaugeVec(u64, AppThreadsourceLabel).Impl
         .init(allocator, "app_threads", .{ .help = "Info of overall app threads count." });
@@ -216,57 +307,80 @@ pub fn initialize(allocator: Allocator, comptime _: metrics.RegistryOpts) !*metr
         .init(allocator, "app_memory_total", .{ .help = "Info of overall app memory total usage." });
 
     m.ResponseBucket = try metrics.HistogramVec(f64, AppHttpResponseLatencyLabel, &.{ 0.001, 0.003, 0.005, 0.01, 0.02, 0.03, 0.05, 0.1, 0.2, 0.3, 0.5, 0.75, 1, 2, 3, 5, 10, 30 }).Impl
-        .init(allocator, "app_http_response", .{ .help = "Response time of HTTP requests in seconds." });
+        .init(allocator, utils.io, "app_http_response", .{ .help = "Response time of HTTP requests in seconds." });
 
     m.ResponseBucketHits = try metrics.CounterVec(u64, AppHttpResponseHitLabel).Impl
-        .init(allocator, "app_http_response_hits", .{ .help = "Response counts of HTTP requests." });
+        .init(allocator, utils.io, "app_http_response_hits", .{ .help = "Response counts of HTTP requests." });
 
     m.ServiceResponseBucket = try metrics.HistogramVec(f64, ServiceResponseLabel, &.{ 0.001, 0.003, 0.005, 0.01, 0.02, 0.03, 0.05, 0.1, 0.2, 0.3, 0.5, 0.75, 1, 2, 3, 5, 10, 30 }).Impl
-        .init(allocator, "app_http_service_response", .{ .help = "Response time of external service requests in seconds." });
+        .init(allocator, utils.io, "app_http_service_response", .{ .help = "Response time of external service requests in seconds." });
 
     m.SQLBucket = try metrics.HistogramVec(f64, AppSQLStatsLabel, &.{ 0.001, 0.003, 0.005, 0.01, 0.02, 0.03, 0.05, 0.1, 0.2, 0.3, 0.5, 0.75, 1, 2, 3, 5, 10, 30 }).Impl
-        .init(allocator, "app_sql_response", .{ .help = "Response time of sql query execution in seconds." });
+        .init(allocator, utils.io, "app_sql_response", .{ .help = "Response time of sql query execution in seconds." });
 
     m.PubSubPublisherTotal = try metrics.CounterVec(u64, PubSubPublisherTotalLabel).Impl
-        .init(allocator, "app_pubsub_publish_total_count", .{ .help = "Total pubsub publisher counter per topic" });
+        .init(allocator, utils.io, "app_pubsub_publish_total_count", .{ .help = "Total pubsub publisher counter per topic" });
 
     m.PubSubPublisherSuccess = try metrics.CounterVec(u64, PubSubPublisherSuccessLabel).Impl
-        .init(allocator, "app_pubsub_publish_success_count", .{ .help = "Successful pubsub publisher counter per topic" });
+        .init(allocator, utils.io, "app_pubsub_publish_success_count", .{ .help = "Successful pubsub publisher counter per topic" });
 
     m.PubSubSubscriberTotal = try metrics.CounterVec(u64, PubSubSubscriberTotalLabel).Impl
-        .init(allocator, "app_pubsub_subscriber_total_count", .{ .help = "Total pubsub subscriber counter per topic per consumer group" });
+        .init(allocator, utils.io, "app_pubsub_subscriber_total_count", .{ .help = "Total pubsub subscriber counter per topic per consumer group" });
 
     m.PubSubSubscriberSuccess = try metrics.CounterVec(u64, PubSubSubscriberSuccessLabel).Impl
-        .init(allocator, "app_pubsub_subscriber_success_count", .{ .help = "Successful pubsub subscriber counter per topic per consumer group" });
+        .init(allocator, utils.io, "app_pubsub_subscriber_success_count", .{ .help = "Successful pubsub subscriber counter per topic per consumer group" });
+
+    m.CircuitOpenTotal = try metrics.CounterVec(u64, CircuitOpenLabel).Impl
+        .init(allocator, utils.io, "app_circuit_open_total", .{ .help = "Total circuit-breaker open events by downstream name." });
+
+    m.PubSubDLQTotal = try metrics.CounterVec(u64, PubSubDLQLabel).Impl
+        .init(allocator, utils.io, "app_pubsub_dlq_total", .{ .help = "Total dead-lettered messages per topic per consumer." });
+
+    m.custom = std.array_list.Managed(CustomMetric).init(allocator);
+
     return m;
 }
 
 pub fn write(self: *Self, ctx: *Context) !void {
-    // return httpz.writeMetrics(ctx.response.writer());
-    try self.Info.write(ctx.response.writer());
-    if (builtin.os.tag == .linux) {
-        const path = try utils.combine(ctx.allocator, "/proc/{d}/status", .{std.c.getpid()});
+    return self.writeRaw(ctx.allocator, ctx.response.writer());
+}
 
-        const ps = try Process.usage(ctx.allocator, path);
+/// Writes the full metric set (app + pg + pubsub) to an arbitrary writer.
+/// Used by the standalone metrics server, which has no `Context`.
+pub fn writeRaw(self: *Self, allocator: Allocator, writer: *std.Io.Writer) !void {
+    try self.Info.write(writer);
+    if (builtin.os.tag == .linux) {
+        const path = try utils.combine(allocator, "/proc/{d}/status", .{std.c.getpid()});
+
+        const ps = try Process.usage(allocator, path);
 
         try self.appThreads(.{ .label = "app_threads" }, ps.threads);
         try self.appMemoryUsage(.{ .label = "app_memory_usage" }, ps.rssAnon);
         try self.appMemoryTotal(.{ .label = "app_memory_total" }, ps.vmHWM);
 
-        try self.Threads.write(ctx.response.writer());
-        try self.MemoryUsage.write(ctx.response.writer());
-        try self.MemoryTotal.write(ctx.response.writer());
+        try self.Threads.write(writer);
+        try self.MemoryUsage.write(writer);
+        try self.MemoryTotal.write(writer);
     }
-    try self.ResponseBucketHits.write(ctx.response.writer());
-    try self.ResponseBucket.write(ctx.response.writer());
-    try self.ServiceResponseBucket.write(ctx.response.writer());
+    try self.ResponseBucketHits.write(writer);
+    try self.ResponseBucket.write(writer);
+    try self.ServiceResponseBucket.write(writer);
 
-    try self.SQLBucket.write(ctx.response.writer());
+    try self.SQLBucket.write(writer);
     //rewrite pg metrics labelling to match with default
-    try pgz.writeMetrics(ctx.response.writer());
+    try pgz.writeMetrics(writer);
 
-    try self.PubSubPublisherTotal.write(ctx.response.writer());
-    try self.PubSubPublisherSuccess.write(ctx.response.writer());
-    try self.PubSubSubscriberTotal.write(ctx.response.writer());
-    try self.PubSubSubscriberSuccess.write(ctx.response.writer());
+    try self.PubSubPublisherTotal.write(writer);
+    try self.PubSubPublisherSuccess.write(writer);
+    try self.PubSubSubscriberTotal.write(writer);
+    try self.PubSubSubscriberSuccess.write(writer);
+
+    try self.CircuitOpenTotal.write(writer);
+    try self.PubSubDLQTotal.write(writer);
+
+    self.mut.lockUncancelable(utils.io);
+    defer self.mut.unlock(utils.io);
+    for (self.custom.items) |c| {
+        try c.write(c.ptr, writer);
+    }
 }

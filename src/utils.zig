@@ -1,9 +1,34 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const utils = @This();
 const Self = @This();
 
 const root = @import("zero.zig");
 const dateTime = root.zdt.Datetime;
+
+/// Global I/O reactor. Set once at startup (see `setIo`) and used by any
+/// code that needs the clock or file descriptors under Zig 0.16's `std.Io`.
+pub var io: std.Io = if (builtin.is_test) std.testing.io else undefined;
+
+pub fn setIo(i: std.Io) void {
+    io = i;
+}
+
+pub fn nowMonotonic() std.Io.Timestamp {
+    return std.Io.Timestamp.now(io, .awake);
+}
+
+pub fn nowReal() std.Io.Timestamp {
+    return std.Io.Timestamp.now(io, .real);
+}
+
+pub fn elapsedNanos(start: std.Io.Timestamp) i96 {
+    return std.Io.Timestamp.durationTo(start, nowMonotonic()).nanoseconds;
+}
+
+pub fn elapsedMs(start: std.Io.Timestamp) f32 {
+    return @floatFromInt(@as(u64, @intCast(@divTrunc(elapsedNanos(start), 1_000_000))));
+}
 
 pub fn combine(allocator: std.mem.Allocator, comptime format: []const u8, value: anytype) ![]const u8 {
     var buffer: []u8 = undefined;
@@ -26,48 +51,74 @@ pub fn toStringFromInt(allocator: std.mem.Allocator, comptime format: []const u8
     return buffer;
 }
 
+/// Resolved log timezone, cached for the process lifetime. `null` means "not
+/// yet resolved" — `logTimezone()` then falls back to the system local zone, and
+/// ultimately to UTC. A `Timezone` built with a `null` allocator uses the fixed
+/// size `tzif` structure (no heap), so caching it here leaks nothing.
+var log_tz: ?root.zdt.Timezone = null;
+
+/// Set the timezone used for log timestamps from `ZERO_LOG_TIMEZONE`:
+/// `"utc"` → UTC, `"local"`/empty → system zone (`/etc/localtime`), otherwise an
+/// IANA name resolved from the embedded tz database. Resolution failure is
+/// ignored (falls back to the system local zone at first use).
+pub fn setLogTimezone(name: []const u8) void {
+    if (name.len == 0 or std.mem.eql(u8, name, "local")) {
+        log_tz = root.zdt.Timezone.tzLocal(utils.io, null) catch null;
+        return;
+    }
+    if (std.mem.eql(u8, name, "utc")) {
+        log_tz = root.zdt.Timezone.UTC;
+        return;
+    }
+    log_tz = root.zdt.Timezone.fromTzdata(utils.io, name, null) catch null;
+}
+
+/// Return the timezone for log timestamps, resolving the system local zone lazily
+/// on first use and falling back to UTC if even that is unavailable.
+fn logTimezone() *const root.zdt.Timezone {
+    if (log_tz == null) {
+        log_tz = root.zdt.Timezone.tzLocal(utils.io, null) catch null;
+    }
+    if (log_tz) |*tz| return tz;
+    return &root.zdt.Timezone.UTC;
+}
+
 pub fn timestampz(allocator: std.mem.Allocator) ![]const u8 {
-    const now = @as(u64, @intCast(std.time.timestamp()));
-    const epoch_seconds = std.time.epoch.EpochSeconds{ .secs = now };
-    const time = epoch_seconds.getDaySeconds();
-    const hour = time.getHoursIntoDay();
-    const minute = time.getMinutesIntoHour();
-    const second = time.getSecondsIntoMinute();
-    var buffer: []u8 = undefined;
-    buffer = try allocator.alloc(u8, 10);
-    buffer = try std.fmt.bufPrint(buffer, "{d:0>2}:{d:0>2}:{d:0>2}", .{ hour, minute, second });
-    return buffer;
+    const now = dateTime.now(utils.io, .{ .tz = logTimezone() }) catch dateTime.nowUTC(utils.io);
+    return try std.fmt.allocPrint(allocator, "{d:0>2}:{d:0>2}:{d:0>2}", .{ now.hour, now.minute, now.second });
+}
+
+/// Like `timestampz` but formats into a caller-provided buffer (no heap
+/// allocation). Used by the logger so each log line performs zero allocations
+/// on the request/allocator path.
+pub fn timestampzBuf(buf: []u8) []const u8 {
+    const now = dateTime.now(utils.io, .{ .tz = logTimezone() }) catch dateTime.nowUTC(utils.io);
+    return std.fmt.bufPrint(buf, "{d:0>2}:{d:0>2}:{d:0>2}", .{ now.hour, now.minute, now.second }) catch "";
 }
 
 pub fn sqlTimestampz(allocator: std.mem.Allocator) ![]const u8 {
-    var buffer: []u8 = undefined;
-    buffer = try allocator.alloc(u8, 100);
-
-    const now = dateTime.nowUTC();
+    const now = dateTime.nowUTC(utils.io);
     const yr = @as(u64, @intCast(now.year));
 
     //2000-01-01T07:24:22
-    buffer = try allocator.alloc(u8, 20);
-    buffer = try std.fmt.bufPrint(buffer, "{d:0>4}-{d:0>2}-{d:0>2}T{d:0>2}:{d:0>2}:{d:0>2}", .{ yr, now.month, now.day, now.hour, now.minute, now.second });
-
-    // try now.toString("%Y-%m-%dT%H:%M:%S", stdout); crashes
-
-    return buffer;
+    return try std.fmt.allocPrint(
+        allocator,
+        "{d:0>4}-{d:0>2}-{d:0>2}T{d:0>2}:{d:0>2}:{d:0>2}",
+        .{ yr, now.month, now.day, now.hour, now.minute, now.second },
+    );
 }
 
 pub fn DTtimestampz(allocator: std.mem.Allocator, timestamp: ?i64) ![]const u8 {
-    var buffer: []u8 = undefined;
-    buffer = try allocator.alloc(u8, 100);
-    defer allocator.free(buffer);
-
     const timestampns = @as(i128, @intCast(timestamp.?));
     const now = try dateTime.fromUnix(timestampns, .microsecond, null);
     const yr = @as(u64, @intCast(now.year));
 
     //2021-01-01T07:24:22
-    buffer = try allocator.alloc(u8, 20);
-    buffer = try std.fmt.bufPrint(buffer, "{d:0>4}-{d:0>2}-{d:0>2}T{d:0>2}:{d:0>2}:{d:0>2}", .{ yr, now.month, now.day, now.hour, now.minute, now.second });
-    return buffer;
+    return try std.fmt.allocPrint(
+        allocator,
+        "{d:0>4}-{d:0>2}-{d:0>2}T{d:0>2}:{d:0>2}:{d:0>2}",
+        .{ yr, now.month, now.day, now.hour, now.minute, now.second },
+    );
 }
 
 pub fn toCString(allocator: std.mem.Allocator, value: []const u8) [*c]const u8 {
@@ -76,6 +127,10 @@ pub fn toCString(allocator: std.mem.Allocator, value: []const u8) [*c]const u8 {
     buffer = std.fmt.bufPrint(buffer, "{s}", .{value}) catch unreachable;
     return @constCast(buffer.ptr);
 }
+
+
+// ===================== Tests =====================
+
 
 test "combine produces correct output" {
     const allocator = std.heap.page_allocator;

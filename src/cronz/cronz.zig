@@ -1,6 +1,5 @@
 const std = @import("std");
 const root = @import("../zero.zig");
-const time = std.time;
 const arena: type = std.heap.ArenaAllocator;
 const Thread = std.Thread;
 const Atomic = std.atomic.Value;
@@ -32,25 +31,23 @@ const _res: *httpz.Response = undefined;
 /// Set by cronz before calling a job's exec callback. Read-only for consumers.
 pub var current_job_name: ?[]const u8 = null;
 
-ticker: time.Timer = undefined,
 thread: std.Thread = undefined,
 container: *root.container = undefined,
 jobs: std.array_list.Managed(job) = undefined,
-mu: std.Thread.Mutex = undefined,
+mu: std.Io.Mutex = undefined,
 running: Atomic(bool) = undefined,
 request: *httpz.Request = undefined,
 response: *httpz.Response = undefined,
 
 pub fn create(container: *root.container) !*Cronz {
-    const c = try container.allocator.create(Cronz);
-    errdefer container.allocator.destroy(c);
+    const c = try container.bootstrap.create(Cronz);
+    errdefer container.bootstrap.destroy(c);
 
-    c.mu = .{};
+    c.mu = .init;
     c.running = Atomic(bool).init(true);
     c.container = container;
-    c.ticker = try time.Timer.start();
-    c.jobs = std.array_list.Managed(job).init(container.allocator);
-    c.thread = try Thread.spawn(.{}, Cronz.runSchedules, .{ c, std.time.nanoTimestamp() });
+    c.jobs = std.array_list.Managed(job).init(container.bootstrap);
+    c.thread = try Thread.spawn(.{}, Cronz.runSchedules, .{ c, @as(i128, utils.nowReal().nanoseconds) });
 
     return c;
 }
@@ -79,33 +76,49 @@ fn destroryChildAllocator(self: *Self, ca: *arena) void {
 
 pub fn runSchedules(self: *Self, _: i128) void {
     while (self.running.load(.monotonic)) {
-        std.Thread.sleep(std.time.ns_per_s);
-        const now = dateTime.nowUTC();
-        for (self.jobs.items) |j| {
+        std.Io.sleep(self.container.io, std.Io.Duration.fromSeconds(1), .awake) catch {};
+        const now = dateTime.nowUTC(self.container.io);
+        for (self.jobs.items) |*j| {
             if (j.compare(now)) {
-                const ca = self.prepareChildAllocator() catch |err| {
-                    self.container.log.any(err);
-                    continue;
-                };
-                defer self.destroryChildAllocator(ca);
+                // Serialize runs of the same job so an overrunning tick can't stack
+                // on top of itself.
+                j.mu.lock(self.container.io) catch {};
+                defer j.mu.unlock(self.container.io);
 
-                var ctx = try Context.init(
-                    ca.allocator(),
-                    self.container,
-                    self.request,
-                    self.response,
-                );
+                var attempt: u32 = 0;
+                const max_attempts: u32 = 3;
+                const backoff_ms: i64 = 500;
+                var ok = false;
 
-                const thread = Thread.spawn(
-                    .{},
-                    job.run,
-                    .{ j, &ctx },
-                ) catch |err| {
-                    self.container.log.any(err);
-                    return;
-                };
+                while (attempt < max_attempts) : (attempt += 1) {
+                    const ca = self.prepareChildAllocator() catch |err| {
+                        self.container.log.any(err);
+                        break;
+                    };
+                    defer self.destroryChildAllocator(ca);
 
-                thread.join();
+                    var ctx = try Context.init(
+                        ca.allocator(),
+                        self.container,
+                        self.request,
+                        self.response,
+                    );
+
+                    job.run(j.*, &ctx) catch |err| {
+                        self.container.log.any(err);
+                        if (attempt + 1 < max_attempts) {
+                            std.Io.sleep(self.container.io, std.Io.Duration.fromMilliseconds(backoff_ms), .awake) catch {};
+                            continue;
+                        }
+                        break;
+                    };
+                    ok = true;
+                    break;
+                }
+
+                if (!ok) {
+                    self.container.log.err("cron job failed after retries");
+                }
             }
         }
     }
@@ -299,9 +312,9 @@ pub fn addCron(self: *Self, schedule: []const u8, name: []const u8, hook: *const
     j.name = name;
     j.exec = hook;
 
-    self.mu.lock();
+    self.mu.lock(self.container.io) catch {};
     try self.jobs.append(j);
-    self.mu.unlock();
+    self.mu.unlock(self.container.io);
 
     const msg = utils.combine(
         self.container.allocator,
@@ -314,6 +327,36 @@ pub fn addCron(self: *Self, schedule: []const u8, name: []const u8, hook: *const
 
     self.container.log.info(msg);
 }
+
+fn mockContainer(allocator: std.mem.Allocator) root.container {
+    return root.container{
+        .allocator = allocator,
+        .io = std.testing.io,
+        .appName = undefined,
+        .appVersion = undefined,
+        .log = undefined,
+        .config = undefined,
+        .metricz = undefined,
+        .authProvider = undefined,
+        .redis = undefined,
+        .rdz = undefined,
+        .SQL = undefined,
+        .services = undefined,
+        .mqtt = null,
+        .Kakfa = null,
+        .Nats = null,
+        .pubSub = null,
+    };
+}
+
+/// Signal the scheduler loop to stop WITHOUT joining. Safe to call from a
+/// signal handler (joining a thread from a signal handler is UB/deadlock).
+/// The actual thread join happens later in normal execution via `destroy`.
+pub fn stop(self: *Self) void {
+    self.running.store(false, .release);
+}
+
+// ===================== Tests =====================
 
 test "expandOccurance fills range with step 1" {
     const allocator = std.testing.allocator;
@@ -396,24 +439,6 @@ test "parseSchedule rejects too-long schedule" {
     };
     const result = c.parseSchedule("* * * * * * *");
     try std.testing.expectError(Error.CronError.BadScheduleFormat, result);
-}
-
-fn mockContainer(allocator: std.mem.Allocator) root.container {
-    return root.container{
-        .allocator = allocator,
-        .appName = undefined,
-        .appVersion = undefined,
-        .log = undefined,
-        .config = undefined,
-        .metricz = undefined,
-        .authProvider = undefined,
-        .redis = undefined,
-        .rdz = undefined,
-        .SQL = undefined,
-        .services = undefined,
-        .pubsub = null,
-        .Kakfa = null,
-    };
 }
 
 test "expandRanges parses comma-separated values" {

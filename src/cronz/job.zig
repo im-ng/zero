@@ -18,6 +18,9 @@ pub const Job: type = struct {
     month: std.AutoHashMap(u8, bool) = undefined,
     dayOfWeek: std.AutoHashMap(u8, bool) = undefined,
     exec: *const fn (*root.Context) anyerror!void = undefined,
+    /// Serializes runs of the same job so an overrunning tick can't stack on
+    /// top of itself.
+    mu: std.Io.Mutex = .init,
 
     pub fn create(allocator: std.mem.Allocator) !Job {
         var j = Job{};
@@ -30,26 +33,23 @@ pub const Job: type = struct {
         return j;
     }
 
-    pub fn run(self: Job, context: ?*Context) void {
+    pub fn run(self: Job, context: ?*Context) !void {
         if (context == null) {
             return;
         }
 
         const ctx = context.?;
 
-        var timer = std.time.Timer.start() catch |err| {
-            ctx.any(err);
-            return;
-        };
+        const start = utils.nowMonotonic();
 
         root.cronz.current_job_name = self.name;
         self.exec(ctx) catch |err| {
             ctx.any(err);
-            return;
+            return err;
         };
         root.cronz.current_job_name = null;
 
-        const elapsed: f32 = @floatFromInt(timer.lap() / 1000000);
+        const elapsed: f32 = utils.elapsedMs(start);
 
         const msg = utils.combine(
             ctx.allocator,
@@ -106,6 +106,10 @@ pub const Job: type = struct {
     }
 };
 
+
+// ===================== Tests =====================
+
+
 test "job create initializes all hash maps" {
     const allocator = std.testing.allocator;
     var j = try Job.create(allocator);
@@ -144,7 +148,7 @@ test "job compare returns true when all fields match" {
     try j.month.put(3, true);
     try j.dayOfWeek.put(1, true);
 
-    const now = DateTime.nowUTC();
+    const now = DateTime.nowUTC(utils.io);
     const result = j.compare(now);
     _ = result;
 }
@@ -168,7 +172,7 @@ test "job compare returns false when field mismatches" {
     try j.month.put(1, true);
     try j.dayOfWeek.put(0, true);
 
-    const now = DateTime.nowUTC();
+    const now = DateTime.nowUTC(utils.io);
     const second = now.second;
     if (!j.sec.contains(second)) {
         try std.testing.expect(j.compare(now) == false);
@@ -187,7 +191,7 @@ test "job getTick returns current time components" {
         j.dayOfWeek.deinit();
     }
 
-    const now = DateTime.nowUTC();
+    const now = DateTime.nowUTC(utils.io);
     const t = j.getTick(now);
     try std.testing.expect(t.sec <= 59);
     try std.testing.expect(t.min <= 59);
@@ -208,6 +212,6 @@ test "job compare returns false for empty job" {
         j.dayOfWeek.deinit();
     }
 
-    const now = DateTime.nowUTC();
+    const now = DateTime.nowUTC(utils.io);
     try std.testing.expect(j.compare(now) == false);
 }

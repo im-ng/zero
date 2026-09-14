@@ -40,3 +40,9 @@ pub fn afterInit(self: *WebSocket) !void {
     try self.conn.write("connected!");
     try self.context.action(self.context);
 }
+
+// Called by httpz when the underlying connection closes; frees the
+// heap-allocated Context created in Handler.ws.
+pub fn close(self: *WebSocket) void {
+    self.context.deinit();
+}

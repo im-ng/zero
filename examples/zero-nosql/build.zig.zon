@@ -1,0 +1,14 @@
+.{
+    .name = .nosql,
+    .version = "0.0.1",
+    .fingerprint = 0xa7f26aa9e24e3994,
+    .minimum_zig_version = "0.16.0",
+    .dependencies = .{
+        .zero = .{ .path = "../../." },
+    },
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "src",
+    },
+}

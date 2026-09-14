@@ -1,0 +1,20 @@
+.{
+    .name = .protohttp,
+    .version = "0.0.1",
+    .fingerprint = 0xb8cc007fe9c8c212,
+    .minimum_zig_version = "0.16.0",
+    .dependencies = .{
+        .zero = .{ .path = "../../." },
+        .protobuf = .{
+            .url = "https://github.com/Arwalk/zig-protobuf/archive/b794f99323cead7f1794ae68554d0311cc309857.tar.gz",
+            .hash = "protobuf-5.0.0-0e82ahZiKwC5Yrh4psANoUzrV_H4CQU1EsOIY9Zdyap_",
+            .lazy = false,
+        },
+    },
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "src",
+        "proto",
+    },
+}

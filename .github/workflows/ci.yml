@@ -12,15 +12,30 @@ jobs:
   unit_test_and_coverage:
     runs-on: ubuntu-latest
     container:
-      image: imng/zero-kcov:0.1
+      image: imng/zero-kcov:0.3.4
       options: --security-opt seccomp=unconfined
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
           token: ${{ secrets.GH_TOKEN }}
 
-      - name: Set Zig 0.15.2 as active
+      - name: Set Zig 0.16.0 as active
         run: |
           zig version
           kcov --version
@@ -28,7 +43,20 @@ jobs:
 
       - name: Run tests with coverage
         run: |
+          ls -alth /usr/local/lib
+          mkdir -p ~/.cache/zig/tmp
           zig build test -Dcoverage --summary all
+
+      - name: Run integration tests (real database)
+        env:
+          DB_HOST: postgres
+          DB_PORT: "5432"
+          DB_USER: postgres
+          DB_PASSWORD: postgres
+          DB_NAME: postgres
+        run: |
+          mkdir -p ~/.cache/zig/tmp
+          zig build test-integration --summary all
 
       - name: Extract coverage
         id: coverage
@@ -36,10 +64,10 @@ jobs:
           if [ -f zig-out/kcov/test/coverage.json ]; then
             COVERAGE=$(jq -r '.percent_covered' zig-out/kcov/test/coverage.json)
             echo "coverage=$COVERAGE" >> $GITHUB_OUTPUT
-            echo "Coverage for Zig 0.15.2: $COVERAGE%"
+            echo "Coverage for Zig 0.16.0: $COVERAGE%"
           else
             echo "coverage=0" >> $GITHUB_OUTPUT
-            echo "Coverage for Zig 0.15.2: 0%"
+            echo "Coverage for Zig 0.16.0: 0%"
           fi
 
       - name: Update README with coverage
@@ -73,3 +101,88 @@ jobs:
         with:
           name: zero_coverage
           path: zig-out/kcov/test/coverage.json
+
+  bench_regression:
+    runs-on: ubuntu-latest
+    container:
+      image: imng/zero-kcov:0.3.4
+      options: --security-opt seccomp=unconfined
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GH_TOKEN }}
+
+      - name: Set Zig 0.16.0 as active
+        run: zig version
+
+      - name: Build bench harness
+        run: |
+          ls -alth /usr/local/lib
+          mkdir -p ~/.cache/zig/tmp
+          zig build bench --summary all
+
+      - name: Run bench suite
+        run: |
+          mkdir -p ~/.cache/zig/tmp
+          ./zig-out/bin/bench --suite --json --duration=2 --levels=1,25
+
+      - name: Compare against baseline
+        run: |
+          set -uo pipefail
+          jq empty zig-out/bench/report.json 2>/dev/null || { echo "no report.json produced"; exit 1; }
+          if [ ! -f bench/baseline.json ]; then
+            echo "No baseline present; initializing baseline (skip regression)."
+            cp zig-out/bench/report.json bench/baseline.json
+            exit 0
+          fi
+          jq empty bench/baseline.json 2>/dev/null || { echo "baseline corrupt"; exit 1; }
+
+          fails=0
+          while IFS= read -r row; do
+            name=$(echo "$row" | jq -r '.name')
+            peak=$(echo "$row" | jq -r '.peak_rss_mib')
+            leak=$(echo "$row" | jq -r '.leak')
+            if [ "$leak" = "true" ]; then
+              echo "LEAK detected in scenario: $name"
+              fails=$((fails + 1))
+              continue
+            fi
+            bpeak=$(jq -r --arg n "$name" '.scenarios[] | select(.name==$n) | .peak_rss_mib' bench/baseline.json)
+            if [ -n "$bpeak" ] && [ "$bpeak" != "null" ]; then
+              rel=$(awk -v p="$peak" -v b="$bpeak" 'BEGIN{printf "%.4f", (p-b)/b}')
+              absmb=$(awk -v p="$peak" -v b="$bpeak" 'BEGIN{printf "%.4f", (p-b)}')
+              echo "$name: baseline=${bpeak}MiB now=${peak}MiB (rel +${rel}, abs +${absmb}MiB)"
+              rel_bad=$(awk -v g="$rel" 'BEGIN{print (g>0.15)?1:0}')
+              abs_bad=$(awk -v a="$absmb" 'BEGIN{print (a>8)?1:0}')
+              if [ "$rel_bad" = "1" ] && [ "$abs_bad" = "1" ]; then
+                echo "REGRESSION: $name peak RSS grew ${rel}% (>15%) and ${absmb}MiB (>8MiB)"
+                fails=$((fails + 1))
+              fi
+            fi
+          done < <(jq -c '.scenarios[]' zig-out/bench/report.json)
+
+          if [ "$fails" -gt 0 ]; then
+            echo "Bench regression: $fails scenario(s) failed."
+            exit 1
+          fi
+          echo "No bench regression."
+
+      - name: Upload bench report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: zero_bench_report
+          path: zig-out/bench/report.json
+
+      - name: Update baseline on merge
+        if: github.event.pull_request.merged == true
+        run: |
+          cp zig-out/bench/report.json bench/baseline.json
+          git config --global --add safe.directory /__w/zero/zero
+          git config --global user.name "im-ng"
+          git config --global user.email "2039564+im-ng@users.noreply.github.com"
+          git add bench/baseline.json
+          git commit -m "chore: update bench baseline" || echo "No changes to commit"
+          git push

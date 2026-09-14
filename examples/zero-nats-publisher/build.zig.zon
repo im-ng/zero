@@ -1,0 +1,14 @@
+.{
+    .name = .zeronatspubsub,
+    .version = "0.0.1",
+    .fingerprint = 0x8cb2f601fdc6d999,
+    .minimum_zig_version = "0.16.0",
+    .dependencies = .{
+        .zero = .{ .path = "../../." },
+    },
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "src",
+    },
+}

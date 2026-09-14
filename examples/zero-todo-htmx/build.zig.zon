@@ -2,7 +2,7 @@
     .name = .todo,
     .version = "0.0.1",
     .fingerprint = 0x5a0eb6a0f95b9c4a,
-    .minimum_zig_version = "0.15.1",
+    .minimum_zig_version = "0.16.0",
     .dependencies = .{
         .zero = .{ .path = "../../." },
     },

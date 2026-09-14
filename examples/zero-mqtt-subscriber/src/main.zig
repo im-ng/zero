@@ -11,12 +11,13 @@ pub const std_options: std.Options = .{
 
 const pubSubTopic = "zero";
 
-pub fn main() !void {
-    var gpa: std.heap.GeneralPurposeAllocator(.{}) = .init;
+pub fn main(init: std.process.Init) !void {
+
+    var gpa: std.heap.DebugAllocator(.{}) = .init;
     const allocator = gpa.allocator();
     _ = gpa.detectLeaks();
 
-    const app: *App = try App.new(allocator);
+    const app = try App.new(allocator, init.io, init.environ_map);
 
     try app.addSubscription(pubSubTopic, subscribeTask);
 
@@ -38,9 +39,10 @@ fn subscribeTask(ctx: *Context) !void {
 
     //transform ctx.message to custom type in packet read itself
     if (ctx.message) |message| {
+        const mq = message.mqtt;
         m = customMessage{};
-        m.msg = message.payload.?;
-        m.topic = message.topic;
+        m.msg = mq.payload.?;
+        m.topic = mq.topic;
 
         var buffer: []u8 = undefined;
         buffer = try ctx.allocator.alloc(u8, 1024);

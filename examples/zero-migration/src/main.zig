@@ -13,12 +13,13 @@ pub const std_options: std.Options = .{
     .logFn = zero.logger.custom,
 };
 
-pub fn main() !void {
-    var gpa: std.heap.GeneralPurposeAllocator(.{}) = .init;
+pub fn main(init: std.process.Init) !void {
+
+    var gpa: std.heap.DebugAllocator(.{}) = .init;
     const allocator = gpa.allocator();
     _ = gpa.detectLeaks();
 
-    const app: *App = try App.new(allocator);
+    const app = try App.new(allocator, init.io, init.environ_map);
 
     try prepareMigrations(app);
 
@@ -53,7 +54,7 @@ pub fn addTodoTable(c: *Context) anyerror!void {
     const addTodoTableQuery =
         \\ CREATE TABLE IF NOT EXISTS todos (id SERIAL PRIMARY KEY, task TEXT NOT NULL, created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP );
     ;
-    _ = try c.SQL.exec(addTodoTableQuery, .{});
+    _ = try c.SQL.exec(c, addTodoTableQuery, .{});
 }
 
 pub fn addTodoEntries(c: *Context) !void {
@@ -61,5 +62,5 @@ pub fn addTodoEntries(c: *Context) !void {
         \\ INSERT INTO todos(task) values ('add migrations');
         \\ INSERT INTO todos(task) values ('verify migrations');
     ;
-    _ = try c.SQL.exec(addTodoTableQuery, .{});
+    _ = try c.SQL.exec(c, addTodoTableQuery, .{});
 }

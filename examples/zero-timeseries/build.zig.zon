@@ -1,0 +1,14 @@
+.{
+    .name = .timeseries,
+    .version = "0.0.1",
+    .fingerprint = 0xf55a0ccdd0736898,
+    .minimum_zig_version = "0.16.0",
+    .dependencies = .{
+        .zero = .{ .path = "../../." },
+    },
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "src",
+    },
+}

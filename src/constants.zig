@@ -42,6 +42,10 @@ pub const swaggerUICss = "/.well-known/swagger-ui.css";
 pub const swaggerUIJs = "/.well-known/swagger-ui.js";
 pub const swagger = "/.well-known/swagger";
 
+
+// ===================== Tests =====================
+
+
 test "constants path values" {
     try std.testing.expectEqualStrings("APP_ENV", APP_ENVIRONMENT);
     try std.testing.expectEqualStrings("APP_NAME", APP_NAME);

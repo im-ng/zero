@@ -50,7 +50,7 @@ pub fn execute(self: *const authz, req: *httpz.Request, res: *httpz.Response, ex
                     self.container.?.log.Info(req.arena, buffer);
 
                     res.setStatus(.unauthorized);
-                    return executor.next();
+                    return;
                 }
 
                 provider.validateBasicAuth(req.arena, header.?) catch |err| switch (err) {
@@ -59,7 +59,7 @@ pub fn execute(self: *const authz, req: *httpz.Request, res: *httpz.Response, ex
                         self.container.?.log.Info(req.arena, buffer);
 
                         res.setStatus(.unauthorized);
-                        return executor.next();
+                        return;
                     },
                     else => {
                         //do nothing
@@ -76,7 +76,7 @@ pub fn execute(self: *const authz, req: *httpz.Request, res: *httpz.Response, ex
                     self.container.?.log.Info(req.arena, buffer);
 
                     res.setStatus(.unauthorized);
-                    return executor.next();
+                    return;
                 }
 
                 provider.validateAPIKeyAuth(req.arena, header.?) catch |err| switch (err) {
@@ -85,7 +85,7 @@ pub fn execute(self: *const authz, req: *httpz.Request, res: *httpz.Response, ex
                         self.container.?.log.Info(req.arena, buffer);
 
                         res.setStatus(.unauthorized);
-                        return executor.next();
+                        return;
                     },
                     else => {
                         //do nothing
@@ -102,7 +102,7 @@ pub fn execute(self: *const authz, req: *httpz.Request, res: *httpz.Response, ex
                     self.container.?.log.Info(req.arena, buffer);
 
                     res.setStatus(.unauthorized);
-                    return executor.next();
+                    return;
                 }
 
                 provider.validateOAuthToken(req.arena, header.?) catch |err| switch (err) {
@@ -111,14 +111,14 @@ pub fn execute(self: *const authz, req: *httpz.Request, res: *httpz.Response, ex
                         self.container.?.log.Info(req.arena, buffer);
 
                         res.setStatus(.unauthorized);
-                        return executor.next();
+                        return;
                     },
                     AuthError.TokenInvalidClaims => {
                         buffer = try utils.combine(req.arena, "invalid token claims found", .{});
                         self.container.?.log.Info(req.arena, buffer);
 
                         res.setStatus(.unauthorized);
-                        return executor.next();
+                        return;
                     },
                     else => {
                         //do nothing
@@ -155,6 +155,28 @@ fn isWellKnownPath(_: *const authz, req: *httpz.Request) bool {
     return false;
 }
 
+/// Minimal container with a real logger so the authz middleware's logging
+/// paths (which dereference `self.container.?.log`) work in isolation.
+fn testContainer(allocator: std.mem.Allocator) !root.container {
+    const log = try root.logger.create(allocator);
+    return root.container{
+        .allocator = allocator,
+        .log = log,
+    };
+}
+
+/// Records whether the next middleware in the chain was invoked.
+const MockExecutor = struct {
+    next_called: *bool,
+    pub fn next(self: MockExecutor) !void {
+        self.next_called.* = true;
+    }
+};
+
+
+// ===================== Tests =====================
+
+
 test "well-known path constants are correct" {
     try std.testing.expectEqualStrings("/.well-known/health", constants.HEALTH_PATH);
     try std.testing.expectEqualStrings("/.well-known/live", constants.LIVE_PATH);
@@ -170,4 +192,111 @@ test "authz Config struct can be initialized" {
         .provider = null,
     };
     try std.testing.expect(cfg.provider == null);
+}
+
+test "authz blocks request when api key header is missing" {
+    const alloc = std.testing.allocator;
+    var c = try testContainer(alloc);
+    defer c.log.deinit();
+
+    var provider_keys = std.StringHashMap([]const u8).init(alloc);
+    defer provider_keys.deinit();
+    var provider = root.AuthProvider{ .mode = .APIKey, .container = &c, .keys = provider_keys };
+
+    var az = try authz.init(.{ .allocator = alloc, .container = &c, .provider = &provider });
+
+    var ht = root.httpz.testing.init(root.httpz.Config{});
+    defer ht.deinit();
+    ht.url("/api/secret");
+
+    var next_called = false;
+    try az.execute(ht.req, ht.res, MockExecutor{ .next_called = &next_called });
+
+    try std.testing.expect(next_called == false);
+    try std.testing.expect(ht.res.status == @intFromEnum(std.http.Status.unauthorized));
+}
+
+test "authz blocks request when api key is invalid" {
+    const alloc = std.testing.allocator;
+    var c = try testContainer(alloc);
+    defer c.log.deinit();
+
+    var keys = std.StringHashMap([]const u8).init(alloc);
+    defer keys.deinit();
+    try keys.put("known-key", "valid");
+
+    var provider = root.AuthProvider{ .mode = .APIKey, .container = &c, .keys = keys };
+    var az = try authz.init(.{ .allocator = alloc, .container = &c, .provider = &provider });
+
+    var ht = root.httpz.testing.init(root.httpz.Config{});
+    defer ht.deinit();
+    ht.url("/api/secret");
+    ht.header(constants.APIKEY_HEADER, "ApiKey wrong-key");
+
+    var next_called = false;
+    try az.execute(ht.req, ht.res, MockExecutor{ .next_called = &next_called });
+
+    try std.testing.expect(next_called == false);
+    try std.testing.expect(ht.res.status == @intFromEnum(std.http.Status.unauthorized));
+}
+
+test "authz proceeds to next when api key is valid" {
+    const alloc = std.testing.allocator;
+    var c = try testContainer(alloc);
+    defer c.log.deinit();
+
+    var keys = std.StringHashMap([]const u8).init(alloc);
+    defer keys.deinit();
+    try keys.put("known-key", "valid");
+
+    var provider = root.AuthProvider{ .mode = .APIKey, .container = &c, .keys = keys };
+    var az = try authz.init(.{ .allocator = alloc, .container = &c, .provider = &provider });
+
+    var ht = root.httpz.testing.init(root.httpz.Config{});
+    defer ht.deinit();
+    ht.url("/api/secret");
+    ht.header(constants.APIKEY_HEADER, "ApiKey known-key");
+
+    var next_called = false;
+    try az.execute(ht.req, ht.res, MockExecutor{ .next_called = &next_called });
+
+    try std.testing.expect(next_called == true);
+    try std.testing.expect(ht.res.status == @intFromEnum(std.http.Status.ok));
+}
+
+test "authz bypasses well-known paths without auth" {
+    const alloc = std.testing.allocator;
+    var c = try testContainer(alloc);
+    defer c.log.deinit();
+
+    var provider_keys = std.StringHashMap([]const u8).init(alloc);
+    defer provider_keys.deinit();
+    var provider = root.AuthProvider{ .mode = .APIKey, .container = &c, .keys = provider_keys };
+    var az = try authz.init(.{ .allocator = alloc, .container = &c, .provider = &provider });
+
+    var ht = root.httpz.testing.init(root.httpz.Config{});
+    defer ht.deinit();
+    ht.url(constants.HEALTH_PATH);
+
+    var next_called = false;
+    try az.execute(ht.req, ht.res, MockExecutor{ .next_called = &next_called });
+
+    try std.testing.expect(next_called == true);
+}
+
+test "authz proceeds when no provider is configured" {
+    const alloc = std.testing.allocator;
+    var c = try testContainer(alloc);
+    defer c.log.deinit();
+
+    var az = try authz.init(.{ .allocator = alloc, .container = &c, .provider = null });
+
+    var ht = root.httpz.testing.init(root.httpz.Config{});
+    defer ht.deinit();
+    ht.url("/api/secret");
+
+    var next_called = false;
+    try az.execute(ht.req, ht.res, MockExecutor{ .next_called = &next_called });
+
+    try std.testing.expect(next_called == true);
 }

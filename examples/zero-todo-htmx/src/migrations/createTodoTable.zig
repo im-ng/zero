@@ -15,7 +15,7 @@ pub fn addTodoTable(c: *Context) anyerror!void {
         \\    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
         \\);
     ;
-    _ = try c.SQL.exec(addTodoTableQuery, .{});
+    _ = try c.SQL.exec(c, addTodoTableQuery, .{});
 }
 
 pub const _migrate = &migrate{

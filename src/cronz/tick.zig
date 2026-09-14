@@ -10,6 +10,10 @@ month: u16 = undefined,
 year: u16 = undefined,
 dayOfWeek: u16 = undefined,
 
+
+// ===================== Tests =====================
+
+
 test "tick struct initialization" {
     const t = tick{
         .sec = 30,

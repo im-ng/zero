@@ -1,86 +1,145 @@
 # Feature Parity
 
-`zero` framework comes with the following features out-of-box for quick development. 
+`zero` framework comes with the following features out-of-box for quick development.
 
 Instead of developing and integrating with these boilerplates, an app developer can immediately focus on the business logic.
 
--  ✅ 12 factor app methodology
-    - ✅ Load default `.env` for app startup
-    - ✅ Override them per environment
--  ✅ REST Standard
-    - ✅ Build CRUD endpoints
--  ✅ Health and Service check
-    - ✅ Live
-    - ✅ Status
--  ✅ Serve static files
-    - ✅ Serve static files from registered directory
-    - ✅ Serve swagger and openapi spec
--  ✅ Metrics tracking
-    -  ✅ Default metrics
-        -  ✅ App Status
-        -  ✅ Http Status
-        -  ✅ SQL Status
-        -  ✅ KV Status
-    - ⬜ Register custom metrics
-    - ✅ Process stats
-    - ✅ Memory stats
--  ✅ Traceability
-    - ✅ Basic
-    - ⬜ Open Telemetry
--  ✅ Well structured logging mechanism
-    - ✅ UTC Timezone
-    - ⬜ Custom Timezone
--  ✅ Middleware
-    -  ✅ CORS
-    -  ✅ TraceID
-    -  ✅ Logging
-    -  ✅ Auth
-        -  ✅ Basic crdentials
-            - ✅ Config Mode
-            - ⬜ KV mode
-        -  ✅ API Key
-            - ✅ Config Mode
-            - ⬜ KV mode
-        - ✅ OAuth Key
-          - ✅ Register OAuth Provider
-          - ✅ Refresh Public Keys
-          - ✅ Validate claims
--  ✅ Panic recovery
--  ✅ Handle Error response
-    -  ✅ Custom Errors
--  ✅ Database support
-    -  ✅ `postgres`
-        - ⬜ TLS Support
-    - ✅ `sqlite`
-    -  ✅ `redis`
-        - ✅ Authentication enabled
-    - ✅ `mqtt`
-    - ✅ `kafka`
-        - ✅ `rdkafka` driver integrated
-        - ⬜ Support for multiple topics subscription
-        - ⬜ Support for metrics
--  ✅ Database Migrations
--  ✅ Seed data on App startup
--  ✅ HTTP Client
-    -  ✅ Register one or more external http/https client
-    -  ✅ Handle redirection
-    -  ✅ Handle CRUD operations
-    -  ✅ Handle on-fly response transformation
-    -  ⬜ Circuit Breaker
-    -  ⬜ Enable Authorization (Basic, APIKey and OAuth 2.0 modes)
--  ✅ Cron Jobs
-    - ✅ `* * * * *` format support
-    - ✅ Enable second-level executions `* * * * * *`
-    - ✅ `*/2` split support
-    - ✅ `1-31` ranges support (day/hour/minute)
-    - ✅ Support for multiple task executions
+- ✅ 12 factor app methodology
+  - ✅ Load default `.env` for app startup
+  - ✅ Override them per environment
+- ✅ REST Standard
+  - ✅ Build CRUD endpoints
+- ✅ Health and Service check
+  - ✅ Live
+  - ✅ Status
+- ✅ Serve static files
+  - ✅ Serve static files from registered directory
+  - ✅ Serve swagger and openapi spec
+- ✅ Metrics tracking
+  - ✅ Default metrics
+    - ✅ App Status
+    - ✅ Http Status
+    - ✅ SQL Status
+    - ✅ KV Status
+    - ✅ Pub/Sub Status (publish / subscribe / DLQ)
+  - ✅ Register custom metrics (Counter / Gauge / Histogram)
+  - ✅ Process stats
+  - ✅ Memory stats
+- ✅ Traceability
+  - ✅ Basic (X-Correlation-ID)
+  - ✅ Downstream propagation (outbound HTTP + Kafka/NATS headers)
+  - ⬜ Open Telemetry
+- ✅ Well structured logging mechanism
+  - ✅ UTC Timezone
+  - ✅ Custom Timezone (`ZERO_LOG_TIMEZONE`: local / utc / IANA)
+  - ✅ JSON structured logging (`LOG_FORMAT=json`)
+  - ✅ Remote log-level pull (`REMOTE_LOG_URL`)
+- ✅ Middleware
+  - ✅ CORS
+  - ✅ TraceID
+  - ✅ Logging
+  - ✅ Auth
+    - ✅ Basic credentials
+      - ✅ Config Mode
+      - ⬜ KV mode
+    - ✅ API Key
+      - ✅ Config Mode
+      - ⬜ KV mode
+    - ✅ OAuth Key
+      - ✅ Register OAuth Provider
+      - ✅ Refresh Public Keys
+        - ⬜ Client became unresponsive if the external service down
+        - ⬜ Health check
+        - ⬜ Surge and Circuit breaker
+      - ✅ Validate claims
+  - ✅ RBAC (config-driven roles/permissions from JWT claims)
+  - ✅ Rate Limiter
+    - ✅ IP / header / custom key modes
+    - ✅ Fixed-window (`RATE_LIMIT_*`) (GoFr uses token-bucket)
+- ✅ Panic recovery
+- ✅ Handle Error response
+  - ✅ Custom Errors
+- ✅ Database support
+  - ✅ `postgres`
+    - ✅ TLS Support (`DB_SSL_MODE`)
+  - ✅ `sqlite`
+  - ✅ `duckdb` (in-process OLAP, unified `ctx.SQL`)
+  - ✅ `redis`
+    - ✅ Authentication enabled
+  - ✅ `mqtt`
+  - ✅ `kafka`
+    - ✅ `rdkafka` driver integrated
+    - ⬜ Support for multiple topics subscription
+    - ✅ Support for metrics (publish / subscribe / DLQ)
+    - ✅ Reconnect + resubscribe, retry, dead-letter (DLQ)
+  - ✅ `redis` (Pub/Sub)
+- ✅ NoSQL (wide-column / document)
+  - ✅ `cassandra` (`ctx.NoSQL`)
+- ✅ Time-series
+  - ✅ `influxdb` (`ctx.Timeseries`, Flux + line protocol)
+- ✅ Search
+  - ✅ `solr` (`ctx.Search`, index / query / get / delete)
+- ✅ KV Store
+  - ✅ `redis`
+  - ✅ `nats_kv`
+  - ✅ `memory`
+  - ✅ `sqlite`
+- ✅ File Store
+  - ✅ `local`
+  - ✅ `s3` (S3-compatible: MinIO / R2 / Spaces / B2)
+  - ⬜ `ftp` (deferred — no vendored Zig lib)
+  - ⬜ `sftp` (deferred — needs libssh)
+- ✅ Database Migrations
+- ✅ Seed data on App startup
+- ✅ Auto CRUD
+  - ✅ Register resource handlers (`addRestHandlers`)
+  - ✅ ID / UUID / custom key modes
+- ✅ HTTP Client
+  - ✅ Register one or more external http/https client
+  - ✅ Handle redirection
+  - ✅ Handle CRUD operations
+  - ✅ Handle on-fly response transformation
+  - ✅ Outbound authentication (Basic, API Key, OAuth 2.0 bearer)
+  - ✅ Circuit Breaker (closed → open → half-open)
+  - ✅ Per-service Rate Limiting
+  - ✅ Retry (transport + 5xx; OAuth 401 token-refresh replay)
+- ✅ Cron Jobs
+  - ✅ `* * * * *` format support
+  - ✅ Enable second-level executions `* * * * * *`
+  - ✅ `*/2` split support
+  - ✅ `1-31` ranges support (day/hour/minute)
+  - ✅ Support for multiple task executions
 - ✅ Websocket
-- ⬜ TLS 
-- ⬜ CLI Application
+- ✅ GraphQL-over-HTTP
+  - ✅ POST with JSON body (`query`, `variables`, `operationName`)
+  - ✅ GET with URL query params (`?query=...&variables=...&operationName=...`)
+  - ✅ Schema-less resolver graph execution
+  - ✅ Mutations / CRUD operations
+  - ✅ Constant field values
+  - ✅ Function resolvers (`fn (*Context, Args) anyerror!T`)
+  - ✅ Argument coercion (Int, Float, String, Boolean, Enum, Object)
+  - ✅ Nested objects & lists
+  - ✅ Fragments & inline fragments
+  - ✅ Per-field error collection (`data` + `errors`)
+  - ⬜ SDL schema definition & validation
+  - ⬜ Introspection (`__schema` / `__type`)
+  - ⬜ Subscriptions (WebSocket)
+- ✅ NATS
+  - ✅ Publisher
+  - ✅ Subscriber
+- ✅ Protobuf support
+  - ✅ Decode request bodies (`ctx.bindProto(T)` for `application/x-protobuf`)
+  - ✅ Encode responses (`ctx.protobuf(data)`)
+  - ✅ Codegen from `.proto` via `zig build gen-proto` (protoc)
+  - ✅ Hand-written messages via the `protobuf` `encode`/`decode` primitives
+- ✅ Protocol Buffers over HTTP
+- ✅ CLI Application
 - ✅ Memory leaks
-- ⬜ Interface 
-    - ⬜ Pubsub
-    - ⬜ SQL
-    - ⬜ Cache
-- ⬜ Protobuf support
-    - ⬜ Over HTTP
+  - ✅ Cronz
+  - ✅ Context
+  - ✅ Container
+- ✅ Interface (type-erased)
+  - ✅ Pubsub
+  - ✅ SQL
+  - ✅ Cache (redis / nats-kv / memory / sqlite)
+- ⬜ TLS

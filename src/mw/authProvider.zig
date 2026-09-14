@@ -50,6 +50,8 @@ pub const jwtClaims = struct {
     sub: []const u8,
     jti: []const u8,
     nbf: u64,
+    /// optional RBAC role claim; absent in a token leaves this empty
+    role: []const u8 = "",
 };
 
 pub const AuthError = error{
@@ -73,7 +75,7 @@ container: *root.container,
 keys: std.StringHashMap([]const u8) = undefined,
 pubKeys: std.StringHashMap(publiKey) = undefined,
 refreshThread: std.Thread = undefined,
-mutex: std.Thread.Mutex = undefined,
+mutex: std.Io.Mutex = undefined,
 
 refreshInterval: i16 = 60, // seconds
 pathUrl: []const u8 = undefined,
@@ -230,14 +232,14 @@ pub fn validateOAuthToken(self: *Self, allocator: std.mem.Allocator, authHeader:
     };
     defer claims.deinit();
 
-    var validator = jwt.Validator.init(&jwtTokenizer) catch |err| switch (err) {
+    var validator = jwt.Validator.init(allocator, &jwtTokenizer) catch |err| switch (err) {
         else => {
             return AuthError.TokenInvalidClaims;
         },
     };
     defer validator.deinit();
 
-    const now = std.time.timestamp();
+    const now = @as(i64, @intCast(@divTrunc(utils.nowReal().nanoseconds, 1_000_000_000)));
     // validator.hasBeenIssuedBy(publicKey.) // iss
     // validator.isRelatedTo("sub") // sub
     // validator.isIdentifiedBy("jti rrr") // jti
@@ -331,13 +333,17 @@ pub fn refreshKeys(ctx: *Context) !void {
     defer parsed.deinit();
 
     for (parsed.value.keys) |key| {
-        ctx.container.authProvider.mutex.lock();
+        ctx.container.authProvider.mutex.lock(ctx.io) catch {};
         try ctx.container.authProvider.pubKeys.put(key.kid, key);
-        ctx.container.authProvider.mutex.unlock();
+        ctx.container.authProvider.mutex.unlock(ctx.io);
     }
 
     ctx.info("oatuh keys refreshed");
 }
+
+
+// ===================== Tests =====================
+
 
 test "AuthMode.str returns correct strings" {
     try std.testing.expectEqualStrings("Basic", AuthMode.Basic.str());
