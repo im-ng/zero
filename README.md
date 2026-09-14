@@ -32,12 +32,12 @@
 
 ### Zig version support
 
-_*An `experimental` support has been added to achieve the zig version 0.16 addition for the zero framework. For all stable work, prefer to use the `main` branch itself.*_
+_*An `experimental` support has been added to achieve the zig version 0.16 addition for the zero framework. For all stable work, prefer to use the `stable` branch itself.*_
 
-| Branch           | Version |
-| ---------------- | ------- |
-| **experimental** | 0.16.0  |
-| **main**         | 0.15.2  |
+| Branch            | Version |
+| ----------------- | ------- |
+| **main**          | 0.16.0  |
+| **stable-0.15.2** | 0.15.2  |
 
 ## Table of Contents
 
@@ -94,13 +94,21 @@ See [feature_parity.md](./feature_parity.md) for the full roadmap and upcoming f
   sudo apt install librdkafka-dev   # Linux
   brew install librdkafka           # macOS
   ```
+- **libduckdb** required for the Duckdb support:
+
+```bash
+curl --output libduckdb-linux-amd64.zip https://install.duckdb.org/v1.5.5/libduckdb-linux-amd64.zip
+unzip -d libduckdb-linux-amd64 libduckdb-linux-amd64.zip
+cp libduckdb-linux-amd64/duckdb.h libs/
+cp libduckdb-linux-amd64/libduckdb.so libs/
+```
 
 ## Installation
 
 Add zero to your project:
 
 ```bash
-zig fetch --save https://github.com/im-ng/zero/archive/refs/heads/experimental.zip
+zig fetch --save https://github.com/im-ng/zero/archive/refs/heads/main.zip
 ```
 
 ## Quick Start
@@ -153,13 +161,12 @@ pub const std_options: std.Options = .{
 };
 
 pub fn main(init: std.process.Init) !void {
-    utils.setIo(init.io);
-
     var gpa: std.heap.DebugAllocator(.{}) = .init;
     const allocator = gpa.allocator();
     _ = gpa.detectLeaks();
 
-    const app = try App.new(allocator, init.environ_map);
+    const app = try App.new(allocator, init.io, init.environ_map);
+
     try app.get("/json", jsonResponse);
     try app.run();
 }
@@ -274,18 +281,19 @@ LOG_LEVEL=debug
 # AUTH_MODE=Basic
 ```
 
-All keys are commented out by default; features activate only when uncommented. See [config.md](./config.md) for the full list.
+All keys are commented out by default; features activate only when uncommented.
+
+See [config.md](./config.md) for the full list.
 
 ## Resilience
 
-Zero ships a set of **opt-in** resilience features. All are off by default (or
-preserve prior behavior), so existing apps are unaffected; enable them via
-`configs/.env`.
+Zero ships a set of **opt-in** resilience features. All are off by default (or preserve prior behavior), so existing apps are unaffected; enable them via `configs/.env`.
 
 ### Inbound request timeout & bulkhead
 
 - **Request timeout** — a stalled client can't pin a worker forever. Default
   `30s`; override with `ZERO_REQUEST_TIMEOUT_MS` (read from `configs/.env`).
+
 - **Bulkhead** — cap concurrent in-flight requests. When `INBOUND_MAX_CONCURRENT`
   is exceeded the server replies `503` instead of queuing, protecting it from
   overload:
@@ -307,7 +315,7 @@ SQL_CIRCUIT_BREAKER_ENABLE=true      # guard Postgres/SQLite queries & writes
 CACHE_CIRCUIT_BREAKER_ENABLE=true    # guard KV store (Redis) operations
 ```
 
-### Framework-internal bootstrap arena (Tier A)
+### Framework-internal bootstrap arena
 
 Framework-internal bootstrap allocations — container wiring, auth-provider keys,
 startup log buffers, the cron scheduler — are served from a single
@@ -324,6 +332,7 @@ ZERO_FRAMEWORK_MEM_SIZE=8            # MiB; fail-fast if exhausted at startup
 
 It is a hard cap: if bootstrap exhausts the region the app fails fast with
 `error.BootstrapArenaExhausted` at startup rather than growing unpredictably.
+
 Runtime paths (datasource clients, metricz labels, the httpz server and its
 middleware, request handlers) intentionally stay on the ordinary runtime
 allocator, so request traffic never touches the arena.
