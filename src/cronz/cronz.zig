@@ -331,10 +331,7 @@ pub fn addCron(self: *Self, schedule: []const u8, name: []const u8, hook: *const
 fn mockContainer(allocator: std.mem.Allocator) root.container {
     return root.container{
         .allocator = allocator,
-<<<<<<< HEAD
-=======
         .io = std.testing.io,
->>>>>>> 7e04e33 (refactor(io): inject std.Io via App → container → Context)
         .appName = undefined,
         .appVersion = undefined,
         .log = undefined,
@@ -360,7 +357,6 @@ pub fn stop(self: *Self) void {
 }
 
 // ===================== Tests =====================
-
 
 test "expandOccurance fills range with step 1" {
     const allocator = std.testing.allocator;
