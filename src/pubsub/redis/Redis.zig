@@ -84,15 +84,15 @@ fn connect(self: *Self) !void {
 
     const addr = try std.Io.net.IpAddress.parseIp4(self.host, self.port);
 
-    const conn = try addr.connect(utils.io, .{ .mode = .stream });
+    const conn = try addr.connect(self.container.io, .{ .mode = .stream });
     self.stream = conn;
-    self.reader = conn.reader(utils.io, &self.rdbuf).interface;
-    self.writer = conn.writer(utils.io, &self.wbuf).interface;
+    self.reader = conn.reader(self.container.io, &self.rdbuf).interface;
+    self.writer = conn.writer(self.container.io, &self.wbuf).interface;
 
-    const sconn = try addr.connect(utils.io, .{ .mode = .stream });
+    const sconn = try addr.connect(self.container.io, .{ .mode = .stream });
     self.sub_stream = sconn;
-    self.sub_reader = sconn.reader(utils.io, &self.sub_rdbuf).interface;
-    self.sub_writer = sconn.writer(utils.io, &self.sub_wbuf).interface;
+    self.sub_reader = sconn.reader(self.container.io, &self.sub_rdbuf).interface;
+    self.sub_writer = sconn.writer(self.container.io, &self.sub_wbuf).interface;
 
     if (self.password.len > 0) {
         if (self.user.len > 0) {
@@ -115,8 +115,8 @@ fn connect(self: *Self) !void {
 
 /// Close the active sockets (best-effort). Safe to call when not connected.
 fn disconnect(self: *Self) void {
-    if (self.stream) |s| s.close(utils.io);
-    if (self.sub_stream) |s| s.close(utils.io);
+    if (self.stream) |s| s.close(self.container.io);
+    if (self.sub_stream) |s| s.close(self.container.io);
     self.stream = null;
     self.sub_stream = null;
     self.reader = null;
@@ -141,8 +141,8 @@ pub fn destroy(self: *Self) void {
     if (self.subscriber.items.len > 0) {
         self.thread.join();
     }
-    if (self.stream) |s| s.close(utils.io);
-    if (self.sub_stream) |s| s.close(utils.io);
+    if (self.stream) |s| s.close(self.container.io);
+    if (self.sub_stream) |s| s.close(self.container.io);
 }
 
 pub fn Publish(self: *Self, subject: []const u8, payload: []const u8) !void {
@@ -157,9 +157,9 @@ pub fn Publish(self: *Self, subject: []const u8, payload: []const u8) !void {
 }
 
 pub fn addSubscriber(self: *Self, topic: []const u8, hook: *const fn (*root.Context) anyerror!void) !void {
-    self.mu.lock(utils.io) catch {};
+    self.mu.lock(self.container.io) catch {};
     try self.subscriber.append(.{ .topic = topic, .exec = hook });
-    self.mu.unlock(utils.io);
+    self.mu.unlock(self.container.io);
 
     var w = self.sub_writer.?;
     try encodeCommand(&w, &.{ "SUBSCRIBE", topic });
@@ -192,11 +192,11 @@ fn subscriptions(self: *Self) !void {
             self.disconnect();
             self.connect() catch |e| {
                 self.container.log.Any(self.allocator, e);
-                std.Io.sleep(utils.io, std.Io.Duration.fromSeconds(2), .awake) catch {};
+                std.Io.sleep(self.container.io, std.Io.Duration.fromSeconds(2), .awake) catch {};
                 continue;
             };
             self.resubscribe();
-            std.Io.sleep(utils.io, std.Io.Duration.fromMilliseconds(500), .awake) catch {};
+            std.Io.sleep(self.container.io, std.Io.Duration.fromMilliseconds(500), .awake) catch {};
             continue;
         };
         break;
@@ -248,7 +248,7 @@ fn runHook(self: *Self, hook: *const fn (*root.Context) anyerror!void, channel: 
         hook(context) catch |err| {
             self.container.log.Any(self.allocator, err);
             if (attempt + 1 < max_attempts) {
-                std.Io.sleep(utils.io, std.Io.Duration.fromMilliseconds(backoff_ms), .awake) catch {};
+                std.Io.sleep(self.container.io, std.Io.Duration.fromMilliseconds(backoff_ms), .awake) catch {};
                 continue;
             }
             const dlq = std.fmt.allocPrint(self.allocator, "{s}.dlq", .{channel}) catch break;

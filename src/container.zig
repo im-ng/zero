@@ -75,6 +75,12 @@ appName: []const u8 = undefined,
 appVersion: []const u8 = undefined,
 allocator: std.mem.Allocator,
 
+/// Process-wide I/O reactor (one per process in Zig 0.16's `std.Io`). Injected
+/// at `App` creation and reachable from every subsystem that holds a
+/// `*container` (datasources, cron, pub/sub, context). The `utils.io` global
+/// mirrors this for stateless helpers that have no container in scope.
+io: std.Io = undefined,
+
 /// Optional pre-allocated bootstrap arena (Tier A). When null it falls back to
 /// `allocator`. Set by `App.new` from `ZERO_FRAMEWORK_MEM_SIZE`; used for
 /// framework-internal bootstrap wiring (maps, auth keys, startup log buffers)
@@ -135,6 +141,7 @@ pub fn create(self: Self) anyerror!*container {
         .allocator = self.allocator,
         .log = self.log,
         .config = self.config,
+        .io = self.io,
         .bootstrap = if (self.bootstrap_allocator) |b| b else self.allocator,
     };
 

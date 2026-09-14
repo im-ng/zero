@@ -333,9 +333,9 @@ pub fn refreshKeys(ctx: *Context) !void {
     defer parsed.deinit();
 
     for (parsed.value.keys) |key| {
-        ctx.container.authProvider.mutex.lock(utils.io) catch {};
+        ctx.container.authProvider.mutex.lock(ctx.io) catch {};
         try ctx.container.authProvider.pubKeys.put(key.kid, key);
-        ctx.container.authProvider.mutex.unlock(utils.io);
+        ctx.container.authProvider.mutex.unlock(ctx.io);
     }
 
     ctx.info("oatuh keys refreshed");

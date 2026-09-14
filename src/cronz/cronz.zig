@@ -76,14 +76,14 @@ fn destroryChildAllocator(self: *Self, ca: *arena) void {
 
 pub fn runSchedules(self: *Self, _: i128) void {
     while (self.running.load(.monotonic)) {
-        std.Io.sleep(utils.io, std.Io.Duration.fromSeconds(1), .awake) catch {};
-        const now = dateTime.nowUTC(utils.io);
+        std.Io.sleep(self.container.io, std.Io.Duration.fromSeconds(1), .awake) catch {};
+        const now = dateTime.nowUTC(self.container.io);
         for (self.jobs.items) |*j| {
             if (j.compare(now)) {
                 // Serialize runs of the same job so an overrunning tick can't stack
                 // on top of itself.
-                j.mu.lock(utils.io) catch {};
-                defer j.mu.unlock(utils.io);
+                j.mu.lock(self.container.io) catch {};
+                defer j.mu.unlock(self.container.io);
 
                 var attempt: u32 = 0;
                 const max_attempts: u32 = 3;
@@ -107,7 +107,7 @@ pub fn runSchedules(self: *Self, _: i128) void {
                     job.run(j.*, &ctx) catch |err| {
                         self.container.log.any(err);
                         if (attempt + 1 < max_attempts) {
-                            std.Io.sleep(utils.io, std.Io.Duration.fromMilliseconds(backoff_ms), .awake) catch {};
+                            std.Io.sleep(self.container.io, std.Io.Duration.fromMilliseconds(backoff_ms), .awake) catch {};
                             continue;
                         }
                         break;
@@ -312,9 +312,9 @@ pub fn addCron(self: *Self, schedule: []const u8, name: []const u8, hook: *const
     j.name = name;
     j.exec = hook;
 
-    self.mu.lock(utils.io) catch {};
+    self.mu.lock(self.container.io) catch {};
     try self.jobs.append(j);
-    self.mu.unlock(utils.io);
+    self.mu.unlock(self.container.io);
 
     const msg = utils.combine(
         self.container.allocator,
@@ -331,6 +331,10 @@ pub fn addCron(self: *Self, schedule: []const u8, name: []const u8, hook: *const
 fn mockContainer(allocator: std.mem.Allocator) root.container {
     return root.container{
         .allocator = allocator,
+<<<<<<< HEAD
+=======
+        .io = std.testing.io,
+>>>>>>> 7e04e33 (refactor(io): inject std.Io via App → container → Context)
         .appName = undefined,
         .appVersion = undefined,
         .log = undefined,

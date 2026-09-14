@@ -56,7 +56,7 @@ fn connect(self: *Self) !void {
     }
 
     const config = self.config;
-    const m = try root.mqttz.posix.Client311.init(utils.io, .{
+    const m = try root.mqttz.posix.Client311.init(self.container.io, .{
         .port = config.port,
         .ip = config.ip,
         .host = config.hostname,
@@ -136,7 +136,7 @@ pub fn readPackets(self: *Self, subscriber: mqSubscriber) !void {
         if (!self.mqtt_initialized) {
             self.connect() catch |err| {
                 self.container.log.Any(self.container.allocator, err);
-                std.Io.sleep(utils.io, std.Io.Duration.fromSeconds(2), .awake) catch {};
+                std.Io.sleep(self.container.io, std.Io.Duration.fromSeconds(2), .awake) catch {};
                 continue;
             };
         }
@@ -154,7 +154,7 @@ pub fn readPackets(self: *Self, subscriber: mqSubscriber) !void {
                 const msg = try utils.combine(self.container.allocator, "server disconnected us: {s}", .{@tagName(d.reason_code)});
                 self.container.log.info(msg);
                 self.mqtt_initialized = false;
-                std.Io.sleep(utils.io, std.Io.Duration.fromSeconds(2), .awake) catch {};
+                std.Io.sleep(self.container.io, std.Io.Duration.fromSeconds(2), .awake) catch {};
                 continue;
             },
             .suback => {
@@ -168,7 +168,7 @@ pub fn readPackets(self: *Self, subscriber: mqSubscriber) !void {
             self.container.log.Any(self.container.allocator, err);
             // Mark disconnected so the next iteration reconnects + resubscribes.
             self.mqtt_initialized = false;
-            std.Io.sleep(utils.io, std.Io.Duration.fromSeconds(2), .awake) catch {};
+            std.Io.sleep(self.container.io, std.Io.Duration.fromSeconds(2), .awake) catch {};
             continue;
         };
         break;
@@ -177,7 +177,7 @@ pub fn readPackets(self: *Self, subscriber: mqSubscriber) !void {
 
 fn consume(self: *Self, subscriber: mqSubscriber) !void {
     while (self.signal.load(.monotonic)) {
-        std.Io.sleep(utils.io, std.Io.Duration.fromSeconds(1), .awake) catch {};
+        std.Io.sleep(self.container.io, std.Io.Duration.fromSeconds(1), .awake) catch {};
         const packet = try self.mqtt.readPacket(.{ .timeout = 1000 }) orelse {
             continue;
         };
@@ -217,7 +217,7 @@ fn consume(self: *Self, subscriber: mqSubscriber) !void {
                     subscriber.exec(context) catch |err| {
                         self.container.log.Any(self.container.allocator, err);
                         if (attempt + 1 < max_attempts) {
-                            std.Io.sleep(utils.io, std.Io.Duration.fromMilliseconds(backoff_ms), .awake) catch {};
+                            std.Io.sleep(self.container.io, std.Io.Duration.fromMilliseconds(backoff_ms), .awake) catch {};
                             continue;
                         }
                         const dlq = std.fmt.allocPrint(self.container.allocator, "{s}/dlq", .{publish.topic}) catch break;
@@ -248,7 +248,7 @@ fn subscriptions(self: *Self) !void {
     for (self.subscriber.items) |client| {
         // Subscribe + connect + consume all happen inside readPackets so a dropped
         // session is transparently reconnected and re-subscribed (see connect()).
-        std.Io.sleep(utils.io, std.Io.Duration.fromMilliseconds(100), .awake) catch {};
+        std.Io.sleep(self.container.io, std.Io.Duration.fromMilliseconds(100), .awake) catch {};
         const thread = Thread.spawn(.{}, Self.readPackets, .{ self, client }) catch |err| {
             self.container.log.Any(self.container.allocator, err);
             continue;
@@ -271,9 +271,9 @@ pub fn addSubscriber(self: *Self, topic: []const u8, hook: *const fn (*root.Cont
         .exec = hook,
     };
 
-    self.mu.lock(utils.io) catch {};
+    self.mu.lock(self.container.io) catch {};
     try self.subscriber.append(s);
-    self.mu.unlock(utils.io);
+    self.mu.unlock(self.container.io);
 
     const msg = utils.combine(
         self.container.allocator,

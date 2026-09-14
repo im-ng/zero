@@ -36,7 +36,7 @@ pub fn create(allocator: std.mem.Allocator, container: *root.container) !*server
 
 pub fn Run(self: *Self) !Thread {
     self.m = try httpz.Server(void).init(
-        utils.io,
+        self.container.io,
         self.container.allocator,
         .{
             .address = httpz.Config.Address.all(self.port),

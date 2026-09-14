@@ -47,7 +47,7 @@ pub fn create(container: *root.container, config: *const natsConfig) !*NATS {
         opts.creds_file = config.creds_file;
     }
 
-    const client = try nats.Client.connect(container.allocator, utils.io, config.url, opts);
+    const client = try nats.Client.connect(container.allocator, container.io, config.url, opts);
     c.client = client;
 
     if (config.hasStream()) {
@@ -164,7 +164,7 @@ fn dispatch(self: *Self, subject: []const u8, payload: []const u8, hook: *const 
         hook(context) catch |err| {
             self.container.log.Any(self.allocator, err);
             if (attempt + 1 < max_attempts) {
-                std.Io.sleep(utils.io, std.Io.Duration.fromMilliseconds(backoff_ms), .awake) catch {};
+                std.Io.sleep(self.container.io, std.Io.Duration.fromMilliseconds(backoff_ms), .awake) catch {};
                 continue;
             }
             const dlq = std.fmt.allocPrint(self.allocator, "{s}.dlq", .{subject}) catch break;
@@ -189,7 +189,7 @@ fn readJetStream(self: *Self, sub: natsSubscriber) !void {
             self.container.log.Any(self.container.allocator, err);
             // The nats client reconnects automatically; pause and retry rather than
             // abandoning the stream consumer.
-            std.Io.sleep(utils.io, std.Io.Duration.fromSeconds(2), .awake) catch {};
+            std.Io.sleep(self.container.io, std.Io.Duration.fromSeconds(2), .awake) catch {};
             continue;
         };
         defer result.deinit();
@@ -212,11 +212,11 @@ fn readCore(self: *Self, sub: natsSubscriber) !void {
         // re-establish it each time the inner loop bails out on error.
         const s = self.client.subscribeSync(sub.topic) catch |err| {
             self.container.log.Any(self.container.allocator, err);
-            std.Io.sleep(utils.io, std.Io.Duration.fromSeconds(2), .awake) catch {};
+            std.Io.sleep(self.container.io, std.Io.Duration.fromSeconds(2), .awake) catch {};
             continue;
         };
         while (self.signal.load(.monotonic)) {
-            std.Io.sleep(utils.io, std.Io.Duration.fromMilliseconds(100), .awake) catch {};
+            std.Io.sleep(self.container.io, std.Io.Duration.fromMilliseconds(100), .awake) catch {};
             const msg = s.tryNextMsg() orelse continue;
             self.dispatch(msg.subject, msg.data, sub.exec);
             msg.deinit();
@@ -249,9 +249,9 @@ pub fn addSubscriber(self: *Self, topic: []const u8, hook: *const fn (*root.Cont
         .exec = hook,
     };
 
-    self.mu.lock(utils.io) catch {};
+    self.mu.lock(self.container.io) catch {};
     try self.subscriber.append(s);
-    self.mu.unlock(utils.io);
+    self.mu.unlock(self.container.io);
 
     const msg = utils.combine(
         self.container.allocator,

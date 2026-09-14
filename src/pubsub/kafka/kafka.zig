@@ -295,7 +295,7 @@ pub fn readPayload(self: *Self, subscriber: kafkaSubscriber) !void {
                 subscriber.exec(context) catch |err| {
                     self.container.log.Any(self.container.allocator, err);
                     if (attempt + 1 < max_attempts) {
-                        std.Io.sleep(utils.io, std.Io.Duration.fromMilliseconds(backoff_ms), .awake) catch {};
+                        std.Io.sleep(self.container.io, std.Io.Duration.fromMilliseconds(backoff_ms), .awake) catch {};
                         continue;
                     }
                     const dlq = std.fmt.allocPrint(self.container.allocator, "{s}__dlq", .{msg.getTopic()}) catch break;
@@ -328,7 +328,7 @@ fn subscriptions(self: *Self) !void {
     }
 
     for (self.subscriber.items) |s| {
-        std.Io.sleep(utils.io, std.Io.Duration.fromMilliseconds(100), .awake) catch {};
+        std.Io.sleep(self.container.io, std.Io.Duration.fromMilliseconds(100), .awake) catch {};
         const err_code: c_int = rdkafka.rd_kafka_subscribe(self.client, s.topics);
         if (err_code != rdkafka.RD_KAFKA_RESP_ERR_NO_ERROR) {
             const msg = try utils.combine(
@@ -410,9 +410,9 @@ pub fn addSubscriber(self: *Self, topic: []const u8, hook: *const fn (*root.Cont
         .exec = hook,
     };
 
-    self.mu.lock(utils.io) catch {};
+    self.mu.lock(self.container.io) catch {};
     try self.subscriber.append(s);
-    self.mu.unlock(utils.io);
+    self.mu.unlock(self.container.io);
 
     const msg = utils.combine(
         self.container.allocator,

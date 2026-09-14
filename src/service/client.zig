@@ -92,7 +92,7 @@ pub fn createWithConfig(
 ) !*Client {
     const c = try ct.allocator.create(Client);
 
-    c.client = zul.http.Client.init(utils.io, ct.allocator);
+    c.client = zul.http.Client.init(ct.io, ct.allocator);
     c.name = service_name;
     c.container = ct;
     c.url = _url;
@@ -465,7 +465,7 @@ fn createAndSendRequest(
             if (attempt < max_attempts) {
                 attempt += 1;
                 const backoff = self.retryBackoffMs(attempt);
-                std.Io.sleep(utils.io, std.Io.Duration.fromMilliseconds(backoff), .awake) catch {};
+                std.Io.sleep(self.container.io, std.Io.Duration.fromMilliseconds(backoff), .awake) catch {};
                 continue;
             }
             return e;
@@ -482,7 +482,7 @@ fn createAndSendRequest(
                 if (attempt < max_attempts) {
                     attempt += 1;
                     const backoff = self.retryBackoffMs(attempt);
-                    std.Io.sleep(utils.io, std.Io.Duration.fromMilliseconds(backoff), .awake) catch {};
+                    std.Io.sleep(self.container.io, std.Io.Duration.fromMilliseconds(backoff), .awake) catch {};
                     continue;
                 }
                 return ClientError.ServiceNotReachable;
@@ -498,7 +498,7 @@ fn createAndSendRequest(
             self.oauth_token = null;
             if (self.breaker) |*b| b.recordFailure();
             const backoff = self.retryBackoffMs(attempt + 1);
-            std.Io.sleep(utils.io, std.Io.Duration.fromMilliseconds(backoff), .awake) catch {};
+            std.Io.sleep(self.container.io, std.Io.Duration.fromMilliseconds(backoff), .awake) catch {};
             continue;
         }
 
@@ -560,8 +560,8 @@ fn applyAuth(self: *Self, ctx: *Context, req: *zul.http.Request) !void {
 }
 
 fn ensureOAuthToken(self: *Self) ![]const u8 {
-    self.oauth_mutex.lock(utils.io) catch {};
-    defer self.oauth_mutex.unlock(utils.io);
+    self.oauth_mutex.lock(self.container.io) catch {};
+    defer self.oauth_mutex.unlock(self.container.io);
 
     const now = utils.nowMonotonic().nanoseconds;
     if (self.oauth_token) |token| {
@@ -582,7 +582,7 @@ fn ensureOAuthToken(self: *Self) ![]const u8 {
     }
 
     if (self.oauth_client == null) {
-        self.oauth_client = zul.http.Client.init(utils.io, self.container.allocator);
+        self.oauth_client = zul.http.Client.init(self.container.io, self.container.allocator);
     }
     const token_client = &self.oauth_client.?;
 

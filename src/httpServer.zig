@@ -85,7 +85,7 @@ pub fn create(allocator: std.mem.Allocator, container: *root.container) !*server
     };
 
     hzs.http = try httpz.Server(*root.handler.Handler).init(
-        utils.io,
+        container.io,
         hzs.container.allocator,
         .{
             .address = httpz.Config.Address.all(hzs.port),

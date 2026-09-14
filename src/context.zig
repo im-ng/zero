@@ -18,6 +18,7 @@ pub const Context = struct {
     response: *httpz.Response = undefined,
     allocator: std.mem.Allocator = undefined,
     container: *root.container = undefined,
+    io: std.Io = undefined,
 
     SQL: root.Datasource = undefined,
     KV: ?*root.KVStore = null,
@@ -50,6 +51,7 @@ pub const Context = struct {
         var c = Context{
             .allocator = allocator,
             .container = container,
+            .io = container.io,
             .request = req,
             .response = res,
         };
@@ -103,6 +105,7 @@ pub const Context = struct {
         var c = Context{
             .allocator = allocator,
             .container = container,
+            .io = container.io,
             .params = std.StringHashMap([]const u8).init(allocator),
         };
 
@@ -132,14 +135,14 @@ pub const Context = struct {
         const out = std.Io.File.stdout();
         const msg = std.fmt.allocPrint(self.allocator, fmt, args) catch return;
         defer self.allocator.free(msg);
-        out.writeStreamingAll(root.utils.io, msg) catch {};
+        out.writeStreamingAll(self.io, msg) catch {};
     }
 
     /// Print a line to stdout.
     pub fn println(self: *Context, comptime fmt: []const u8, args: anytype) void {
         self.print(fmt, args);
         const out = std.Io.File.stdout();
-        out.writeStreamingAll(root.utils.io, "\n") catch {};
+        out.writeStreamingAll(self.io, "\n") catch {};
     }
 
     /// Access the framework logger.
@@ -248,10 +251,10 @@ pub const Context = struct {
     /// `Content-Type` (from the extension) and a `Content-Disposition`
     /// attachment header. The file contents are allocated with `ctx.allocator`.
     pub fn File(self: *Context, path: []const u8) !void {
-        const file = try std.Io.Dir.cwd().openFile(root.utils.io, path, .{});
-        defer file.close(root.utils.io);
+        const file = try std.Io.Dir.cwd().openFile(self.io, path, .{});
+        defer file.close(self.io);
         var rbuf: [8192]u8 = undefined;
-        var reader = file.reader(root.utils.io, &rbuf);
+        var reader = file.reader(self.io, &rbuf);
         const data = try reader.interface.allocRemainingAlignedSentinel(
             self.allocator,
             std.Io.Limit.limited(100 * 1024 * 1024),
@@ -538,6 +541,7 @@ test "context: File serves a local file as a download" {
 
     var ctx: Context = undefined;
     ctx.allocator = testing.arena;
+    ctx.io = std.testing.io;
     ctx.request = testing.req;
     ctx.response = testing.res;
 

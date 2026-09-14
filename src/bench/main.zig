@@ -576,7 +576,6 @@ fn runExtraScenario(
 }
 
 pub fn main(init: std.process.Init) !void {
-    utils.setIo(init.io);
     bumpNoFileLimit();
 
     var duration_s: f64 = 3;
@@ -681,7 +680,7 @@ pub fn main(init: std.process.Init) !void {
         health_url = try std.fmt.allocPrint(allocator, "http://{s}:{s}/.well-known/health", .{ host.?, port_resolved });
         waitReady(init.io, health_url);
     } else {
-        const app = try App.new(allocator, init.environ_map);
+        const app = try App.new(allocator, init.io, init.environ_map);
         if (quiet) app.log.logLevel = 99;
 
         // Register the zero-basic workload so the suite/k6 can exercise resource

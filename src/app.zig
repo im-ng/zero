@@ -76,9 +76,14 @@ var AppInstance: *Self = undefined;
 /// Shared setup for both HTTP (`new`) and CLI (`newCmd`) applications: config,
 /// logging, the bootstrap arena, container/datasources, migrations, and
 /// fail-fast config checks. Does NOT create the HTTP or metrics servers.
-fn initBase(allocator: std.mem.Allocator, em: *EnvMap) !*App {
+fn initBase(allocator: std.mem.Allocator, io: std.Io, em: *EnvMap) !*App {
     const app = try allocator.create(App);
     errdefer allocator.destroy(app);
+
+    // Seed the thin `utils.io` global from the injected reactor so stateless
+    // helpers (nowMonotonic, timestampz, …) that have no *container in scope
+    // can reach it. Subsystems that hold a *container use `container.io`.
+    utils.setIo(io);
 
     const log = try root.logger.create(allocator);
 
@@ -127,6 +132,7 @@ fn initBase(allocator: std.mem.Allocator, em: *EnvMap) !*App {
         .allocator = allocator,
         .log = log,
         .config = config,
+        .io = io,
         .bootstrap_allocator = bootstrap_alloc,
     }) catch |e| switch (e) {
         error.OutOfMemory => return error.BootstrapArenaExhausted,
@@ -175,8 +181,8 @@ fn initBase(allocator: std.mem.Allocator, em: *EnvMap) !*App {
 
 /// Create the full application: config, logging, container/datasources, and the
 /// HTTP + metrics servers. Call `run()` to start serving.
-pub fn new(allocator: std.mem.Allocator, em: *EnvMap) !*App {
-    const app = try initBase(allocator, em);
+pub fn new(allocator: std.mem.Allocator, io: std.Io, em: *EnvMap) !*App {
+    const app = try initBase(allocator, io, em);
 
     // register metrics server
     app.metriczServer = try root.metriczServer.create(allocator, app.container);
@@ -198,8 +204,8 @@ pub fn new(allocator: std.mem.Allocator, em: *EnvMap) !*App {
 /// (config, logging, container/datasources, migrations) but no HTTP server or
 /// metrics server is started. Register subcommands with `SubCommand` and invoke
 /// with `runCmd`.
-pub fn newCmd(allocator: std.mem.Allocator, em: *EnvMap) !*App {
-    return initBase(allocator, em);
+pub fn newCmd(allocator: std.mem.Allocator, io: std.Io, em: *EnvMap) !*App {
+    return initBase(allocator, io, em);
 }
 
 /// Frees the Tier A bootstrap arena backing. Call only after all framework
@@ -283,9 +289,9 @@ pub fn runCmd(self: *App, args: std.process.Args) !void {
 
     const entry = self.subcommands.get(sub) orelse {
         const errout = std.Io.File.stderr();
-        errout.writeStreamingAll(utils.io, "unknown command: ") catch {};
-        errout.writeStreamingAll(utils.io, sub) catch {};
-        errout.writeStreamingAll(utils.io, "\n") catch {};
+        errout.writeStreamingAll(self.container.io, "unknown command: ") catch {};
+        errout.writeStreamingAll(self.container.io, sub) catch {};
+        errout.writeStreamingAll(self.container.io, "\n") catch {};
         self.printCliHelp();
         return error.UnknownCliCommand;
     };
@@ -323,7 +329,7 @@ pub fn runCmd(self: *App, args: std.process.Args) !void {
 /// Print the CLI usage banner and the list of registered subcommands.
 pub fn printCliHelp(self: *App) void {
     const out = std.Io.File.stdout();
-    const io = utils.io;
+    const io = self.container.io;
     out.writeStreamingAll(io, "Usage:\n  ") catch {};
     out.writeStreamingAll(io, self.config.getOrDefault("APP_NAME", "zero")) catch {};
     out.writeStreamingAll(io, " <command> [flags]\n\nCommands:\n") catch {};
@@ -611,7 +617,7 @@ pub fn prepareHttpServer(self: Self) !std.Thread {
 }
 
 fn favIcon(ctx: *Context) !void {
-    var f = std.Io.Dir.cwd().openFile(utils.io, constants.FAVICON_FILE_PATH, .{}) catch |err| switch (err) {
+    var f = std.Io.Dir.cwd().openFile(ctx.io, constants.FAVICON_FILE_PATH, .{}) catch |err| switch (err) {
         else => {
             var buffer: []u8 = try ctx.allocator.alloc(u8, 100);
             buffer = try std.fmt.bufPrint(buffer, "favorite icon not found, using default", .{});
@@ -624,10 +630,10 @@ fn favIcon(ctx: *Context) !void {
             return;
         },
     };
-    defer f.close(utils.io);
+    defer f.close(ctx.io);
 
     // Read the file into a buffer.
-    const stat = f.stat(utils.io) catch |err| {
+    const stat = f.stat(ctx.io) catch |err| {
         var buffer: []u8 = try ctx.allocator.alloc(u8, 100);
         buffer = try std.fmt.bufPrint(buffer, "favorite icon not found, using default {s}", .{
             @errorName(err),
@@ -642,7 +648,7 @@ fn favIcon(ctx: *Context) !void {
     };
 
     const buffer = try ctx.allocator.alloc(u8, stat.size);
-    _ = try f.readPositionalAll(utils.io, buffer, 0);
+    _ = try f.readPositionalAll(ctx.io, buffer, 0);
 
     ctx.response.setStatus(.ok);
     ctx.response.content_type = .ICO;
@@ -650,13 +656,13 @@ fn favIcon(ctx: *Context) !void {
 }
 
 fn readFile(ctx: *Context, path: []const u8) ![]const u8 {
-    var f = try std.Io.Dir.cwd().openFile(utils.io, path, .{});
-    defer f.close(utils.io);
+    var f = try std.Io.Dir.cwd().openFile(ctx.io, path, .{});
+    defer f.close(ctx.io);
 
     // Read the file into a buffer.
-    const stat = try f.stat(utils.io);
+    const stat = try f.stat(ctx.io);
     const buffer = try ctx.allocator.alloc(u8, stat.size);
-    _ = try f.readPositionalAll(utils.io, buffer, 0);
+    _ = try f.readPositionalAll(ctx.io, buffer, 0);
     return buffer;
 }
 

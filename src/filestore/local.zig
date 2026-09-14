@@ -57,14 +57,14 @@ pub const FileStoreLocal = struct {
         const path = try self.resolve(ctx, key);
         defer ctx.allocator.free(path);
 
-        const file = std.Io.Dir.cwd().openFile(root.utils.io, path, .{}) catch |err| {
+        const file = std.Io.Dir.cwd().openFile(ctx.io, path, .{}) catch |err| {
             if (err == error.FileNotFound) return null;
             return err;
         };
-        defer file.close(root.utils.io);
+        defer file.close(ctx.io);
 
         var rbuf: [8192]u8 = undefined;
-        var reader = file.reader(root.utils.io, &rbuf);
+        var reader = file.reader(ctx.io, &rbuf);
         const data = try reader.interface.allocRemainingAlignedSentinel(
             ctx.allocator,
             Io.Limit.limited(self.max_bytes),
@@ -80,18 +80,18 @@ pub const FileStoreLocal = struct {
 
         if (std.mem.lastIndexOfScalar(u8, path, '/')) |idx| {
             const dir = path[0..idx];
-            std.Io.Dir.cwd().createDirPath(root.utils.io, dir) catch |err| {
+            std.Io.Dir.cwd().createDirPath(ctx.io, dir) catch |err| {
                 if (err != error.PathAlreadyExists) return err;
             };
         }
 
-        try std.Io.Dir.cwd().writeFile(root.utils.io, .{ .sub_path = path, .data = data });
+        try std.Io.Dir.cwd().writeFile(ctx.io, .{ .sub_path = path, .data = data });
     }
 
     pub fn delete(self: *FileStoreLocal, ctx: *root.Context, key: []const u8) !void {
         const path = try self.resolve(ctx, key);
         defer ctx.allocator.free(path);
-        try std.Io.Dir.cwd().deleteFile(root.utils.io, path);
+        try std.Io.Dir.cwd().deleteFile(ctx.io, path);
     }
 
     pub fn list(self: *FileStoreLocal, ctx: *root.Context, prefix: []const u8) ![][]const u8 {
