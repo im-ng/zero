@@ -385,21 +385,37 @@ fn remoteLogLevelSync(ctx: *root.Context) !void {
 }
 
 /// When `REMOTE_LOG_URL` is configured, registers an outbound HTTP client for it and
-/// a cron job that fetches the remote level every `REMOTE_LOG_FETCH_INTERVAL` seconds
-/// (default 15) and adjusts the in-process log level. No-op when the URL is unset, so
+/// a cron job that fetches the remote level every `REMOTE_LOG_REFRESH_INTERVAL` seconds
+/// (default 30) and adjusts the in-process log level. No-op when the URL is unset, so
 /// the feature is opt-in via config and never exposes an endpoint on this service.
 pub fn startRemoteLogLevel(self: *Self) !void {
     const url = self.config.getOrDefault("REMOTE_LOG_URL", "");
     if (url.len == 0) return;
 
-    const interval = std.fmt.parseInt(u64, self.config.getOrDefault("REMOTE_LOG_FETCH_INTERVAL", "15"), 10) catch 15;
-    const step = if (interval == 0) @as(u64, 15) else interval;
+    const interval = std.fmt.parseInt(u64, self.config.getOrDefault("REMOTE_LOG_REFRESH_INTERVAL", "30"), 10) catch 30;
+    const step = if (interval == 0) @as(u64, 30) else interval;
 
     try self.addHttpService(remoteLogLevelService, url, .{});
 
     const schedule = try std.fmt.allocPrint(self.config.allocator, "*/{d} * * * * *", .{step});
     defer self.config.allocator.free(schedule);
     try self.addCronJob(schedule, "remote-log-level-sync", remoteLogLevelSync);
+}
+
+/// Extracts a single query parameter value (e.g. `?id=uuid`) from the current
+/// request. Returns the value subslice, or `null` when the parameter is absent.
+/// httpz parses the query string into a key/value map, so we read it via `.get`.
+fn queryParam(ctx: *root.Context, name: []const u8) ?[]const u8 {
+    const qs = ctx.request.query() catch return null;
+    return qs.get(name);
+}
+
+/// `GET /remote.log.service?id=<uuid>` — returns the current in-process log
+/// level for the given service id as `{ "data": { "id": ..., "level": ... } }`.
+fn remoteLogServiceGet(ctx: *root.Context) !void {
+    const id = queryParam(ctx, "id") orelse "";
+    const level = logLevelName(ctx.container.log.logLevel);
+    try ctx.json(.{ .id = id, .level = level });
 }
 
 pub fn onStartup(self: *Self, hook: fn (*root.Context) anyerror!void) void {
@@ -446,6 +462,9 @@ fn prepareDefaultRoutes(self: *Self) !void {
     // register live and health check routes
     self.httpServer.router.get(constants.LIVE_PATH, live, .{});
     self.httpServer.router.get(constants.HEALTH_PATH, health, .{});
+
+    // remote log service: expose the current in-process log level for a service id
+    self.httpServer.router.get("/remote.log.service", remoteLogServiceGet, .{});
 
     self.httpServer.router.get(constants.OPEN_API_PATH, openAPIHandler, .{});
     self.httpServer.router.get(constants.SWAGGER_PATH, swaggerHandler, .{});
@@ -838,47 +857,19 @@ pub fn addHealthCheck(self: Self, name: []const u8, check: *const fn (*root.cont
     try self.container.healthChecks.append(.{ .name = name, .check = check });
 }
 
-/// Registers an RBAC allow-rule: `role` may call `method` on `path`. `path`
-/// may end with `*` as a prefix wildcard and `method` may be `*` to match any
-/// verb. Applied by the rbac middleware after auth (requires a `role` claim
-/// in the verified JWT).
-pub fn rbac(self: *Self, role: []const u8, method: []const u8, path: []const u8) !void {
-    if (self.container.rbac == null) {
-        self.container.rbac = try self.container.allocator.create(root.rbac.RBAC);
-        self.container.rbac.?.* = root.rbac.RBAC.init(self.container.allocator);
-    }
-    try self.container.rbac.?.add(role, method, path);
-}
-
-/// Loads RBAC rules from `RBAC_ROLE_<NAME>=METHOD:/path,METHOD:/path` env keys,
-/// plus a JSON document from `RBAC_CONFIG` (either an array of
-/// `{"role","method","path"}` objects or an object mapping role →
-/// `["METHOD:/path", ...]`).
+/// Loads RBAC rules from the `RBAC_CONFIG` env var, parsed as JSON in the
+/// endpoint-rule format (see `rbacFromJson`). Only the JSON notation is
+/// supported — there is no `RBAC_ROLE_*` env-var form.
 pub fn rbacFromEnv(self: *Self) !void {
-    const prefix = "RBAC_ROLE_";
-    var it = self.container.config.environments.iterator();
-    while (it.next()) |entry| {
-        if (!std.mem.startsWith(u8, entry.key_ptr.*, prefix)) continue;
-        const role = entry.key_ptr.*[prefix.len..];
-        var rules = std.mem.splitScalar(u8, entry.value_ptr.*, ',');
-        while (rules.next()) |rule| {
-            const trimmed = std.mem.trim(u8, rule, " ");
-            if (trimmed.len == 0) continue;
-            var mp = std.mem.splitScalar(u8, trimmed, ':');
-            const m = mp.next() orelse continue;
-            const p = mp.next() orelse continue;
-            try self.rbac(role, std.mem.trim(u8, m, " "), std.mem.trim(u8, p, " "));
-        }
-    }
-
     const json_config = self.container.config.getOrDefault("RBAC_CONFIG", "");
     if (json_config.len > 0) {
         try self.rbacFromJson(json_config);
     }
 }
 
-/// Parses RBAC rules from a JSON string (array of `{"role","method","path"}`
-/// objects, or an object mapping role → `["METHOD:/path", ...]`).
+/// Parses RBAC rules from a JSON string in the endpoint-rule format:
+/// `{"permissions":[...],"endpoint":"...","methods":[...],"exempt":bool}`,
+/// accepted as a single object or an array of such objects.
 pub fn rbacFromJson(self: *Self, json_config: []const u8) !void {
     if (self.container.rbac == null) {
         self.container.rbac = try self.container.allocator.create(root.rbac.RBAC);

@@ -9,11 +9,13 @@ allocator: std.mem.Allocator,
 container: ?*root.container = undefined,
 registry: ?*RBAC = undefined,
 
-/// A single allow-rule: `role` may call `method` on `path`.
+/// A single allow-rule: `role` may call `method` on `path`. When `exempt` is
+/// true the rule bypasses RBAC entirely for its `method`/`path` (see `addExempt`).
 pub const Permission = struct {
     role: []const u8,
     method: []const u8,
     path: []const u8,
+    exempt: bool = false,
 };
 
 /// Role-based access control registry. Routes with no matching rule are
@@ -34,16 +36,28 @@ pub const RBAC = struct {
         try self.permissions.append(.{ .role = role, .method = method, .path = path });
     }
 
+    /// Adds an exempt rule: `method` on `path` bypasses RBAC for any role. Used
+    /// by the `endpoint`/`methods`/`exempt` config shape.
+    pub fn addExempt(self: *RBAC, role: []const u8, method: []const u8, path: []const u8) !void {
+        try self.permissions.append(.{ .role = role, .method = method, .path = path, .exempt = true });
+    }
+
     /// `true` if `role` may access (method, path). Method may be `*` and path
     /// may end with `*` as a prefix wildcard. A route with no rule is allowed.
     pub fn allows(self: *const RBAC, role: []const u8, method: []const u8, path: []const u8) bool {
         var protected = false;
         for (self.permissions.items) |p| {
-            if (methodMatches(p.method, method) and pathMatches(p.path, path)) {
+            if (!pathMatches(p.path, path)) continue;
+            if (p.exempt) {
+                // an exempt rule claims the whole path: only its listed methods
+                // bypass RBAC; other methods stay protected (require a role rule).
+                if (methodMatches(p.method, method)) return true;
                 protected = true;
-                if (std.mem.eql(u8, p.role, role)) {
-                    return true;
-                }
+                continue;
+            }
+            if (methodMatches(p.method, method)) {
+                protected = true;
+                if (std.mem.eql(u8, p.role, role)) return true;
             }
         }
         return !protected;
@@ -53,9 +67,11 @@ pub const RBAC = struct {
         self.permissions.deinit();
     }
 
-    /// Parses RBAC rules from a JSON string. Two shapes are accepted:
-    ///   - an array of `{"role": "...", "method": "...", "path": "..."}` objects
-    ///   - an object mapping role → `["METHOD:/path", "METHOD:/path", ...]`
+    /// Parses RBAC rules from a JSON string in the endpoint-rule format only:
+    ///   {"permissions":["ROLE",...], "endpoint":"...", "methods":["GET",...], "exempt": bool}
+    /// Accepted as a single object or an array of such objects. `exempt`
+    /// (default false) bypasses RBAC for the listed methods only. Any other
+    /// shape (e.g. the legacy `{role,method,path}` form) is rejected.
     /// String values are copied into `allocator` so the parsed document may be freed.
     pub fn fromJson(self: *RBAC, allocator: std.mem.Allocator, json_config: []const u8) !void {
         var parsed = std.json.parseFromSlice(std.json.Value, allocator, json_config, .{}) catch {
@@ -67,40 +83,50 @@ pub const RBAC = struct {
             .array => |rules| {
                 for (rules.items) |item| {
                     if (item != .object) return error.InvalidRbacConfig;
-                    const obj = item.object;
-                    const role = obj.get("role") orelse return error.InvalidRbacConfig;
-                    const method = obj.get("method") orelse return error.InvalidRbacConfig;
-                    const path = obj.get("path") orelse return error.InvalidRbacConfig;
-                    if (role != .string or method != .string or path != .string) {
-                        return error.InvalidRbacConfig;
-                    }
-                    try self.add(
-                        try allocator.dupe(u8, role.string),
-                        try allocator.dupe(u8, method.string),
-                        try allocator.dupe(u8, path.string),
-                    );
+                    if (item.object.get("permissions") == null) return error.InvalidRbacConfig;
+                    try self.addEndpointRule(allocator, item);
                 }
             },
-            .object => |roles| {
-                var it = roles.iterator();
-                while (it.next()) |entry| {
-                    const role = entry.key_ptr.*;
-                    const rules = entry.value_ptr.*;
-                    if (rules != .array) return error.InvalidRbacConfig;
-                    for (rules.array.items) |rule| {
-                        if (rule != .string) return error.InvalidRbacConfig;
-                        var mp = std.mem.splitScalar(u8, rule.string, ':');
-                        const m = mp.next() orelse return error.InvalidRbacConfig;
-                        const p = mp.next() orelse return error.InvalidRbacConfig;
-                        try self.add(
-                            try allocator.dupe(u8, role),
-                            try allocator.dupe(u8, std.mem.trim(u8, m, " ")),
-                            try allocator.dupe(u8, std.mem.trim(u8, p, " ")),
-                        );
-                    }
-                }
+            .object => |obj| {
+                if (obj.get("permissions") == null) return error.InvalidRbacConfig;
+                try self.addEndpointRule(allocator, parsed.value);
             },
             else => return error.InvalidRbacConfig,
+        }
+    }
+
+    /// Parses an endpoint-rule object of the form
+    ///   {"permissions":[...], "endpoint":"...", "methods":[...], "exempt": bool}
+    /// and registers one rule per (permission × method). Honors the optional
+    /// `exempt` flag (defaults to false).
+    fn addEndpointRule(self: *RBAC, allocator: std.mem.Allocator, item: std.json.Value) !void {
+        const obj = item.object;
+        const perms = obj.get("permissions") orelse return error.InvalidRbacConfig;
+        if (perms != .array) return error.InvalidRbacConfig;
+        const endpoint = obj.get("endpoint") orelse return error.InvalidRbacConfig;
+        if (endpoint != .string) return error.InvalidRbacConfig;
+        const methods = obj.get("methods") orelse return error.InvalidRbacConfig;
+        if (methods != .array) return error.InvalidRbacConfig;
+
+        var exempt = false;
+        if (obj.get("exempt")) |e| {
+            if (e != .bool) return error.InvalidRbacConfig;
+            exempt = e.bool;
+        }
+
+        for (perms.array.items) |p| {
+            if (p != .string) return error.InvalidRbacConfig;
+            for (methods.array.items) |m| {
+                if (m != .string) return error.InvalidRbacConfig;
+                const role = try allocator.dupe(u8, p.string);
+                const method = try allocator.dupe(u8, m.string);
+                const path = try allocator.dupe(u8, endpoint.string);
+                if (exempt) {
+                    try self.addExempt(role, method, path);
+                } else {
+                    try self.add(role, method, path);
+                }
+            }
         }
     }
 };
@@ -213,27 +239,22 @@ test "rbac path prefix wildcard" {
     try std.testing.expect(!rb.allows("user", "GET", "/api/users"));
 }
 
-test "rbac fromJson array form" {
+test "rbac fromJson rejects legacy shapes" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     var rb = RBAC.init(arena.allocator());
-    try rb.fromJson(arena.allocator(),
-        \\[{"role":"ADMIN","method":"*","path":"/api/*"},{"role":"USER","method":"GET","path":"/api/resource"}]
-    );
-    try std.testing.expect(rb.allows("ADMIN", "POST", "/api/users"));
-    try std.testing.expect(!rb.allows("USER", "POST", "/api/users"));
-    try std.testing.expect(rb.allows("USER", "GET", "/api/resource"));
-}
-
-test "rbac fromJson object form" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    var rb = RBAC.init(arena.allocator());
-    try rb.fromJson(arena.allocator(),
-        \\{"ADMIN":["GET:/api/*","POST:/api/*"],"USER":["GET:/api/resource"]}
-    );
-    try std.testing.expect(rb.allows("ADMIN", "GET", "/api/x"));
-    try std.testing.expect(!rb.allows("USER", "GET", "/api/x"));
+    // legacy {role, method, path} array form is no longer accepted
+    try std.testing.expectError(RbacError.InvalidRbacConfig, rb.fromJson(arena.allocator(),
+        \\[{"role":"ADMIN","method":"*","path":"/api/*"}]
+    ));
+    // legacy role -> [METHOD:/path] object form is no longer accepted
+    try std.testing.expectError(RbacError.InvalidRbacConfig, rb.fromJson(arena.allocator(),
+        \\{"ADMIN":["GET:/api/*"]}
+    ));
+    // endpoint-rule without a `permissions` key is rejected
+    try std.testing.expectError(RbacError.InvalidRbacConfig, rb.fromJson(arena.allocator(),
+        \\{"endpoint":"/api/*","methods":["GET"]}
+    ));
 }
 
 test "rbac fromJson invalid" {
@@ -243,3 +264,44 @@ test "rbac fromJson invalid" {
     try std.testing.expectError(RbacError.InvalidRbacConfig, rb.fromJson(arena.allocator(), "not json"));
     try std.testing.expectError(RbacError.InvalidRbacConfig, rb.fromJson(arena.allocator(), "[1,2,3]"));
 }
+
+test "rbac fromJson endpoint-rule array form" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var rb = RBAC.init(arena.allocator());
+    // permissions: ADMIN + USER; methods: GET + POST; endpoint: /api/admin/*
+    try rb.fromJson(arena.allocator(),
+        \\[{"permissions":["ADMIN","USER"],"endpoint":"/api/admin/*","methods":["GET","POST"],"exempt":true}]
+    );
+    // listed methods bypass auth for any role (exempt)
+    try std.testing.expect(rb.allows("ADMIN", "GET", "/api/admin/x"));
+    try std.testing.expect(rb.allows("GUEST", "POST", "/api/admin/x"));
+    // exempt only for listed methods: an unlisted method stays protected
+    // (no role rule grants it, so it is denied)
+    try std.testing.expect(!rb.allows("USER", "DELETE", "/api/admin/x"));
+}
+
+test "rbac fromJson endpoint-rule non-exempt" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var rb = RBAC.init(arena.allocator());
+    try rb.fromJson(arena.allocator(),
+        \\{"permissions":["USER"],"endpoint":"/api/resource","methods":["GET"]}
+    );
+    try std.testing.expect(rb.allows("USER", "GET", "/api/resource"));
+    try std.testing.expect(!rb.allows("ADMIN", "GET", "/api/resource"));
+    // a method not in `methods` has no protecting rule -> public (matches legacy
+    // single-method rules, where only the listed method is restricted)
+    try std.testing.expect(rb.allows("ANONYMOUS", "POST", "/api/resource"));
+}
+
+test "rbac exempt bypasses role check" {
+    var rb = RBAC.init(std.testing.allocator);
+    defer rb.deinit();
+    try rb.addExempt("ADMIN", "GET", "/healthz");
+    // any role passes on an exempt method/path
+    try std.testing.expect(rb.allows("anonymous", "GET", "/healthz"));
+    // non-exempt method on same path still requires a role rule
+    try std.testing.expect(!rb.allows("anonymous", "POST", "/healthz"));
+}
+
