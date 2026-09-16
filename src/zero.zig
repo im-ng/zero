@@ -131,14 +131,9 @@ pub const App = @import("app.zig");
 
 pub const std_options: std.Options = .{
     .logFn = logger.custom,
-    .panicFn = panic,
 };
 
-fn panic(msg: []const u8, return_address: ?usize) noreturn {
-    _ = msg;
-    std.log.err("=== Stack Trace ==============", .{});
-    std.debug.dumpCurrentStackTrace(.{ .first_address = return_address });
-    std.process.exit(1);
+pub fn main(init: std.process.Init) !void {
+    utils.setIo(init.io);
+    return @import("cli.zig").run(init.minimal.args);
 }
-
-pub fn main() !void {}

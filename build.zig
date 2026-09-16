@@ -275,6 +275,11 @@ pub fn build(b: *std.Build) void {
         .name = "zero",
         .root_module = module,
     });
+    const install_zero = b.addInstallArtifact(binary, .{});
+    const zero_step = b.step("zero", "Build the zero CLI (./zig-out/bin/zero)");
+    zero_step.dependOn(&install_zero.step);
+    // `zig build` (the default step) also produces the zero CLI.
+    b.getInstallStep().dependOn(&install_zero.step);
 
     // Protobuf code generation. `zig build gen-proto` compiles .proto files in
     // `proto/` into Zig structs under `src/proto/`. The first run downloads
@@ -292,12 +297,4 @@ pub fn build(b: *std.Build) void {
         },
     });
     gen_proto.dependOn(&protoc_step.step);
-
-    if (b.option(
-        bool,
-        "install-zero",
-        "install zero cli",
-    ) orelse false) {
-        b.installArtifact(binary);
-    }
 }
