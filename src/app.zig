@@ -14,6 +14,7 @@ const zeroClient = root.client;
 const Cronz = root.cronz;
 const AuthProvider = root.AuthProvider;
 const favoriteIcon = root.favIcon;
+const otel = root.otel;
 
 /// Signature for a CLI subcommand handler. The handler uses `ctx` to access
 /// datasources (`ctx.SQL`, `ctx.Cache`, …), parsed flags (`ctx.Param`), the
@@ -46,6 +47,8 @@ pub const swaggerUIJs = root.swaggerUIJs;
 
 envMap: *EnvMap = undefined,
 log: *root.logger = undefined,
+/// OpenTelemetry provider. Inert unless `OTEL_EXPERIMENTAL=true` is set in config.
+otelProvider: otel.Provider = .{ .enabled = false },
 config: *root.config = undefined,
 container: *root.container = undefined,
 metriczServer: *root.metriczServer = undefined,
@@ -105,11 +108,15 @@ fn initBase(allocator: std.mem.Allocator, io: std.Io, em: *EnvMap) !*App {
         .environments = em,
     });
 
-    // reset log level
-    log.logLevel = app.getLogLevel(config.getOrDefault(
-        "LOG_LEVEL",
-        "info",
-    ));
+    // LOG_FORMAT=json may be set in configs/.env (loaded into `config.environments`),
+    // which the early `em.get` check above cannot see. Honor it here so JSON logs
+    // work when configured via the .env file.
+    if (std.mem.eql(u8, config.getOrDefault("LOG_FORMAT", ""), "json")) {
+        root.logger.setJsonFormat(true);
+    }
+    if (std.mem.eql(u8, config.getOrDefault("OTEL_LOG_JSON", ""), "true")) {
+        root.logger.setOtelJsonFormat(true);
+    }
 
     // --- Tier A: pre-allocated bootstrap arena ---------------------------------
     // One fixed region, sized by ZERO_FRAMEWORK_MEM_SIZE (MiB, default 8), holding
@@ -128,6 +135,28 @@ fn initBase(allocator: std.mem.Allocator, io: std.Io, em: *EnvMap) !*App {
     app.bootstrap_fba = std.heap.FixedBufferAllocator.init(backing);
     const bootstrap_alloc = app.bootstrap_fba.allocator();
 
+    // OpenTelemetry: opt-in via otel_experimental=true. When off, the provider is
+    // inert (no SDK objects, no background threads). See src/otel.zig. Accept both
+    // the lowercase config key and the uppercase OTEL_EXPERIMENTAL env convention.
+    const otel_enabled = blk: {
+        const a = config.getOrDefault("otel_experimental", "false");
+        const b = config.getOrDefault("OTEL_EXPERIMENTAL", "false");
+        break :blk std.mem.eql(u8, a, "true") or std.mem.eql(u8, b, "true");
+    };
+    // NOTE: the OTel provider deliberately uses the general `allocator`, NOT the
+    // Tier A bootstrap FixedBufferAllocator. The SDK does high-churn per-request
+    // allocation (span/log clones, batch queues) and the FBA never reclaims freed
+    // memory, so sharing it makes the SDK exhaust and panic (OutOfMemory ->
+    // `unreachable`) under load. The SDK's runtime memory is instead bounded by the
+    // per-span freeClonedSpan discipline in span_processor.zig (RSS plateaus).
+    app.otelProvider = try otel.Provider.init(allocator, io, em, otel_enabled);
+
+    // reset log level
+    log.logLevel = app.getLogLevel(config.getOrDefault(
+        "LOG_LEVEL",
+        "info",
+    ));
+
     const container = root.container.create(.{
         .allocator = allocator,
         .log = log,
@@ -139,6 +168,10 @@ fn initBase(allocator: std.mem.Allocator, io: std.Io, em: *EnvMap) !*App {
         else => return e,
     };
 
+    // Expose the (possibly inert) OTel provider to subsystems that need it
+    // (tracz middleware, Context, outbound service client).
+    container.otel = &app.otelProvider;
+
     const migrations = try migration.create(container);
 
     // Single struct-literal assignment: this applies the declared defaults (null)
@@ -149,6 +182,7 @@ fn initBase(allocator: std.mem.Allocator, io: std.Io, em: *EnvMap) !*App {
         .log = log,
         .config = config,
         .container = container,
+        .otelProvider = app.otelProvider,
         .migrations = migrations,
         .allocator = allocator,
         .bootstrap_backing = backing,
@@ -505,6 +539,11 @@ pub fn run(self: *Self) !void {
 
     try self.startHttpServer();
 
+    // The listen thread has joined, so the http server can now be safely torn
+    // down. (It used to be deinited from the signal handler, racing the still
+    // running thread and skipping this teardown path.)
+    self.httpServer.http.deinit();
+
     // The http server has stopped (e.g. after a SIGINT/SIGTERM via the
     // shutdown handler). Tear down the rest in NORMAL execution flow — never
     // from the signal handler itself, where joining threads or freeing client
@@ -529,6 +568,10 @@ pub fn run(self: *Self) !void {
     }
 
     self.container.destroy();
+
+    // Flush any in-flight OpenTelemetry spans/metrics and stop its background
+    // exporters before the process exits. No-op when OTEL_EXPERIMENTAL is off.
+    self.otelProvider.shutdown();
 
     // All framework subsystems are torn down; release the Tier A bootstrap arena.
     self.deinit();
@@ -1145,7 +1188,6 @@ pub fn addOAuthKeyRefresher(self: *Self) anyerror!void {
 }
 
 // ===================== Tests =====================
-
 
 test "parseLogLevel / logLevelName round-trip" {
     try std.testing.expectEqual(@as(?u8, 0), parseLogLevel("debug"));

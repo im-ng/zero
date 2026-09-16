@@ -104,6 +104,7 @@ pub fn create(allocator: std.mem.Allocator, container: *root.container) !*server
 
     const traczMW = try hzs.http.middleware(tracz_mw, .{
         .allocator = allocator,
+        .provider = container.otel,
     });
 
     const corsMW = try hzs.http.middleware(cors_mw, corsConfig);
@@ -175,17 +176,13 @@ pub fn run(self: *Self) !Thread {
 
 pub fn shutdown(self: *Self) void {
     self.container.log.info("server shutting down");
-    // recursively deallocate all resources
-    // self.refresherThread.join();
-
-    // NOTE: the container and pub/sub clients are torn down by App.run() once
-    // the server thread has stopped. Destroying them here (from a signal
-    // handler) would free client state while their background threads (e.g.
-    // the NATS io_task) are still running, which both hangs process exit and
-    // risks a use-after-free.
+    // Only signal the listener to stop. The actual deinit must happen in the
+    // main App.run() flow AFTER the listen thread has joined — doing it from a
+    // signal handler races with the still-running thread (use-after-free /
+    // dangling process) and skips the normal teardown (otel flush, container
+    // release, etc.). The listen loop observes the stop flag and exits, so the
+    // thread joins cleanly and App.run() continues into teardown.
     self.http.stop();
-
-    self.http.deinit();
 }
 
 fn loadAuthProviderConfig(self: *Self) anyerror!?*authProvider {

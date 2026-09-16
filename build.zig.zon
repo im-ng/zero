@@ -66,6 +66,16 @@
             .url = "git+https://github.com/im-ng/graphql-zig#92ea2176b6f1945bde6acf35af0f9ca3ff770af3",
             .hash = "graphql-0.2.0-13OEDvCaAgCb8FLxnOIW_63Zn8Yu-UVyLbZYP7R8g6MD",
         },
+        // OpenTelemetry SDK (alpha, tracks main). Gated behind OTEL_EXPERIMENTAL
+        // in config; see src/otel.zig. Tracks a pinned commit for reproducibility.
+        .opentelemetry = .{
+            // Use the local fork at ../opentelemetry-zig (im-ng/opentelemetry-zig,
+            // same ef0f166 base) which carries our SDK patches: deep-copy span
+            // name/attrs into a per-processor reclaiming arena (no dangling
+            // pointers / segfault), wait for the export task on cancel, and
+            // silence error.Canceled during shutdown.
+            .path = "../opentelemetry-zig",
+        },
     },
     .paths = .{
         "build.zig",

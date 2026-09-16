@@ -1,5 +1,6 @@
 const std = @import("std");
 const root = @import("zero.zig");
+const otel = root.otel;
 const httpz = root.httpz;
 const zeroClient = root.client;
 const pubSub = root.MQTT;
@@ -40,6 +41,10 @@ pub const Context = struct {
 
     /// CLI command parameters parsed from argv (e.g. `--name John` -> "John").
     params: std.StringHashMap([]const u8) = undefined,
+
+    /// Active OpenTelemetry span for this request (set by the `tracz` middleware
+    /// before dispatch). Null when OTEL_EXPERIMENTAL is off or outside a request.
+    otel_span: ?otel.ActiveSpan = null,
 
     /// initialize context
     pub fn init(
@@ -95,6 +100,8 @@ pub const Context = struct {
         if (container.pubSub) |ps| {
             c.pubsub = ps;
         }
+
+        c.otel_span = otel.currentSpan();
 
         return c;
     }
@@ -193,6 +200,24 @@ pub const Context = struct {
     /// returns correlationID of the request
     pub fn getCorrelationID(self: *Context) ?[]const u8 {
         return self.request.headers.get("X-Correlation-ID");
+    }
+
+    /// Returns the active OpenTelemetry span handle for this request, or null when
+    /// OTEL_EXPERIMENTAL is off or outside a request context.
+    pub fn span(self: *Context) ?otel.ActiveSpan {
+        return self.otel_span;
+    }
+
+    /// Start a child span parented to the active request span. Returns the span
+    /// (or null when OTel is disabled). Caller must `defer span.deinit()` and
+    /// call `ctx.endSpan(&span)` when the work completes.
+    pub fn startChildSpan(self: *Context, name: []const u8) !?otel.Span {
+        return self.container.otel.startChildSpan(self.allocator, name, .Internal);
+    }
+
+    /// End a span started via `startChildSpan` (runs processors/exporters).
+    pub fn endSpan(self: *Context, sp: *otel.Span) void {
+        self.container.otel.endSpan(sp);
     }
 
     /// returns basic auth username claim

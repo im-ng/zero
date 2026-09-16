@@ -92,6 +92,8 @@ bootstrap: std.mem.Allocator = undefined,
 log: *root.logger = undefined,
 config: *root.config = undefined,
 metricz: *root.metricz = undefined,
+/// OpenTelemetry provider (inert unless OTEL_EXPERIMENTAL=true). Set by App.initBase.
+otel: *root.otel.Provider = undefined,
 authProvider: *root.AuthProvider = undefined,
 
     /// optional role-based access control registry, wired into the rbac middleware
