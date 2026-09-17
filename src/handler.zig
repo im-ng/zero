@@ -29,9 +29,19 @@ pub const Handler = struct {
 
     pub const WebsocketHandler = wsHandler;
 
+    // Per-request metric recording is sampled (wrapper-only optimization, no
+    // vendored-lib change): only 1-in-METRIC_SAMPLE_RATE requests acquire the
+    // metrics library's per-vector mutexes. The sampled request writes back
+    // `count` to the hits counter via `incrBy` so totals stay accurate despite
+    // sampling; the latency histogram is a representative sample.
+    var metric_tick: std.atomic.Value(u64) = .init(0);
+    const METRIC_SAMPLE_RATE: u64 = 32;
+
     pub fn metric(self: *Handler, duration: f32, method: []const u8, status: u16, path: []const u8) !void {
+        const tick = metric_tick.fetchAdd(1, .monotonic);
+        if (tick % METRIC_SAMPLE_RATE != 0) return;
         try self.container.metricz.response(.{ .method = method, .path = path, .status = status }, duration);
-        try self.container.metricz.responseHits(.{ .method = method, .path = path, .status = status });
+        try self.container.metricz.responseHits(.{ .method = method, .path = path, .status = status }, METRIC_SAMPLE_RATE);
     }
 
     pub fn ws(self: *Handler, action: Responder.Do(*Context), req: *httpz.Request, res: *httpz.Response) !void {

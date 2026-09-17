@@ -12,9 +12,7 @@ const Allocator = std.mem.Allocator;
 const Io = std.Io;
 
 fn nowNs() u64 {
-    var ts: std.os.linux.timespec = undefined;
-    _ = std.os.linux.clock_gettime(std.posix.CLOCK.MONOTONIC, &ts);
-    return @as(u64, @intCast(ts.sec)) * 1_000_000_000 + @as(u64, @intCast(ts.nsec));
+    return @as(u64, @intCast(utils.nowMonotonic().nanoseconds));
 }
 
 /// Resident set size in bytes (Linux /proc/self/status VmRSS). Returns 0 elsewhere.

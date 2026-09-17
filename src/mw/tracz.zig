@@ -4,11 +4,48 @@ const root = @import("../zero.zig");
 const otel = @import("../otel.zig");
 
 const tracz = @This();
-const zul = root.zul;
 const utils = root.utils;
 
 allocator: std.mem.Allocator,
 provider: *otel.Provider,
+
+// Fast correlation-id generator. A per-thread PRNG is seeded once from the
+// monotonic clock plus this thread's address, so minting an id costs a few
+// arithmetic ops instead of the per-request CSPRNG syscall that
+// `zul.UUID.v4(utils.io)` paid. This mirrors how OpenTelemetry seeds its own
+// span/trace ID generator (otel.zig:78-86). The id is a 16-byte / 32-hex
+// W3C-trace-id-shaped value (version + variant bits set) so it stays usable as
+// an OpenTelemetry trace_id when no inbound traceparent is present.
+threadlocal var tl_prng: std.Random.DefaultPrng = undefined;
+threadlocal var tl_prng_inited: bool = false;
+
+fn nextCorrelationId(arena: std.mem.Allocator) ![]u8 {
+    if (!tl_prng_inited) {
+        const mono = utils.nowMonotonic();
+        const seed: u64 =
+            @as(u64, @intCast(mono.nanoseconds)) +%
+            @intFromPtr(&tl_prng);
+        tl_prng = std.Random.DefaultPrng.init(seed);
+        tl_prng_inited = true;
+    }
+    var raw: [16]u8 = undefined;
+    tl_prng.random().bytes(&raw);
+    // W3C trace-id shape (version + variant bits).
+    raw[6] = (raw[6] & 0x0f) | 0x40;
+    raw[8] = (raw[8] & 0x3f) | 0x80;
+    const buf = try arena.alloc(u8, 32);
+    hexEncode(&raw, buf);
+    return buf;
+}
+
+fn hexEncode(raw: *const [16]u8, out: []u8) void {
+    const digits = "0123456789abcdef";
+    var i: usize = 0;
+    while (i < 16) : (i += 1) {
+        out[i * 2] = digits[raw[i] >> 4];
+        out[i * 2 + 1] = digits[raw[i] & 0x0f];
+    }
+}
 
 pub fn init(c: Config) !tracz {
     return .{
@@ -19,11 +56,7 @@ pub fn init(c: Config) !tracz {
 
 pub fn execute(self: *const tracz, req: *httpz.Request, res: *httpz.Response, executor: anytype) !void {
     // Reuse the caller's correlation ID if provided, otherwise mint a new one.
-    const id = req.header("X-Correlation-ID") orelse blk: {
-        const uuid = zul.UUID.v4(utils.io);
-        const buf = try req.arena.alloc(u8, 36);
-        break :blk uuid.toHexBuf(buf, .lower);
-    };
+    const id = req.header("X-Correlation-ID") orelse try nextCorrelationId(req.arena);
 
     // Echo it on the response and stamp the inbound request so downstream
     // outbound calls (HTTP client, pub/sub) can read and propagate it.

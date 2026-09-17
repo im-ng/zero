@@ -76,9 +76,10 @@ pub const Provider = struct {
         }
 
         // Seed the ID generator from the monotonic clock (no std.crypto.random in 0.16).
-        var ts: std.os.linux.timespec = undefined;
-        _ = std.os.linux.clock_gettime(std.posix.CLOCK.MONOTONIC, &ts);
-        const seed: u64 = @as(u64, @intCast(ts.sec)) * 1_000_000_000 +% @as(u64, @intCast(ts.nsec));
+        // Uses std.Io.Timestamp (portable monotonic nanos) rather than a
+        // platform-specific clock_gettime/timespec, so this compiles on Linux and macOS.
+        const mono = std.Io.Timestamp.now(io, .awake);
+        const seed: u64 = @as(u64, @intCast(mono.nanoseconds));
         // The ID generator stores a `std.Random` interface that points at `prng`,
         // so `prng` must live for the provider's whole lifetime — heap-allocate it.
         p.prng = try allocator.create(std.Random.DefaultPrng);

@@ -1,4 +1,5 @@
 const std = @import("std");
+const utils = @import("zero").utils;
 
 /// A byte-counting allocator that wraps any backing allocator and records total
 /// allocated / freed bytes plus a per-call-site breakdown.
@@ -47,12 +48,11 @@ pub const CountingAllocator = struct {
         };
     }
 
-    /// Monotonic clock (CLOCK_MONOTONIC) in nanoseconds. `std.time.nanoTimestamp`
-    /// was removed in 0.16, so we read it directly like the bench harness does.
+    /// Monotonic clock (CLOCK_MONOTONIC) in nanoseconds, via the portable
+    /// std.Io.Timestamp (no platform-specific clock_gettime/timespec, so this
+    /// compiles on Linux and macOS).
     pub fn monotonicNs() u64 {
-        var ts: std.os.linux.timespec = undefined;
-        _ = std.os.linux.clock_gettime(std.posix.CLOCK.MONOTONIC, &ts);
-        return @as(u64, @intCast(ts.sec)) * 1_000_000_000 + @as(u64, @intCast(ts.nsec));
+        return @as(u64, @intCast(utils.nowMonotonic().nanoseconds));
     }
 
     /// Measure the average `monotonicNs` round-trip cost so per-alloc timings can
