@@ -59,6 +59,107 @@ const JsonSink = struct {
     }
 };
 
+/// Masks credential material in a log line so secrets never reach stdout/OTel.
+/// Handles `Basic `/`Bearer ` tokens, `Authorization:`/`x-api-key:` headers, and
+/// `key=value` pairs for common secret keys. Returns a slice of `out` (caller must
+/// provide a buffer at least as large as `src`). Masking only shortens, so `out`
+/// never overflows.
+fn redactInto(src: []const u8, out: []u8) []const u8 {
+    var o: usize = 0;
+    var i: usize = 0;
+    while (i < src.len) {
+        const rem = src[i..];
+        if (startsWithIgnoreCase(rem, "Basic ")) {
+            o = append(out, o, "Basic ");
+            i += 6;
+            i = skipToken(src, i, &o, out);
+            continue;
+        }
+        if (startsWithIgnoreCase(rem, "Bearer ")) {
+            o = append(out, o, "Bearer ");
+            i += 7;
+            i = skipToken(src, i, &o, out);
+            continue;
+        }
+        if (startsWithIgnoreCase(rem, "Authorization:")) {
+            o = append(out, o, "Authorization:");
+            i += 14;
+            i = skipLeadingSpaceAndScheme(src, i, &o, out);
+            continue;
+        }
+        if (startsWithIgnoreCase(rem, "x-api-key:")) {
+            o = append(out, o, "x-api-key:");
+            i += 10;
+            i = skipLeadingSpaceAndScheme(src, i, &o, out);
+            continue;
+        }
+        if (startsWithIgnoreCase(rem, "password=") or
+            startsWithIgnoreCase(rem, "secret=") or
+            startsWithIgnoreCase(rem, "api_key=") or
+            startsWithIgnoreCase(rem, "token=") or
+            startsWithIgnoreCase(rem, "access_token=") or
+            startsWithIgnoreCase(rem, "refresh_token="))
+        {
+            const eq = std.mem.indexOfScalar(u8, rem, '=') orelse rem.len - 1;
+            o = append(out, o, rem[0 .. eq + 1]);
+            i += eq + 1;
+            i = skipUntilDelim(src, i, &o, out);
+            continue;
+        }
+        out[o] = src[i];
+        o += 1;
+        i += 1;
+    }
+    return out[0..o];
+}
+
+fn startsWithIgnoreCase(s: []const u8, prefix: []const u8) bool {
+    if (s.len < prefix.len) return false;
+    for (prefix, 0..) |p, k| {
+        if (std.ascii.toLower(s[k]) != std.ascii.toLower(p)) return false;
+    }
+    return true;
+}
+
+fn append(out: []u8, o: usize, s: []const u8) usize {
+    const take = @min(s.len, out.len - o);
+    @memcpy(out[o .. o + take], s[0..take]);
+    return o + take;
+}
+
+fn skipToken(src: []const u8, i: usize, o: *usize, out: []u8) usize {
+    var j = i;
+    while (j < src.len and src[j] != ' ' and src[j] != '\n' and src[j] != '\r' and src[j] != '\t') {
+        j += 1;
+    }
+    o.* = append(out, o.*, "***");
+    return j;
+}
+
+/// After a header prefix like `Authorization:` / `x-api-key:`, skip the optional
+/// leading whitespace and an optional `Basic `/`Bearer ` scheme word, then mask the
+/// remaining credential token.
+fn skipLeadingSpaceAndScheme(src: []const u8, i: usize, o: *usize, out: []u8) usize {
+    var j = i;
+    while (j < src.len and (src[j] == ' ' or src[j] == '\t')) : (j += 1) {}
+    const rem = src[j..];
+    if (startsWithIgnoreCase(rem, "Basic ")) {
+        j += 6;
+    } else if (startsWithIgnoreCase(rem, "Bearer ")) {
+        j += 7;
+    }
+    return skipToken(src, j, o, out);
+}
+
+fn skipUntilDelim(src: []const u8, i: usize, o: *usize, out: []u8) usize {
+    var j = i;
+    while (j < src.len and src[j] != ' ' and src[j] != '&' and src[j] != '\n' and src[j] != '\r') {
+        j += 1;
+    }
+    o.* = append(out, o.*, "***");
+    return j;
+}
+
 pub fn custom(
     comptime level: std.log.Level,
     comptime _: @TypeOf(.EnumLiteral),
@@ -82,6 +183,14 @@ pub fn custom(
     // neither applies.
     var json_buf: [8192]u8 = undefined;
     var json_slice: []const u8 = "";
+
+    // Redact credential material from both the text message and the clean message
+    // before they are written to console or exported to OTel.
+    var redacted_msg_buf: [2048]u8 = undefined;
+    const rmsg = redactInto(msg, &redacted_msg_buf);
+    var redacted_clean_buf: [2048]u8 = undefined;
+    const rclean = redactInto(clean_msg, &redacted_clean_buf);
+
     if (json_format or (otel.logsEnabled() and otel_json)) {
         var sink: JsonSink = .{ .buf = &json_buf, .len = 0 };
         var ts_buf: [64]u8 = undefined;
@@ -91,7 +200,7 @@ pub fn custom(
         sink.write("\",\"level\":\"");
         sink.write(@tagName(level));
         sink.write("\",\"msg\":\"");
-        sink.writeEsc(clean_msg);
+        sink.writeEsc(rclean);
         sink.write("\"}\n");
         json_slice = sink.buf[0..sink.len];
     }
@@ -105,7 +214,7 @@ pub fn custom(
         if (json_format) {
             out.writeStreamingAll(utils.io, json_slice) catch return;
         } else {
-            out.writeStreamingAll(utils.io, msg) catch return;
+            out.writeStreamingAll(utils.io, rmsg) catch return;
         }
     }
 
@@ -122,8 +231,8 @@ pub fn custom(
         on += lvl.len;
         otel_buf[on] = ' ';
         on += 1;
-        @memcpy(otel_buf[on .. on + clean_msg.len], clean_msg);
-        on += clean_msg.len;
+        @memcpy(otel_buf[on .. on + rclean.len], rclean);
+        on += rclean.len;
         const otel_clean = otel_buf[0..on];
 
         if (otel_json) otel.emitLog(level, json_slice) else otel.emitLog(level, otel_clean);
@@ -291,6 +400,26 @@ pub fn Fatal(self: *Self, _: std.mem.Allocator, message: []const u8) void {
 
 
 // ===================== Tests =====================
+
+test "redactInto masks credential tokens and secret key=value pairs" {
+    var buf: [256]u8 = undefined;
+    try std.testing.expectEqualStrings(
+        "GET /x Authorization:***",
+        redactInto("GET /x Authorization: Basic c2Vjcr", &buf),
+    );
+    try std.testing.expectEqualStrings(
+        "Bearer ***",
+        redactInto("Bearer eyJhbGciOiJIUzI1NiJ9", &buf),
+    );
+    try std.testing.expectEqualStrings(
+        "token=***&user=bob",
+        redactInto("token=abc123&user=bob", &buf),
+    );
+    try std.testing.expectEqualStrings(
+        "x-api-key:*** done",
+        redactInto("x-api-key: secret-key done", &buf),
+    );
+}
 
 
 test "create returns logger with default logLevel 1" {

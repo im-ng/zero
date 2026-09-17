@@ -99,10 +99,10 @@ authProvider: *root.AuthProvider = undefined,
     /// optional role-based access control registry, wired into the rbac middleware
     rbac: ?*root.rbac.RBAC = null,
 
-redis: ?rediz.Client = undefined,
-rdz: ?*root.rdz = undefined,
-    SQL: ?*root.SQL = undefined,
-    SQLite: ?*root.SQLite = undefined,
+ redis: ?rediz.Client = null,
+ rdz: ?*root.rdz = null,
+    SQL: ?*root.SQL = null,
+    SQLite: ?*root.SQLite = null,
     datasource: root.Datasource = undefined,
 
     // In-process OLAP SQL engine (DuckDB). Linked via libs/libduckdb.so.
@@ -114,7 +114,7 @@ rdz: ?*root.rdz = undefined,
 
     // NoSQL datasource (Round 1: document / wide-column).
     NoSQL: ?*root.NoSQL = null,
-    services: ?std.StringHashMap(*zeroClient) = undefined,
+    services: ?std.StringHashMap(*zeroClient) = null,
     kvStores: std.StringHashMap(*root.KVStore) = undefined,
     defaultKV: ?*root.KVStore = null,
     fileStores: std.StringHashMap(*root.FileStore) = undefined,
@@ -813,6 +813,7 @@ fn loadSQL(self: *Self) !void {
     self.SQL.?.allocator = self.allocator;
 
     const portInt = try self.config.getAsInt("DB_PORT");
+    const dbPort: u16 = @intCast(portInt);
 
     const sslMode = self.config.getOrDefault("DB_SSL_MODE", "disable");
     var tlsMode: pgz.Conn.Opts.TLS = .off;
@@ -832,11 +833,20 @@ fn loadSQL(self: *Self) !void {
         }
     }
 
+    // Pool size + connection/acquire timeout are configurable (defaults 10 / 10s).
+    const pool_size: u16 = @intCast(blk: {
+        const v = self.config.getAsInt("PG_POOL_SIZE") catch 0;
+        break :blk if (v == 0) 10 else @as(u32, v);
+    });
+    const acquire_timeout_ms: u32 = blk: {
+        const v = self.config.getAsInt("PG_POOL_ACQUIRE_TIMEOUT_MS") catch 0;
+        break :blk if (v == 0) 10_000 else @as(u32, v);
+    };
     const options: pgz.Pool.Opts = .{
-        .size = 10,
+        .size = pool_size,
         .connect = .{
             .host = hostname,
-            .port = portInt,
+            .port = dbPort,
             .tls = tlsMode,
         },
         .auth = .{
@@ -844,7 +854,7 @@ fn loadSQL(self: *Self) !void {
             .username = self.config.get("DB_USER"),
             .password = self.config.get("DB_PASSWORD"),
             .database = self.config.get("DB_NAME"),
-            .timeout = 10_000, // load this from config
+            .timeout = acquire_timeout_ms,
         },
     };
 

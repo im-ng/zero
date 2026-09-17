@@ -35,6 +35,20 @@ pub const Handler = struct {
     }
 
     pub fn ws(self: *Handler, action: Responder.Do(*Context), req: *httpz.Request, res: *httpz.Response) !void {
+        // Apply the inbound bulkhead to websocket handshakes too (otherwise WS
+        // upgrades bypass the concurrency cap that `dispatch` enforces).
+        if (self.max_concurrent > 0) {
+            const n = self.in_flight.fetchAdd(1, .monotonic);
+            if (n >= self.max_concurrent) {
+                _ = self.in_flight.fetchSub(1, .monotonic);
+                res.setStatus(.service_unavailable);
+                res.content_type = .JSON;
+                res.body = "{\"error\":\"concurrency limit exceeded\"}";
+                return;
+            }
+            defer _ = self.in_flight.fetchSub(1, .monotonic);
+        }
+
         // The websocket connection outlives this request, so the Context must be
         // heap-allocated with a persistent allocator. Using req.arena (and a
         // stack variable) left a dangling pointer that crashed on the first
@@ -51,10 +65,8 @@ pub const Handler = struct {
         }
         res.setStatus(.ok);
 
-        var buffer: []u8 = undefined;
-        buffer = try req.arena.alloc(u8, 200);
-        buffer = try std.fmt.bufPrint(buffer, "{s}\t {d} {d}ms {s} {s}", .{ res.headers.get("X-Correlation-ID").?, res.status, 0, @tagName(req.method), req.url.path });
-        ctx.info(buffer);
+        const access_log = try std.fmt.allocPrint(req.arena, "{s}\t {d} {d}ms {s} {s}", .{ res.headers.get("X-Correlation-ID").?, res.status, 0, @tagName(req.method), req.url.path });
+        ctx.info(access_log);
     }
 
     pub fn dispatch(self: *Handler, action: Responder.Do(*Context), req: *httpz.Request, res: *httpz.Response) !void {
@@ -76,17 +88,40 @@ pub const Handler = struct {
 
         const start = utils.nowMonotonic();
 
-        try action(&ctx);
+        // Error recovery: an uncaught handler error is mapped by httpz to an
+        // abrupt connection close (httpz.zig:218). Catch it here and emit a
+        // structured 500 with the correlation id, and log it for observability.
+        // (A true Zig `@panic` is still unrecoverable by design — the mitigation
+        // is to return errors from handlers rather than panic; see ZIG_LEARNINGS.)
+        action(&ctx) catch |err| {
+            res.setStatus(.internal_server_error);
+            res.content_type = .JSON;
+            res.body = "{\"error\":\"internal server error\"}";
+            const cid = req.headers.get("X-Correlation-ID");
+            self.container.log.err(try std.fmt.allocPrint(
+                req.arena,
+                "handler error (correlation={?s}): {}",
+                .{ cid, err },
+            ));
+        };
 
         // does not include middleware executions
         const duration: f32 = utils.elapsedMs(start);
 
         try self.metric(duration, @tagName(req.method), res.status, req.url.path);
 
-        var buffer: []u8 = undefined;
-        buffer = try req.arena.alloc(u8, 200);
-        buffer = try std.fmt.bufPrint(buffer, "{s}\t {d} {d}ms {s} {s}", .{ res.headers.get("X-Correlation-ID").?, res.status, duration, @tagName(req.method), req.url.path });
-        ctx.info(buffer);
+        const access_log = try std.fmt.allocPrint(
+            req.arena,
+            "{s}\t {d} {d}ms {s} {s}",
+            .{
+                res.headers.get("X-Correlation-ID").?,
+                res.status,
+                duration,
+                @tagName(req.method),
+                req.url.path,
+            },
+        );
+        ctx.info(access_log);
     }
 
     pub fn unauthorized(self: *Handler, req: *httpz.Request, res: *httpz.Response) !void {
@@ -97,10 +132,8 @@ pub const Handler = struct {
 
         try self.metric(0, @tagName(req.method), res.status, req.url.path);
 
-        var buffer: []u8 = undefined;
-        buffer = try req.arena.alloc(u8, 200);
-        buffer = try std.fmt.bufPrint(buffer, "{s}\t {d} {d}ms {s} {s}", .{ res.headers.get("X-Correlation-ID").?, res.status, 0, @tagName(req.method), req.url.path });
-        ctx.info(buffer);
+        const access_log = try std.fmt.allocPrint(req.arena, "{s}\t {d} {d}ms {s} {s}", .{ res.headers.get("X-Correlation-ID").?, res.status, 0, @tagName(req.method), req.url.path });
+        ctx.info(access_log);
     }
 
     pub fn notFound(self: *Handler, req: *httpz.Request, res: *httpz.Response) !void {
@@ -113,16 +146,17 @@ pub const Handler = struct {
 
         try self.metric(0, @tagName(req.method), res.status, req.url.path);
 
-        var buffer: []u8 = undefined;
-        buffer = try req.arena.alloc(u8, 200);
-        buffer = try std.fmt.bufPrint(buffer, "{s}\t {d} {d}ms {s} {s}", .{ res.headers.get("X-Correlation-ID").?, res.status, 0, @tagName(req.method), req.url.path });
-        ctx.info(buffer);
+        const access_log = try std.fmt.allocPrint(req.arena, "{s}\t {d} {d}ms {s} {s}", .{ res.headers.get("X-Correlation-ID").?, res.status, 0, @tagName(req.method), req.url.path });
+        ctx.info(access_log);
     }
 
     pub fn uncaughtError(self: *Handler, req: *httpz.Request, res: *httpz.Response, err: anyerror) void {
         std.debug.print("something went wrong\n", .{});
 
-        var ctx = try Context.init(req.arena, self.container, req, res);
+        var ctx = Context.init(req.arena, self.container, req, res) catch |init_err| {
+            std.debug.print("context init failed: {}\n", .{init_err});
+            return;
+        };
         defer req.arena.destroy(&ctx);
 
         res.setStatus(.internal_server_error);
@@ -133,10 +167,8 @@ pub const Handler = struct {
 
         self.metric(0, @tagName(req.method), res.status, req.url.path) catch unreachable;
 
-        var buffer: []u8 = undefined;
-        buffer = req.arena.alloc(u8, 512) catch unreachable;
-        buffer = std.fmt.bufPrint(buffer, "{s}\t {d} {d}ms {s} {s}", .{ res.headers.get("X-Correlation-ID").?, res.status, 0, @tagName(req.method), req.url.path }) catch unreachable;
-        ctx.info(buffer);
+        const access_log = std.fmt.allocPrint(req.arena, "{s}\t {d} {d}ms {s} {s}", .{ res.headers.get("X-Correlation-ID").?, res.status, 0, @tagName(req.method), req.url.path }) catch unreachable;
+        ctx.info(access_log);
 
         ctx.any(err);
     }

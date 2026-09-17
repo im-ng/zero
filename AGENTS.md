@@ -139,6 +139,6 @@ These are used consistently across the codebase and must be referenced as-is:
 | 0.15.2 | Yes | 52/52 (7 leaks) | **Broken** | No log output, no HTTP server — `std.fs.File.stdout()` I/O change in logger.zig breaks httpz |
 | 0.16.0 | Yes | 52+21+3 | Yes | Works in this env with vendored deps; benchmark HTTP server binds and serves |
 
-- See `recommendation.md` for full analysis and 0.16.0 migration plan
+- See `ZIG_LEARNINGS.md` for the 0.16.0 migration plan and upgrade notes
 - **0.15.2 runtime issue**: `src/logger.zig` uses `std.fs.File.stdout().writer(&stdout_buffer)` pattern which silently fails under 0.15.2 — stdout fd becomes a socket, HTTP server never binds
 - **0.16.0 now works here**: the 6 dependency `build.zig` files were updated for the `Module`-based link API and the deps are vendored in `zig-pkg/`, so `zig build {test,test-integration,test-validation,bench}` all pass under 0.16.0.

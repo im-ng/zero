@@ -5,97 +5,10 @@ const httpz = root.httpz;
 const Context = root.Context;
 const utils = root.utils;
 
-/// A byte-counting allocator that wraps any backing allocator and records
-/// total allocated / freed bytes. Used by the memory-validation harness to
-/// prove whether allocations made under a zero.Context are released after a
-/// request / cron tick / pubsub message.
-///
-/// It tracks the *true* allocation size per pointer (via a map), because some
-/// helpers (e.g. utils.timestampz) alloc a buffer and return a truncated slice;
-/// the real backing allocator frees the whole block by header, so counting freed
-/// bytes by `buf.len` would under-count and false-positive a leak.
-pub const CountingAllocator = struct {
-    backing: std.mem.Allocator,
-    sizes: std.AutoHashMap(usize, usize),
-    total_allocated: u64 = 0,
-    total_freed: u64 = 0,
-    alloc_count: u64 = 0,
-    free_count: u64 = 0,
-    high_water: u64 = 0,
-
-    pub fn init(backing: std.mem.Allocator) CountingAllocator {
-        return .{
-            .backing = backing,
-            .sizes = std.AutoHashMap(usize, usize).init(backing),
-        };
-    }
-
-    pub fn allocator(self: *CountingAllocator) std.mem.Allocator {
-        return .{ .ptr = self, .vtable = &vtable };
-    }
-
-    fn key(ptr: [*]u8) usize {
-        return @intFromPtr(ptr);
-    }
-
-    fn alloc(ctx: *anyopaque, len: usize, alignment: std.mem.Alignment, ret_addr: usize) ?[*]u8 {
-        const self: *CountingAllocator = @ptrCast(@alignCast(ctx));
-        const res = self.backing.rawAlloc(len, alignment, ret_addr) orelse return null;
-        self.sizes.put(key(res), len) catch {};
-        self.total_allocated += len;
-        self.alloc_count += 1;
-        const out = self.total_allocated - self.total_freed;
-        if (out > self.high_water) self.high_water = out;
-        return res;
-    }
-
-    fn resize(ctx: *anyopaque, buf: []u8, alignment: std.mem.Alignment, new_len: usize, ret_addr: usize) bool {
-        const self: *CountingAllocator = @ptrCast(@alignCast(ctx));
-        const old = self.sizes.get(key(buf.ptr)) orelse buf.len;
-        const ok = self.backing.rawResize(buf, alignment, new_len, ret_addr);
-        if (ok) {
-            // backing freed `old` internally and allocated `new_len`.
-            _ = self.sizes.remove(key(buf.ptr));
-            self.sizes.put(key(buf.ptr), new_len) catch {};
-            self.total_freed += old;
-            self.total_allocated += new_len;
-        }
-        return ok;
-    }
-
-    fn free(ctx: *anyopaque, buf: []u8, alignment: std.mem.Alignment, ret_addr: usize) void {
-        const self: *CountingAllocator = @ptrCast(@alignCast(ctx));
-        const original = self.sizes.get(key(buf.ptr)) orelse buf.len;
-        _ = self.sizes.remove(key(buf.ptr));
-        self.backing.rawFree(buf, alignment, ret_addr);
-        self.total_freed += original;
-        self.free_count += 1;
-    }
-
-    fn remap(ctx: *anyopaque, memory: []u8, alignment: std.mem.Alignment, new_len: usize, ret_addr: usize) ?[*]u8 {
-        _ = ctx;
-        _ = memory;
-        _ = alignment;
-        _ = new_len;
-        _ = ret_addr;
-        // Returning null tells the caller to fall back to alloc + copy + free,
-        // which routes through our alloc/free counters (so accounting stays
-        // correct). The validation paths never exercise remap.
-        return null;
-    }
-
-    /// Bytes currently allocated and not yet freed.
-    pub fn outstanding(self: *const CountingAllocator) u64 {
-        return self.total_allocated - self.total_freed;
-    }
-
-    const vtable = std.mem.Allocator.VTable{
-        .alloc = alloc,
-        .resize = resize,
-        .remap = remap,
-        .free = free,
-    };
-};
+/// Byte-counting allocator used by the memory-validation harness (canonical
+/// definition lives in `src/bench/alloc_count.zig` so the bench alloc-probe and
+/// the test suite share one implementation).
+pub const CountingAllocator = @import("../bench/alloc_count.zig").CountingAllocator;
 
 /// Minimal container whose optional backend fields are null so Context.init
 /// takes no branch that dereferences a missing client. The allocator used here

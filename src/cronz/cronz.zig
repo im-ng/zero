@@ -97,12 +97,15 @@ pub fn runSchedules(self: *Self, _: i128) void {
                     };
                     defer self.destroryChildAllocator(ca);
 
-                    var ctx = try Context.init(
+                    var ctx = Context.init(
                         ca.allocator(),
                         self.container,
                         self.request,
                         self.response,
-                    );
+                    ) catch |err| {
+                        self.container.log.any(err);
+                        continue;
+                    };
 
                     job.run(j.*, &ctx) catch |err| {
                         self.container.log.any(err);

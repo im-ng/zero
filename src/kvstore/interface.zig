@@ -127,7 +127,7 @@ pub fn build(container: *root.container, backend: Backend, opts: Options) !*KVSt
         .redis => {
             if (container.redis == null) return error.RedisNotConfigured;
             const b = try container.allocator.create(redis.KVRedis);
-            b.* = .{ .client = container.redis.? };
+            b.* = .{ .client = container.redis.?, .mutex = .{} };
             store.* = KVStore.init(b, .redis, breaker);
         },
         .memory => {

@@ -39,7 +39,9 @@ pub fn Run(self: *Self) !Thread {
         self.container.io,
         self.container.allocator,
         .{
-            .address = httpz.Config.Address.all(self.port),
+            // Bind to loopback only: /metrics must not be reachable from the
+            // pod/cluster network. Scrape it via a same-pod sidecar or port-forward.
+            .address = httpz.Config.Address.localhost(self.port),
         },
         {},
     );
@@ -52,7 +54,11 @@ pub fn Run(self: *Self) !Thread {
 
 fn metrics(_: *httpz.Request, res: *httpz.Response) !void {
     if (appMetricz) |mz| {
-        try mz.writeRaw(std.heap.page_allocator, res.writer());
+        // Use a scoped arena instead of the global page_allocator per scrape so
+        // the metrics endpoint doesn't accumulate unbounded kernel pages.
+        var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+        defer arena.deinit();
+        try mz.writeRaw(arena.allocator(), res.writer());
     }
 }
 

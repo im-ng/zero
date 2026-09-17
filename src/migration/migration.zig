@@ -49,6 +49,17 @@ pub fn run(self: *Self) anyerror!void {
 
     const lastMigration = try sqlMigrator.lastMigration(ctx);
 
+    // Serialize migration runs across replicas: a session-level advisory lock so
+    // two app instances starting up at once can't apply the same migration
+    // concurrently (Postgres only — SQLite has no advisory locks).
+    if (self.container.datasource.dialect == .postgres) {
+        ctx.SQL.exec(ctx, "SELECT pg_advisory_lock(9112025)", .{}) catch |err| {
+            ctx.any(err);
+            return error.MigrationLockFailed;
+        };
+        defer ctx.SQL.exec(ctx, "SELECT pg_advisory_unlock(9112025)", .{}) catch {};
+    }
+
     for (self.keys.items) |key| {
         const keyAsString = try util.toStringFromInt(
             ctx.allocator,

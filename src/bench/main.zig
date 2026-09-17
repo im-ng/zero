@@ -2,6 +2,7 @@ const std = @import("std");
 const zero = @import("zero");
 const zul = @import("zul");
 const protobuf = @import("zero").protobuf;
+const alloc_probe = @import("alloc_probe.zig");
 
 const App = zero.App;
 const Context = zero.Context;
@@ -586,6 +587,9 @@ pub fn main(init: std.process.Init) !void {
     var suite = false;
     var debug_alloc = false;
     var server_mode = false;
+    var alloc_probe_run = false;
+    var alloc_probe_json = false;
+    var alloc_probe_backing: []const u8 = "heap";
 
     // Targeted-run options. `target_csv` selects scenario categories; `host`
     // switches to external-server mode (no embedded app is booted).
@@ -627,6 +631,13 @@ pub fn main(init: std.process.Init) !void {
             debug_alloc = true;
         } else if (std.mem.eql(u8, arg, "--server")) {
             server_mode = true;
+        } else if (std.mem.eql(u8, arg, "--alloc-probe")) {
+            alloc_probe_run = true;
+        } else if (std.mem.eql(u8, arg, "--alloc-probe-json")) {
+            alloc_probe_run = true;
+            alloc_probe_json = true;
+        } else if (std.mem.startsWith(u8, arg, "--alloc-probe-backing=")) {
+            alloc_probe_backing = arg[22..];
         }
     }
 
@@ -663,6 +674,23 @@ pub fn main(init: std.process.Init) !void {
     // with 429. Disable it for the run unless the caller opts in via env.
     if (init.environ_map.get("RATE_LIMIT_ENABLE") == null) {
         try init.environ_map.put("RATE_LIMIT_ENABLE", "false");
+    }
+
+    // Allocation probe: drive ping -> pong through the real framework hot path
+    // with a counting allocator as req.arena and report the per-request budget
+    // plus a call-site breakdown. Boots its own App; no server/socket needed.
+    if (alloc_probe_run) {
+        const backing: alloc_probe.ProbeOpts.Backing = if (std.mem.eql(u8, alloc_probe_backing, "arena"))
+            .arena
+        else if (std.mem.eql(u8, alloc_probe_backing, "fallback"))
+            .fallback
+        else
+            .heap;
+        const probe_opts: alloc_probe.ProbeOpts = .{ .iterations = 5000, .json_body = alloc_probe_json, .backing = backing };
+        const rep = try alloc_probe.run(allocator, init.io, init.environ_map, probe_opts);
+        alloc_probe.printReport(rep);
+        if (json_report) alloc_probe.writeJson(allocator, init.io, rep) catch {};
+        std.process.exit(0);
     }
 
     // External-target mode: `--host` points the harness at an already-running

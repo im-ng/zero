@@ -36,8 +36,13 @@ pub fn main(init: std.process.Init) !void {
     try app.get("/echo", echo);
     try app.get("/outbound", outbound);
     try app.get("/log", logDemo);
+    try app.get("/ping", ping);
 
     try app.run();
+}
+
+fn ping(ctx: *Context) !void {
+    try ctx.json(.{ .message = "pong" });
 }
 
 // Server span + response traceparent + a log line.

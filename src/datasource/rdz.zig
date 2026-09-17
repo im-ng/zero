@@ -21,5 +21,8 @@ pub fn create(allocator: std.mem.Allocator) !*rdz {
 }
 
 pub fn close(self: *Self) !void {
-    self.close();
+    // No live client is owned by this wrapper (the active Redis connection is
+    // held by `container.redis`); nothing to tear down here. Previously this
+    // recursively called itself, which would overflow the stack.
+    _ = self;
 }
