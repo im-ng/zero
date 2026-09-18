@@ -68,13 +68,12 @@
         },
         // OpenTelemetry SDK (alpha, tracks main). Gated behind OTEL_EXPERIMENTAL
         // in config; see src/otel.zig. Tracks a pinned commit for reproducibility.
+        // .opentelemetry = .{
+        //     .path = "../opentelemetry-zig",
+        // },
         .opentelemetry = .{
-            // Use the local fork at ../opentelemetry-zig (im-ng/opentelemetry-zig,
-            // same ef0f166 base) which carries our SDK patches: deep-copy span
-            // name/attrs into a per-processor reclaiming arena (no dangling
-            // pointers / segfault), wait for the export task on cancel, and
-            // silence error.Canceled during shutdown.
-            .path = "../opentelemetry-zig",
+            .url = "git+https://github.com/im-ng/opentelemetry-zig.git#928f309694b0dc8ee02c45b4067b96f3d9cc01fd",
+            .hash = "opentelemetry-0.0.1-U_uKJ8NrIwD5nbZmmLowE41NMPGhiwKQ1sCb3K3L-0lV",
         },
     },
     .paths = .{

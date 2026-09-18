@@ -33,17 +33,20 @@ pub const ActiveSpan = struct {
 /// nothing when `OTEL_EXPERIMENTAL` is unset.
 pub const Provider = struct {
     enabled: bool = false,
+
+    config: ?*sdk.otlp.ConfigOptions = null,
     allocator: std.mem.Allocator = undefined,
     io: std.Io = undefined,
+
+    server_scope: InstrumentationScope = undefined,
     prng: ?*std.Random.DefaultPrng = null,
     tracer_provider: ?*sdk.trace.TracerProvider = null,
     tracer: ?*trace_api.TracerImpl = null,
     otlp_exporter: ?*sdk.trace.OTLPExporter = null,
     batch_processor: ?*sdk.trace.BatchingProcessor = null,
-    config: ?*sdk.otlp.ConfigOptions = null,
-    server_scope: InstrumentationScope = undefined,
-    logger_provider: ?*sdk.logs.LoggerProvider = null,
+
     logger: ?*sdk.logs.Logger = null,
+    logger_provider: ?*sdk.logs.LoggerProvider = null,
     log_processor: ?*sdk.logs.BatchingLogRecordProcessor = null,
     log_exporter: ?*sdk.logs.OTLPExporter = null,
     log_config: ?*sdk.otlp.ConfigOptions = null,
@@ -80,6 +83,7 @@ pub const Provider = struct {
         // platform-specific clock_gettime/timespec, so this compiles on Linux and macOS.
         const mono = std.Io.Timestamp.now(io, .awake);
         const seed: u64 = @as(u64, @intCast(mono.nanoseconds));
+
         // The ID generator stores a `std.Random` interface that points at `prng`,
         // so `prng` must live for the provider's whole lifetime — heap-allocate it.
         p.prng = try allocator.create(std.Random.DefaultPrng);
@@ -121,8 +125,6 @@ pub const Provider = struct {
         // here. Both exporters receive the same set.
         //   OTEL_EXPORTER_OTLP_AUTH_HEADER : bare credential, e.g. "Bearer <token>"
         //       or "Basic <b64>" — mapped to the standard `Authorization` header.
-        //       Kept bare (no `=`) so it survives the dotenv `.env` parser, which
-        //       rejects `=` inside a value.
         //   OTEL_EXPORTER_OTLP_HEADERS     : raw "Key=Value,..." custom headers.
         try applyOtlpHeaders(allocator, em, p.config.?);
         try applyOtlpHeaders(allocator, em, p.log_config.?);

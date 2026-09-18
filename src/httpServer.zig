@@ -51,10 +51,6 @@ pub fn create(allocator: std.mem.Allocator, container: *root.container) !*server
         hzs.port = constants.HTTP_PORT;
     }
 
-    // Inbound request timeout: a stalled client must not pin a worker forever.
-    // httpz `timeout.request` is interpreted in SECONDS (not ms) — the previous
-    // code passed raw ms here, yielding ~8.3h instead of ~30s. Convert, flooring
-    // at 1s so a sub-second config still bounds a stalled client.
     const default_request_timeout_ms: u32 = 30000;
     const request_timeout_ms: u32 = blk: {
         const v = hzs.container.config.getOrDefault("ZERO_REQUEST_TIMEOUT_MS", "");
@@ -63,7 +59,7 @@ pub fn create(allocator: std.mem.Allocator, container: *root.container) !*server
     const request_timeout_s: u32 = if (request_timeout_ms == 0) 0 else @max(1, request_timeout_ms / 1000);
 
     // Idle keep-alive timeout: close idle keep-alive connections so they don't
-    // accumulate (httpz treats this in seconds; 0/null = infinite). Default 60s.
+    // accumulate. Default 60s.
     const keepalive_timeout_s: u32 = blk: {
         const v = hzs.container.config.getOrDefault("ZERO_KEEPALIVE_TIMEOUT_MS", "");
         const ms = std.fmt.parseInt(u32, v, 10) catch 60;
@@ -135,7 +131,10 @@ pub fn create(allocator: std.mem.Allocator, container: *root.container) !*server
                 .large_buffer_count = large_buffer_count,
             },
             .thread_pool = .{ .count = thread_pool_count },
-            .timeout = .{ .request = request_timeout_s, .keepalive = keepalive_timeout_s },
+            .timeout = .{
+                .request = request_timeout_s,
+                .keepalive = keepalive_timeout_s,
+            },
         },
         &hzs.handler,
     );
@@ -169,7 +168,6 @@ pub fn create(allocator: std.mem.Allocator, container: *root.container) !*server
     });
 
     // Rate limiter is ON by default; set RATE_LIMIT_ENABLE=false to disable it.
-    // (In-memory limiter; a distributed store would be configured later.)
     const rlEnabled = blk: {
         const v = hzs.container.config.getOrDefault("RATE_LIMIT_ENABLE", "");
         break :blk !std.mem.eql(u8, v, "false");
@@ -182,6 +180,7 @@ pub fn create(allocator: std.mem.Allocator, container: *root.container) !*server
         rlKeyMode = .header;
         rlHeaderName = rlKey["header:".len..];
     }
+
     // `getAsInt` returns 0 for a missing key (it never errors), so `catch` alone
     // won't apply the default. Treat 0 as "use default".
     const rlMaxRaw = hzs.container.config.getAsInt("RATE_LIMIT_MAX") catch 0;
@@ -200,7 +199,14 @@ pub fn create(allocator: std.mem.Allocator, container: *root.container) !*server
     });
 
     hzs.router = try hzs.http.router(.{
-        .middlewares = &.{ rateLimitMW, traczMW, corsMW, authMW, rbacMW, mwWS },
+        .middlewares = &.{
+            rateLimitMW,
+            traczMW,
+            corsMW,
+            authMW,
+            rbacMW,
+            mwWS,
+        },
     });
 
     if (hzs.provider) |p| {
@@ -217,11 +223,7 @@ pub fn run(self: *Self) !Thread {
 
 pub fn shutdown(self: *Self) void {
     self.container.log.info("server shutting down");
-    // Only signal the listener to stop. The actual deinit must happen in the
-    // main App.run() flow AFTER the listen thread has joined — doing it from a
-    // signal handler races with the still-running thread (use-after-free /
-    // dangling process) and skips the normal teardown (otel flush, container
-    // release, etc.). The listen loop observes the stop flag and exits, so the
+    // The listen loop observes the stop flag and exits, so the
     // thread joins cleanly and App.run() continues into teardown.
     self.http.stop();
 }
@@ -346,7 +348,7 @@ fn loadAuthProviderConfig(self: *Self) anyerror!?*authProvider {
 }
 
 /// Reads `INBOUND_MAX_CONCURRENT` from config. When unset/unparsable, apply a
-/// sane default (1024) instead of unlimited; an explicit `0` opts out (unlimited).
+/// sane default (1024); an explicit `0` opts out (unlimited).
 fn parseMaxConcurrent(config: *root.config) u32 {
     const raw = config.getOrDefault("INBOUND_MAX_CONCURRENT", "");
     if (raw.len == 0) return 1024;

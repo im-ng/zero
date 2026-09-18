@@ -22,6 +22,10 @@ const utils = root.utils;
 pub const HealthCheck = struct {
     name: []const u8,
     check: *const fn (*container) anyerror!void,
+    /// Set by `runHealthCheckBounded`: the worker writes its result here so the
+    /// (possibly detached) thread never outlives per-call stack/heap state.
+    done: std.atomic.Value(bool) = .init(false),
+    ok: std.atomic.Value(bool) = .init(false),
 };
 
 /// Probes SQL connectivity for the health endpoint. For Postgres it acquires and
@@ -50,6 +54,37 @@ fn redisHealthCheck(c: *container) anyerror!void {
     return error.RedisUnavailable;
 }
 
+/// Runs a health check on a spawned thread and returns `true` only if it
+/// completes successfully within `timeout_ms`. A check that hangs (e.g. a DB
+/// that accepts the connection but never responds) is bounded: the spawned
+/// thread is detached on timeout and terminates on its own once the underlying
+/// socket times out, so the readiness probe can never be blocked indefinitely.
+/// The result is written into `hc.done`/`hc.ok` (long-lived, so the detached
+/// thread never references freed per-call state).
+pub fn runHealthCheckBounded(self: *container, hc: *HealthCheck, timeout_ms: u32) bool {
+    hc.done.store(false, .monotonic);
+    hc.ok.store(false, .monotonic);
+
+    const Worker = struct {
+        fn run(c: *container, h: *HealthCheck) void {
+            h.ok.store(if (h.check(c)) |_| true else |_| false, .monotonic);
+            h.done.store(true, .monotonic);
+        }
+    };
+
+    const t = std.Thread.spawn(.{}, Worker.run, .{ self, hc }) catch return false;
+    const start = utils.nowMonotonic();
+    while (!hc.done.load(.monotonic)) {
+        if (utils.elapsedMs(start) > @as(f32, @floatFromInt(timeout_ms))) {
+            t.detach();
+            return false;
+        }
+        std.Thread.yield() catch {};
+    }
+    t.join();
+    return hc.ok.load(.monotonic);
+}
+
 /// A user-registered static-file mount: URL `prefix` → on-disk `dir`.
 pub const StaticMount = struct {
     prefix: []const u8,
@@ -73,6 +108,10 @@ pub fn staticResolve(mounts: []const StaticMount, path: []const u8) ?struct { mo
 
 appName: []const u8 = undefined,
 appVersion: []const u8 = undefined,
+/// Set once `App.run()` has finished wiring and the HTTP server is listening.
+/// Surfaced by `GET /.well-known/startup` so k8s can use a dedicated startup
+/// probe with a longer timeout than the readiness probe.
+started: std.atomic.Value(bool) = .init(false),
 allocator: std.mem.Allocator,
 
 /// Process-wide I/O reactor (one per process in Zig 0.16's `std.Io`). Injected

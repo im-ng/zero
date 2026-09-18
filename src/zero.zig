@@ -47,6 +47,7 @@ pub const UploadedFile = filestore.UploadedFile;
 pub const autocrud = @import("autocrud.zig");
 pub const AutoCrudOptions = autocrud.AutoCrudOptions;
 pub const addRestHandlers = autocrud.addRestHandlers;
+
 pub const authz = @import("mw/authz.zig");
 pub const AuthProvider = @import("mw/authProvider.zig");
 pub const jwtClaims = AuthProvider.jwtClaims;
@@ -64,15 +65,16 @@ pub const Datasource = datasourceInterface.Interface;
 pub const migration = @import("migration/migration.zig");
 pub const migrate = @import("migration/migrate.zig");
 
-// Specialized datasources (time-series / search) — Round 1 (InfluxDB, Solr).
+// Specialized datasources (time-series / search)
 pub const timeseriesInterface = @import("datasource/specialized/timeseriesInterface.zig");
 pub const Timeseries = timeseriesInterface.Timeseries;
 pub const InfluxDB = @import("datasource/specialized/influxdb.zig").InfluxDB;
+
 pub const searchInterface = @import("datasource/specialized/searchInterface.zig");
 pub const Search = searchInterface.Search;
 pub const Solr = @import("datasource/specialized/solr.zig").Solr;
 
-// NoSQL datasource (document / wide-column) — Round 1 (Cassandra).
+// NoSQL datasource (document / wide-column)
 pub const nosqlInterface = @import("datasource/nosqlInterface.zig");
 pub const NoSQL = nosqlInterface.NoSQL;
 pub const Cassandra = @import("datasource/cassandra.zig").Cassandra;

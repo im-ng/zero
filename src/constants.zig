@@ -10,6 +10,7 @@ pub const HTTP_PORT: u16 = 8080;
 pub const WELL_KNOWN = "./well-known/";
 pub const LIVE_PATH = "/.well-known/live";
 pub const HEALTH_PATH = "/.well-known/health";
+pub const STARTUP_PATH = "/.well-known/startup";
 pub const METRICS_PATH = "/metrics";
 
 pub const INDEX_FILE = "index.html";

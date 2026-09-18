@@ -195,13 +195,35 @@ pub fn custom(
         var sink: JsonSink = .{ .buf = &json_buf, .len = 0 };
         var ts_buf: [64]u8 = undefined;
         const ts = if (args.len >= 1) formatArg(&ts_buf, args[0]) else "";
+
+        // Optional trace correlation: when a request span is active (per-thread
+        // `otel.currentSpan()`), attach its ids so logs join their trace in the
+        // backend. Outside a request `currentSpan()` is null and these fields are
+        // omitted.
+        var tid_hex: [32]u8 = undefined;
+        var sid_hex: [16]u8 = undefined;
+        const active = otel.currentSpan();
+        const tid = if (active) |sp| sp.trace_id.toHex(&tid_hex) else null;
+        const sid = if (active) |sp| sp.span_id.toHex(&sid_hex) else null;
+
         sink.write("{\"ts\":\"");
         sink.writeEsc(ts);
         sink.write("\",\"level\":\"");
         sink.write(@tagName(level));
         sink.write("\",\"msg\":\"");
         sink.writeEsc(rclean);
-        sink.write("\"}\n");
+        sink.write("\"");
+        if (tid) |t| {
+            sink.write(",\"trace_id\":\"");
+            sink.write(t);
+            sink.write("\"");
+        }
+        if (sid) |s| {
+            sink.write(",\"span_id\":\"");
+            sink.write(s);
+            sink.write("\"");
+        }
+        sink.write("}\n");
         json_slice = sink.buf[0..sink.len];
     }
 

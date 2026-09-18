@@ -65,7 +65,7 @@ subcommands: std.StringHashMap(CliSubCommand) = undefined,
 /// Runtime allocator (request/response + datasource clients). Distinct from the
 /// bootstrap arena below.
 allocator: std.mem.Allocator = undefined,
-/// Tier A: a single pre-allocated fixed region holding framework-internal
+/// A single pre-allocated fixed region holding framework-internal
 /// bootstrap allocations (container wiring, auth keys, startup log buffers,
 /// cron scheduler). Sized by `ZERO_FRAMEWORK_MEM_SIZE` (MiB). Never tied to a
 /// request lifecycle; fail-fast if exhausted at startup.
@@ -118,17 +118,17 @@ fn initBase(allocator: std.mem.Allocator, io: std.Io, em: *EnvMap) !*App {
         root.logger.setOtelJsonFormat(true);
     }
 
-    // --- Tier A: pre-allocated bootstrap arena ---------------------------------
     // One fixed region, sized by ZERO_FRAMEWORK_MEM_SIZE (MiB, default 8), holding
     // all framework-internal bootstrap allocations. It is never tied to a request
     // lifecycle. If it is exhausted during bootstrap we fail fast with a clear
-    // error rather than grow unpredictably (RSS stays bounded).
+    // error rather than grow unpredictably.
     const framework_mem_mib: usize = blk: {
         const v = config.getAsInt("ZERO_FRAMEWORK_MEM_SIZE") catch 0;
         break :blk if (v == 0) @as(usize, 8) else @as(usize, v);
     };
     const backing = try allocator.alloc(u8, framework_mem_mib * 1024 * 1024);
     errdefer allocator.free(backing);
+
     // The allocator state must live in the heap-resident App struct (field below),
     // so its vtable/ptr survive after `new` returns. Computed before the struct
     // literal assignment so `bootstrap_allocator` can reference it.
@@ -139,12 +139,12 @@ fn initBase(allocator: std.mem.Allocator, io: std.Io, em: *EnvMap) !*App {
     // inert (no SDK objects, no background threads). See src/otel.zig. Accept both
     // the lowercase config key and the uppercase OTEL_EXPERIMENTAL env convention.
     const otel_enabled = blk: {
-        const a = config.getOrDefault("otel_experimental", "false");
-        const b = config.getOrDefault("OTEL_EXPERIMENTAL", "false");
-        break :blk std.mem.eql(u8, a, "true") or std.mem.eql(u8, b, "true");
+        const a = config.getOrDefault("OTEL_EXPERIMENTAL", "false");
+        break :blk std.mem.eql(u8, a, "true");
     };
+
     // NOTE: the OTel provider deliberately uses the general `allocator`, NOT the
-    // Tier A bootstrap FixedBufferAllocator. The SDK does high-churn per-request
+    // bootstrap FixedBufferAllocator. The SDK does high-churn per-request
     // allocation (span/log clones, batch queues) and the FBA never reclaims freed
     // memory, so sharing it makes the SDK exhaust and panic (OutOfMemory ->
     // `unreachable`) under load. The SDK's runtime memory is instead bounded by the
@@ -176,7 +176,7 @@ fn initBase(allocator: std.mem.Allocator, io: std.Io, em: *EnvMap) !*App {
 
     // Single struct-literal assignment: this applies the declared defaults (null)
     // to every field not listed, so e.g. `startupHook` is properly null rather
-    // than retaining uninitialized memory. The Tier A bootstrap fields are included
+    // than retaining uninitialized memory. The bootstrap fields are included
     // explicitly so they are not reset to `undefined`.
     app.* = .{
         .log = log,
@@ -242,7 +242,7 @@ pub fn newCmd(allocator: std.mem.Allocator, io: std.Io, em: *EnvMap) !*App {
     return initBase(allocator, io, em);
 }
 
-/// Frees the Tier A bootstrap arena backing. Call only after all framework
+/// Frees the bootstrap arena backing. Call only after all framework
 /// subsystems have been torn down (end of `run`), since the container's maps and
 /// other bootstrap singletons live inside that region.
 pub fn deinit(self: *Self) void {
@@ -496,6 +496,7 @@ fn prepareDefaultRoutes(self: *Self) !void {
     // register live and health check routes
     self.httpServer.router.get(constants.LIVE_PATH, live, .{});
     self.httpServer.router.get(constants.HEALTH_PATH, health, .{});
+    self.httpServer.router.get(constants.STARTUP_PATH, startup, .{});
 
     // remote log service: expose the current in-process log level for a service id
     self.httpServer.router.get("/remote.log.service", remoteLogServiceGet, .{});
@@ -539,6 +540,9 @@ pub fn run(self: *Self) !void {
 
     try self.startHttpServer();
 
+    // HTTP server is now listening — signal the startup probe as ready.
+    self.container.started.store(true, .monotonic);
+
     // The listen thread has joined, so the http server can now be safely torn
     // down. (It used to be deinited from the signal handler, racing the still
     // running thread and skipping this teardown path.)
@@ -573,7 +577,7 @@ pub fn run(self: *Self) !void {
     // exporters before the process exits. No-op when OTEL_EXPERIMENTAL is off.
     self.otelProvider.shutdown();
 
-    // All framework subsystems are torn down; release the Tier A bootstrap arena.
+    // All framework subsystems are torn down; release the bootstrap arena.
     self.deinit();
 }
 
@@ -844,10 +848,12 @@ pub fn health(ctx: *Context) !void {
     defer components.deinit(ctx.allocator);
 
     // Run user-registered health checks; any failure flips the overall status.
-    for (ctx.container.healthChecks.items) |hc| {
-        if (hc.check(ctx.container)) {
+    // Each check is bounded so a hung dependency can't block the probe forever.
+    const check_timeout_ms: u32 = ctx.container.config.getAsInt("HEALTH_CHECK_TIMEOUT_MS") catch 3000;
+    for (ctx.container.healthChecks.items) |*hc| {
+        if (ctx.container.runHealthCheckBounded(hc, check_timeout_ms)) {
             try components.put(ctx.allocator, hc.name, std.json.Value{ .string = up });
-        } else |_| {
+        } else {
             all_up = false;
             try components.put(ctx.allocator, hc.name, std.json.Value{ .string = down });
         }
@@ -891,6 +897,19 @@ pub fn health(ctx: *Context) !void {
 pub fn live(ctx: *Context) !void {
     ctx.response.setStatus(.ok);
     try ctx.response.json(.{ .status = constants.STATUS_UP }, .{});
+}
+
+/// Startup probe: returns 200 only after `App.run()` has finished wiring and
+/// the HTTP server is listening. Lets k8s use a dedicated probe with a longer
+/// timeout so a slow startup (migrations, cold cache) doesn't kill the pod.
+pub fn startup(ctx: *Context) !void {
+    if (ctx.container.started.load(.monotonic)) {
+        ctx.response.setStatus(.ok);
+        try ctx.response.json(.{ .status = constants.STATUS_UP }, .{});
+    } else {
+        ctx.response.setStatus(.service_unavailable);
+        try ctx.response.json(.{ .status = constants.STATUS_DOWN }, .{});
+    }
 }
 
 /// Registers a custom health check surfaced by `GET /.well-known/health`.
@@ -1270,4 +1289,47 @@ test "app: health reports 200 UP when all custom checks pass" {
     try std.testing.expectEqual(@as(u16, 200), pr.status);
     try std.testing.expect(std.mem.indexOf(u8, pr.body, "UP") != null);
     try std.testing.expect(std.mem.indexOf(u8, pr.body, "cache") != null);
+}
+
+test "app: startup probe reports 503 before ready and 200 after" {
+    const t = httpz.testing;
+
+    var c: root.container = .{ .allocator = std.testing.allocator };
+    c.appName = "demo";
+    c.appVersion = "9.9";
+    // `started` defaults to false; the container above did not call App.run().
+    try std.testing.expectEqual(false, c.started.load(.monotonic));
+
+    // Before ready: fresh testing context so the response buffer is clean.
+    {
+        var testing = t.init(.{});
+        defer testing.deinit();
+        var ctx: Context = undefined;
+        ctx.allocator = testing.arena;
+        ctx.container = &c;
+        ctx.request = testing.req;
+        ctx.response = testing.res;
+
+        try startup(&ctx);
+        const pr = try testing.parseResponse();
+        try std.testing.expectEqual(@as(u16, 503), pr.status);
+        try std.testing.expect(std.mem.indexOf(u8, pr.body, "DOWN") != null);
+    }
+
+    // Simulate App.run() having finished wiring and the server listening.
+    c.started.store(true, .monotonic);
+    {
+        var testing = t.init(.{});
+        defer testing.deinit();
+        var ctx: Context = undefined;
+        ctx.allocator = testing.arena;
+        ctx.container = &c;
+        ctx.request = testing.req;
+        ctx.response = testing.res;
+
+        try startup(&ctx);
+        const pr = try testing.parseResponse();
+        try std.testing.expectEqual(@as(u16, 200), pr.status);
+        try std.testing.expect(std.mem.indexOf(u8, pr.body, "UP") != null);
+    }
 }
