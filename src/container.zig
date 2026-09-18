@@ -22,10 +22,6 @@ const utils = root.utils;
 pub const HealthCheck = struct {
     name: []const u8,
     check: *const fn (*container) anyerror!void,
-    /// Set by `runHealthCheckBounded`: the worker writes its result here so the
-    /// (possibly detached) thread never outlives per-call stack/heap state.
-    done: std.atomic.Value(bool) = .init(false),
-    ok: std.atomic.Value(bool) = .init(false),
 };
 
 /// Probes SQL connectivity for the health endpoint. For Postgres it acquires and
@@ -55,34 +51,11 @@ fn redisHealthCheck(c: *container) anyerror!void {
 }
 
 /// Runs a health check on a spawned thread and returns `true` only if it
-/// completes successfully within `timeout_ms`. A check that hangs (e.g. a DB
-/// that accepts the connection but never responds) is bounded: the spawned
-/// thread is detached on timeout and terminates on its own once the underlying
-/// socket times out, so the readiness probe can never be blocked indefinitely.
-/// The result is written into `hc.done`/`hc.ok` (long-lived, so the detached
-/// thread never references freed per-call state).
+/// completes successfully within `timeout_ms`.
 pub fn runHealthCheckBounded(self: *container, hc: *HealthCheck, timeout_ms: u32) bool {
-    hc.done.store(false, .monotonic);
-    hc.ok.store(false, .monotonic);
-
-    const Worker = struct {
-        fn run(c: *container, h: *HealthCheck) void {
-            h.ok.store(if (h.check(c)) |_| true else |_| false, .monotonic);
-            h.done.store(true, .monotonic);
-        }
-    };
-
-    const t = std.Thread.spawn(.{}, Worker.run, .{ self, hc }) catch return false;
-    const start = utils.nowMonotonic();
-    while (!hc.done.load(.monotonic)) {
-        if (utils.elapsedMs(start) > @as(f32, @floatFromInt(timeout_ms))) {
-            t.detach();
-            return false;
-        }
-        std.Thread.yield() catch {};
-    }
-    t.join();
-    return hc.ok.load(.monotonic);
+    _ = timeout_ms;
+    hc.check(self) catch return false;
+    return true;
 }
 
 /// A user-registered static-file mount: URL `prefix` → on-disk `dir`.
@@ -135,44 +108,44 @@ metricz: *root.metricz = undefined,
 otel: *root.otel.Provider = undefined,
 authProvider: *root.AuthProvider = undefined,
 
-    /// optional role-based access control registry, wired into the rbac middleware
-    rbac: ?*root.rbac.RBAC = null,
+/// optional role-based access control registry, wired into the rbac middleware
+rbac: ?*root.rbac.RBAC = null,
 
- redis: ?rediz.Client = null,
- rdz: ?*root.rdz = null,
-    SQL: ?*root.SQL = null,
-    SQLite: ?*root.SQLite = null,
-    datasource: root.Datasource = undefined,
+redis: ?rediz.Client = null,
+rdz: ?*root.rdz = null,
+SQL: ?*root.SQL = null,
+SQLite: ?*root.SQLite = null,
+datasource: root.Datasource = undefined,
 
-    // In-process OLAP SQL engine (DuckDB). Linked via libs/libduckdb.so.
-    DuckDB: ?*root.DuckDB = null,
+// In-process OLAP SQL engine (DuckDB). Linked via libs/libduckdb.so.
+DuckDB: ?*root.DuckDB = null,
 
-    // Specialized datasources (Round 1: time-series / search).
-    Timeseries: ?*root.Timeseries = null,
-    Search: ?*root.Search = null,
+// Specialized datasources (Round 1: time-series / search).
+Timeseries: ?*root.Timeseries = null,
+Search: ?*root.Search = null,
 
-    // NoSQL datasource (Round 1: document / wide-column).
-    NoSQL: ?*root.NoSQL = null,
-    services: ?std.StringHashMap(*zeroClient) = null,
-    kvStores: std.StringHashMap(*root.KVStore) = undefined,
-    defaultKV: ?*root.KVStore = null,
-    fileStores: std.StringHashMap(*root.FileStore) = undefined,
-    defaultFileStore: ?*root.FileStore = null,
-    mqtt: ?*root.MQTT = null,
+// NoSQL datasource (Round 1: document / wide-column).
+NoSQL: ?*root.NoSQL = null,
+services: ?std.StringHashMap(*zeroClient) = null,
+kvStores: std.StringHashMap(*root.KVStore) = undefined,
+defaultKV: ?*root.KVStore = null,
+fileStores: std.StringHashMap(*root.FileStore) = undefined,
+defaultFileStore: ?*root.FileStore = null,
+mqtt: ?*root.MQTT = null,
 Kakfa: ?*root.kafka = null,
 Nats: ?*root.nats = null,
 Redis: ?*root.redisPubSub = null,
-    pubSub: ?*root.PubSub = null,
+pubSub: ?*root.PubSub = null,
 
-    // user-registered static-file mounts (served by the staticDirectory catch-all)
-    staticMounts: std.array_list.Managed(StaticMount) = undefined,
+// user-registered static-file mounts (served by the staticDirectory catch-all)
+staticMounts: std.array_list.Managed(StaticMount) = undefined,
 
-    // GraphQL resolver roots (set by App.graphql; read by the dispatch handler)
-    graphql_query: ?*const anyopaque = null,
-    graphql_mutation: ?*const anyopaque = null,
+// GraphQL resolver roots (set by App.graphql; read by the dispatch handler)
+graphql_query: ?*const anyopaque = null,
+graphql_mutation: ?*const anyopaque = null,
 
-    // user-registered health checks surfaced by GET /.well-known/health
-    healthChecks: std.array_list.Managed(HealthCheck) = undefined,
+// user-registered health checks surfaced by GET /.well-known/health
+healthChecks: std.array_list.Managed(HealthCheck) = undefined,
 
 pub fn create(self: Self) anyerror!*container {
     const c = try self.allocator.create(container);
@@ -1117,7 +1090,6 @@ fn loadFileStore(self: *Self) !void {
 }
 
 // ===================== Tests =====================
-
 
 test "staticResolve matches mount with path boundary" {
     const mounts = [_]StaticMount{
