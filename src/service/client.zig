@@ -18,6 +18,7 @@ const CircuitBreakerConfig = @import("circuit_breaker.zig").CircuitBreakerConfig
 pub const RateLimiter = @import("rateLimiter.zig").RateLimiter;
 pub const RateLimiterConfig = @import("rateLimiter.zig").RateLimiterConfig;
 const outbound_auth = @import("outbound_auth.zig");
+const otel = root.otel;
 
 pub const OutboundAuth = outbound_auth.OutboundAuth;
 pub const OutboundAuthMode = outbound_auth.OutboundAuthMode;
@@ -293,7 +294,7 @@ pub fn log(
 }
 
     fn retryBackoffMs(self: *Self, attempt: u32) i64 {
-        const base = self.retry_base_ms orelse 100;
+        const base = self.retry_base_ms orelse constants.DEFAULT_SERVICE_RETRY_BASE_MS;
         return @as(i64, base) * @as(i64, attempt);
     }
 
@@ -419,6 +420,14 @@ fn createAndSendRequest(
         // call chain stays traceable across services. No-op when none is present.
         if (ctx.request.header("X-Correlation-ID")) |cid| {
             try req.header("X-Correlation-ID", cid);
+        }
+
+        // Propagate the active OpenTelemetry trace via W3C traceparent (continues
+        // the server span across the outbound call). No-op when OTEL is disabled.
+        if (ctx.span()) |active| {
+            var tp_buf: [55]u8 = undefined;
+            const tp = otel.formatTraceparent(&tp_buf, otel.spanContextFromActive(ctx.allocator, active));
+            try req.header("traceparent", tp);
         }
 
         if (queryParams) |params| {

@@ -86,8 +86,8 @@ pub fn runSchedules(self: *Self, _: i128) void {
                 defer j.mu.unlock(self.container.io);
 
                 var attempt: u32 = 0;
-                const max_attempts: u32 = 3;
-                const backoff_ms: i64 = 500;
+                const max_attempts: u32 = constants.DEFAULT_PUBSUB_MAX_ATTEMPTS;
+                const backoff_ms: i64 = constants.DEFAULT_PUBSUB_BACKOFF_MS;
                 var ok = false;
 
                 while (attempt < max_attempts) : (attempt += 1) {
@@ -97,12 +97,15 @@ pub fn runSchedules(self: *Self, _: i128) void {
                     };
                     defer self.destroryChildAllocator(ca);
 
-                    var ctx = try Context.init(
+                    var ctx = Context.init(
                         ca.allocator(),
                         self.container,
                         self.request,
                         self.response,
-                    );
+                    ) catch |err| {
+                        self.container.log.any(err);
+                        continue;
+                    };
 
                     job.run(j.*, &ctx) catch |err| {
                         self.container.log.any(err);

@@ -10,6 +10,7 @@ pub const HTTP_PORT: u16 = 8080;
 pub const WELL_KNOWN = "./well-known/";
 pub const LIVE_PATH = "/.well-known/live";
 pub const HEALTH_PATH = "/.well-known/health";
+pub const STARTUP_PATH = "/.well-known/startup";
 pub const METRICS_PATH = "/metrics";
 
 pub const INDEX_FILE = "index.html";
@@ -42,9 +43,46 @@ pub const swaggerUICss = "/.well-known/swagger-ui.css";
 pub const swaggerUIJs = "/.well-known/swagger-ui.js";
 pub const swagger = "/.well-known/swagger";
 
+// --- HTTP server ----------------------------------------------------------
+pub const DEFAULT_HTTP_WORKERS: u16 = 2;
+pub const DEFAULT_HTTP_MAX_BODY_SIZE_BYTES: usize = 8 * 1024 * 1024;
+pub const DEFAULT_HTTP_LARGE_BUFFER_COUNT: u16 = 8;
+pub const DEFAULT_HTTP_THREAD_POOL_COUNT: u16 = 32;
+pub const DEFAULT_REQUEST_TIMEOUT_MS: u32 = 30000;
+pub const DEFAULT_KEEPALIVE_TIMEOUT_MS: u32 = 60;
+pub const DEFAULT_RATE_LIMIT_MAX: u64 = 100;
+pub const DEFAULT_RATE_LIMIT_WINDOW_MS: i64 = 60_000;
+pub const DEFAULT_INBOUND_MAX_CONCURRENT: u32 = 1024;
+
+// --- Container / datasource -----------------------------------------------
+pub const DEFAULT_PG_POOL_SIZE: u32 = 10;
+pub const DEFAULT_PG_POOL_ACQUIRE_TIMEOUT_MS: u32 = 10_000;
+pub const DEFAULT_NATS_MAX_PULL_WAIT_MS: u32 = 5000;
+pub const DEFAULT_STATEMENT_TIMEOUT_MS: u32 = 30000;
+
+// --- App ------------------------------------------------------------------
+pub const DEFAULT_FRAMEWORK_MEM_SIZE: usize = 8;
+pub const DEFAULT_REMOTE_LOG_REFRESH_INTERVAL_S: u64 = 30;
+pub const DEFAULT_HEALTH_CHECK_TIMEOUT_MS: u32 = 3000;
+
+// --- Outbound service / circuit breaker ----------------------------------
+pub const DEFAULT_SERVICE_RETRY_BASE_MS: i64 = 100;
+pub const DEFAULT_CB_FAILURE_THRESHOLD: u32 = 5;
+pub const DEFAULT_CB_COOLDOWN_MS: u64 = 30_000;
+pub const DEFAULT_CB_HALF_OPEN_TRIALS: u32 = 1;
+
+// --- Pub/Sub retry (kafka / nats / cronz / redis share these) -------------
+pub const DEFAULT_PUBSUB_MAX_ATTEMPTS: u32 = 3;
+pub const DEFAULT_PUBSUB_BACKOFF_MS: i64 = 500;
+
+// --- Kafka / filestore / context ------------------------------------------
+pub const DEFAULT_KAFKA_FLUSH_MS: u32 = 60_000;
+pub const DEFAULT_KAFKA_BATCH_SIZE: u32 = 100;
+pub const DEFAULT_FILESTORE_MAX_BYTES_LOCAL: usize = 100 * 1024 * 1024;
+pub const DEFAULT_FILESTORE_MAX_BYTES_S3: usize = 64 * 1024 * 1024;
+pub const DEFAULT_REQUEST_BODY_LIMIT_BYTES: usize = 100 * 1024 * 1024;
 
 // ===================== Tests =====================
-
 
 test "constants path values" {
     try std.testing.expectEqualStrings("APP_ENV", APP_ENVIRONMENT);
@@ -100,4 +138,34 @@ test "constants swagger ui asset paths" {
     try std.testing.expectEqualStrings("/.well-known/swagger-ui-bundle.js", swaggerUIBundle);
     try std.testing.expectEqualStrings("/.well-known/swagger-ui.css", swaggerUICss);
     try std.testing.expectEqualStrings("/.well-known/swagger-ui.js", swaggerUIJs);
+}
+
+test "default runtime values" {
+    try std.testing.expectEqual(@as(u16, 2), DEFAULT_HTTP_WORKERS);
+    try std.testing.expectEqual(@as(usize, 8 * 1024 * 1024), DEFAULT_HTTP_MAX_BODY_SIZE_BYTES);
+    try std.testing.expectEqual(@as(u16, 8), DEFAULT_HTTP_LARGE_BUFFER_COUNT);
+    try std.testing.expectEqual(@as(u16, 32), DEFAULT_HTTP_THREAD_POOL_COUNT);
+    try std.testing.expectEqual(@as(u32, 30000), DEFAULT_REQUEST_TIMEOUT_MS);
+    try std.testing.expectEqual(@as(u32, 60), DEFAULT_KEEPALIVE_TIMEOUT_MS);
+    try std.testing.expectEqual(@as(u64, 100), DEFAULT_RATE_LIMIT_MAX);
+    try std.testing.expectEqual(@as(i64, 60_000), DEFAULT_RATE_LIMIT_WINDOW_MS);
+    try std.testing.expectEqual(@as(u32, 1024), DEFAULT_INBOUND_MAX_CONCURRENT);
+    try std.testing.expectEqual(@as(u32, 10), DEFAULT_PG_POOL_SIZE);
+    try std.testing.expectEqual(@as(u32, 10_000), DEFAULT_PG_POOL_ACQUIRE_TIMEOUT_MS);
+    try std.testing.expectEqual(@as(u32, 5000), DEFAULT_NATS_MAX_PULL_WAIT_MS);
+    try std.testing.expectEqual(@as(u32, 30000), DEFAULT_STATEMENT_TIMEOUT_MS);
+    try std.testing.expectEqual(@as(usize, 8), DEFAULT_FRAMEWORK_MEM_SIZE);
+    try std.testing.expectEqual(@as(u64, 30), DEFAULT_REMOTE_LOG_REFRESH_INTERVAL_S);
+    try std.testing.expectEqual(@as(u32, 3000), DEFAULT_HEALTH_CHECK_TIMEOUT_MS);
+    try std.testing.expectEqual(@as(i64, 100), DEFAULT_SERVICE_RETRY_BASE_MS);
+    try std.testing.expectEqual(@as(u32, 5), DEFAULT_CB_FAILURE_THRESHOLD);
+    try std.testing.expectEqual(@as(u64, 30_000), DEFAULT_CB_COOLDOWN_MS);
+    try std.testing.expectEqual(@as(u32, 1), DEFAULT_CB_HALF_OPEN_TRIALS);
+    try std.testing.expectEqual(@as(u32, 3), DEFAULT_PUBSUB_MAX_ATTEMPTS);
+    try std.testing.expectEqual(@as(i64, 500), DEFAULT_PUBSUB_BACKOFF_MS);
+    try std.testing.expectEqual(@as(u32, 60_000), DEFAULT_KAFKA_FLUSH_MS);
+    try std.testing.expectEqual(@as(u32, 100), DEFAULT_KAFKA_BATCH_SIZE);
+    try std.testing.expectEqual(@as(usize, 100 * 1024 * 1024), DEFAULT_FILESTORE_MAX_BYTES_LOCAL);
+    try std.testing.expectEqual(@as(usize, 64 * 1024 * 1024), DEFAULT_FILESTORE_MAX_BYTES_S3);
+    try std.testing.expectEqual(@as(usize, 100 * 1024 * 1024), DEFAULT_REQUEST_BODY_LIMIT_BYTES);
 }

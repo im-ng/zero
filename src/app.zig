@@ -14,6 +14,7 @@ const zeroClient = root.client;
 const Cronz = root.cronz;
 const AuthProvider = root.AuthProvider;
 const favoriteIcon = root.favIcon;
+const otel = root.otel;
 
 /// Signature for a CLI subcommand handler. The handler uses `ctx` to access
 /// datasources (`ctx.SQL`, `ctx.Cache`, …), parsed flags (`ctx.Param`), the
@@ -46,6 +47,8 @@ pub const swaggerUIJs = root.swaggerUIJs;
 
 envMap: *EnvMap = undefined,
 log: *root.logger = undefined,
+/// OpenTelemetry provider. Inert unless `OTEL_EXPERIMENTAL=true` is set in config.
+otelProvider: otel.Provider = .{ .enabled = false },
 config: *root.config = undefined,
 container: *root.container = undefined,
 metriczServer: *root.metriczServer = undefined,
@@ -62,7 +65,7 @@ subcommands: std.StringHashMap(CliSubCommand) = undefined,
 /// Runtime allocator (request/response + datasource clients). Distinct from the
 /// bootstrap arena below.
 allocator: std.mem.Allocator = undefined,
-/// Tier A: a single pre-allocated fixed region holding framework-internal
+/// A single pre-allocated fixed region holding framework-internal
 /// bootstrap allocations (container wiring, auth keys, startup log buffers,
 /// cron scheduler). Sized by `ZERO_FRAMEWORK_MEM_SIZE` (MiB). Never tied to a
 /// request lifecycle; fail-fast if exhausted at startup.
@@ -105,28 +108,54 @@ fn initBase(allocator: std.mem.Allocator, io: std.Io, em: *EnvMap) !*App {
         .environments = em,
     });
 
-    // reset log level
-    log.logLevel = app.getLogLevel(config.getOrDefault(
-        "LOG_LEVEL",
-        "info",
-    ));
+    // LOG_FORMAT=json may be set in configs/.env (loaded into `config.environments`),
+    // which the early `em.get` check above cannot see. Honor it here so JSON logs
+    // work when configured via the .env file.
+    if (std.mem.eql(u8, config.getOrDefault("LOG_FORMAT", ""), "json")) {
+        root.logger.setJsonFormat(true);
+    }
+    if (std.mem.eql(u8, config.getOrDefault("OTEL_LOG_JSON", ""), "true")) {
+        root.logger.setOtelJsonFormat(true);
+    }
 
-    // --- Tier A: pre-allocated bootstrap arena ---------------------------------
     // One fixed region, sized by ZERO_FRAMEWORK_MEM_SIZE (MiB, default 8), holding
     // all framework-internal bootstrap allocations. It is never tied to a request
     // lifecycle. If it is exhausted during bootstrap we fail fast with a clear
-    // error rather than grow unpredictably (RSS stays bounded).
+    // error rather than grow unpredictably.
     const framework_mem_mib: usize = blk: {
         const v = config.getAsInt("ZERO_FRAMEWORK_MEM_SIZE") catch 0;
-        break :blk if (v == 0) @as(usize, 8) else @as(usize, v);
+        break :blk if (v == 0) constants.DEFAULT_FRAMEWORK_MEM_SIZE else @as(usize, v);
     };
     const backing = try allocator.alloc(u8, framework_mem_mib * 1024 * 1024);
     errdefer allocator.free(backing);
+
     // The allocator state must live in the heap-resident App struct (field below),
     // so its vtable/ptr survive after `new` returns. Computed before the struct
     // literal assignment so `bootstrap_allocator` can reference it.
     app.bootstrap_fba = std.heap.FixedBufferAllocator.init(backing);
     const bootstrap_alloc = app.bootstrap_fba.allocator();
+
+    // OpenTelemetry: opt-in via otel_experimental=true. When off, the provider is
+    // inert (no SDK objects, no background threads). See src/otel.zig. Accept both
+    // the lowercase config key and the uppercase OTEL_EXPERIMENTAL env convention.
+    const otel_enabled = blk: {
+        const a = config.getOrDefault("OTEL_EXPERIMENTAL", "false");
+        break :blk std.mem.eql(u8, a, "true");
+    };
+
+    // NOTE: the OTel provider deliberately uses the general `allocator`, NOT the
+    // bootstrap FixedBufferAllocator. The SDK does high-churn per-request
+    // allocation (span/log clones, batch queues) and the FBA never reclaims freed
+    // memory, so sharing it makes the SDK exhaust and panic (OutOfMemory ->
+    // `unreachable`) under load. The SDK's runtime memory is instead bounded by the
+    // per-span freeClonedSpan discipline in span_processor.zig (RSS plateaus).
+    app.otelProvider = try otel.Provider.init(allocator, io, config, otel_enabled);
+
+    // reset log level
+    log.logLevel = app.getLogLevel(config.getOrDefault(
+        "LOG_LEVEL",
+        "info",
+    ));
 
     const container = root.container.create(.{
         .allocator = allocator,
@@ -139,16 +168,21 @@ fn initBase(allocator: std.mem.Allocator, io: std.Io, em: *EnvMap) !*App {
         else => return e,
     };
 
+    // Expose the (possibly inert) OTel provider to subsystems that need it
+    // (tracz middleware, Context, outbound service client).
+    container.otel = &app.otelProvider;
+
     const migrations = try migration.create(container);
 
     // Single struct-literal assignment: this applies the declared defaults (null)
     // to every field not listed, so e.g. `startupHook` is properly null rather
-    // than retaining uninitialized memory. The Tier A bootstrap fields are included
+    // than retaining uninitialized memory. The bootstrap fields are included
     // explicitly so they are not reset to `undefined`.
     app.* = .{
         .log = log,
         .config = config,
         .container = container,
+        .otelProvider = app.otelProvider,
         .migrations = migrations,
         .allocator = allocator,
         .bootstrap_backing = backing,
@@ -208,7 +242,7 @@ pub fn newCmd(allocator: std.mem.Allocator, io: std.Io, em: *EnvMap) !*App {
     return initBase(allocator, io, em);
 }
 
-/// Frees the Tier A bootstrap arena backing. Call only after all framework
+/// Frees the bootstrap arena backing. Call only after all framework
 /// subsystems have been torn down (end of `run`), since the container's maps and
 /// other bootstrap singletons live inside that region.
 pub fn deinit(self: *Self) void {
@@ -385,21 +419,37 @@ fn remoteLogLevelSync(ctx: *root.Context) !void {
 }
 
 /// When `REMOTE_LOG_URL` is configured, registers an outbound HTTP client for it and
-/// a cron job that fetches the remote level every `REMOTE_LOG_FETCH_INTERVAL` seconds
-/// (default 15) and adjusts the in-process log level. No-op when the URL is unset, so
+/// a cron job that fetches the remote level every `REMOTE_LOG_REFRESH_INTERVAL` seconds
+/// (default 30) and adjusts the in-process log level. No-op when the URL is unset, so
 /// the feature is opt-in via config and never exposes an endpoint on this service.
 pub fn startRemoteLogLevel(self: *Self) !void {
     const url = self.config.getOrDefault("REMOTE_LOG_URL", "");
     if (url.len == 0) return;
 
-    const interval = std.fmt.parseInt(u64, self.config.getOrDefault("REMOTE_LOG_FETCH_INTERVAL", "15"), 10) catch 15;
-    const step = if (interval == 0) @as(u64, 15) else interval;
+    const interval = std.fmt.parseInt(u64, self.config.getOrDefault("REMOTE_LOG_REFRESH_INTERVAL", ""), 10) catch constants.DEFAULT_REMOTE_LOG_REFRESH_INTERVAL_S;
+    const step = if (interval == 0) constants.DEFAULT_REMOTE_LOG_REFRESH_INTERVAL_S else interval;
 
     try self.addHttpService(remoteLogLevelService, url, .{});
 
     const schedule = try std.fmt.allocPrint(self.config.allocator, "*/{d} * * * * *", .{step});
     defer self.config.allocator.free(schedule);
     try self.addCronJob(schedule, "remote-log-level-sync", remoteLogLevelSync);
+}
+
+/// Extracts a single query parameter value (e.g. `?id=uuid`) from the current
+/// request. Returns the value subslice, or `null` when the parameter is absent.
+/// httpz parses the query string into a key/value map, so we read it via `.get`.
+fn queryParam(ctx: *root.Context, name: []const u8) ?[]const u8 {
+    const qs = ctx.request.query() catch return null;
+    return qs.get(name);
+}
+
+/// `GET /remote.log.service?id=<uuid>` — returns the current in-process log
+/// level for the given service id as `{ "data": { "id": ..., "level": ... } }`.
+fn remoteLogServiceGet(ctx: *root.Context) !void {
+    const id = queryParam(ctx, "id") orelse "";
+    const level = logLevelName(ctx.container.log.logLevel);
+    try ctx.json(.{ .id = id, .level = level });
 }
 
 pub fn onStartup(self: *Self, hook: fn (*root.Context) anyerror!void) void {
@@ -446,6 +496,10 @@ fn prepareDefaultRoutes(self: *Self) !void {
     // register live and health check routes
     self.httpServer.router.get(constants.LIVE_PATH, live, .{});
     self.httpServer.router.get(constants.HEALTH_PATH, health, .{});
+    self.httpServer.router.get(constants.STARTUP_PATH, startup, .{});
+
+    // remote log service: expose the current in-process log level for a service id
+    self.httpServer.router.get("/remote.log.service", remoteLogServiceGet, .{});
 
     self.httpServer.router.get(constants.OPEN_API_PATH, openAPIHandler, .{});
     self.httpServer.router.get(constants.SWAGGER_PATH, swaggerHandler, .{});
@@ -486,6 +540,14 @@ pub fn run(self: *Self) !void {
 
     try self.startHttpServer();
 
+    // HTTP server is now listening — signal the startup probe as ready.
+    self.container.started.store(true, .monotonic);
+
+    // The listen thread has joined, so the http server can now be safely torn
+    // down. (It used to be deinited from the signal handler, racing the still
+    // running thread and skipping this teardown path.)
+    self.httpServer.http.deinit();
+
     // The http server has stopped (e.g. after a SIGINT/SIGTERM via the
     // shutdown handler). Tear down the rest in NORMAL execution flow — never
     // from the signal handler itself, where joining threads or freeing client
@@ -511,7 +573,11 @@ pub fn run(self: *Self) !void {
 
     self.container.destroy();
 
-    // All framework subsystems are torn down; release the Tier A bootstrap arena.
+    // Flush any in-flight OpenTelemetry spans/metrics and stop its background
+    // exporters before the process exits. No-op when OTEL_EXPERIMENTAL is off.
+    self.otelProvider.shutdown();
+
+    // All framework subsystems are torn down; release the bootstrap arena.
     self.deinit();
 }
 
@@ -782,10 +848,12 @@ pub fn health(ctx: *Context) !void {
     defer components.deinit(ctx.allocator);
 
     // Run user-registered health checks; any failure flips the overall status.
-    for (ctx.container.healthChecks.items) |hc| {
-        if (hc.check(ctx.container)) {
+    // Each check is bounded so a hung dependency can't block the probe forever.
+    const check_timeout_ms: u32 = ctx.container.config.getAsInt("HEALTH_CHECK_TIMEOUT_MS") catch constants.DEFAULT_HEALTH_CHECK_TIMEOUT_MS;
+    for (ctx.container.healthChecks.items) |*hc| {
+        if (ctx.container.runHealthCheckBounded(hc, check_timeout_ms)) {
             try components.put(ctx.allocator, hc.name, std.json.Value{ .string = up });
-        } else |_| {
+        } else {
             all_up = false;
             try components.put(ctx.allocator, hc.name, std.json.Value{ .string = down });
         }
@@ -800,28 +868,6 @@ pub fn health(ctx: *Context) !void {
 
     const http_status = if (all_up) std.http.Status.ok else std.http.Status.service_unavailable;
 
-    // const status = if (all_up) up else down;
-    // Content negotiation: serve an HTML status page when the client asks for
-    // `text/html`; otherwise respond with JSON (the default).
-    // const accept = ctx.request.header("accept") orelse "";
-    // if (std.ascii.indexOfIgnoreCase(accept, "text/html") != null) {
-    //     var w: std.Io.Writer.Allocating = .init(ctx.allocator);
-    //     try w.writer.print(
-    //         \\<!doctype html>
-    //         \\<html><head><meta charset="utf-8"><title>{s} Health</title></head>
-    //         \\<body><h1>Status: {s}</h1><ul>
-    //     , .{ ctx.container.appName, status });
-    //     var it = components.iterator();
-    //     while (it.next()) |kv| {
-    //         try w.writer.print("<li>{s}: {s}</li>", .{ kv.key_ptr.*, kv.value_ptr.*.string });
-    //     }
-    //     try w.writer.writeAll("</ul></body></html>");
-    //     ctx.response.setStatus(http_status);
-    //     ctx.response.content_type = .HTML;
-    //     ctx.response.body = w.written();
-    //     return;
-    // }
-
     ctx.response.setStatus(http_status);
     try ctx.response.json(services, .{});
 }
@@ -831,6 +877,19 @@ pub fn live(ctx: *Context) !void {
     try ctx.response.json(.{ .status = constants.STATUS_UP }, .{});
 }
 
+/// Startup probe: returns 200 only after `App.run()` has finished wiring and
+/// the HTTP server is listening. Lets k8s use a dedicated probe with a longer
+/// timeout so a slow startup (migrations, cold cache) doesn't kill the pod.
+pub fn startup(ctx: *Context) !void {
+    if (ctx.container.started.load(.monotonic)) {
+        ctx.response.setStatus(.ok);
+        try ctx.response.json(.{ .status = constants.STATUS_UP }, .{});
+    } else {
+        ctx.response.setStatus(.service_unavailable);
+        try ctx.response.json(.{ .status = constants.STATUS_DOWN }, .{});
+    }
+}
+
 /// Registers a custom health check surfaced by `GET /.well-known/health`.
 /// `check` must return normally when the component is healthy and error
 /// otherwise; it receives the app `container` so it can probe datasources.
@@ -838,47 +897,19 @@ pub fn addHealthCheck(self: Self, name: []const u8, check: *const fn (*root.cont
     try self.container.healthChecks.append(.{ .name = name, .check = check });
 }
 
-/// Registers an RBAC allow-rule: `role` may call `method` on `path`. `path`
-/// may end with `*` as a prefix wildcard and `method` may be `*` to match any
-/// verb. Applied by the rbac middleware after auth (requires a `role` claim
-/// in the verified JWT).
-pub fn rbac(self: *Self, role: []const u8, method: []const u8, path: []const u8) !void {
-    if (self.container.rbac == null) {
-        self.container.rbac = try self.container.allocator.create(root.rbac.RBAC);
-        self.container.rbac.?.* = root.rbac.RBAC.init(self.container.allocator);
-    }
-    try self.container.rbac.?.add(role, method, path);
-}
-
-/// Loads RBAC rules from `RBAC_ROLE_<NAME>=METHOD:/path,METHOD:/path` env keys,
-/// plus a JSON document from `RBAC_CONFIG` (either an array of
-/// `{"role","method","path"}` objects or an object mapping role →
-/// `["METHOD:/path", ...]`).
+/// Loads RBAC rules from the `RBAC_CONFIG` env var, parsed as JSON in the
+/// endpoint-rule format (see `rbacFromJson`). Only the JSON notation is
+/// supported — there is no `RBAC_ROLE_*` env-var form.
 pub fn rbacFromEnv(self: *Self) !void {
-    const prefix = "RBAC_ROLE_";
-    var it = self.container.config.environments.iterator();
-    while (it.next()) |entry| {
-        if (!std.mem.startsWith(u8, entry.key_ptr.*, prefix)) continue;
-        const role = entry.key_ptr.*[prefix.len..];
-        var rules = std.mem.splitScalar(u8, entry.value_ptr.*, ',');
-        while (rules.next()) |rule| {
-            const trimmed = std.mem.trim(u8, rule, " ");
-            if (trimmed.len == 0) continue;
-            var mp = std.mem.splitScalar(u8, trimmed, ':');
-            const m = mp.next() orelse continue;
-            const p = mp.next() orelse continue;
-            try self.rbac(role, std.mem.trim(u8, m, " "), std.mem.trim(u8, p, " "));
-        }
-    }
-
     const json_config = self.container.config.getOrDefault("RBAC_CONFIG", "");
     if (json_config.len > 0) {
         try self.rbacFromJson(json_config);
     }
 }
 
-/// Parses RBAC rules from a JSON string (array of `{"role","method","path"}`
-/// objects, or an object mapping role → `["METHOD:/path", ...]`).
+/// Parses RBAC rules from a JSON string in the endpoint-rule format:
+/// `{"permissions":[...],"endpoint":"...","methods":[...],"exempt":bool}`,
+/// accepted as a single object or an array of such objects.
 pub fn rbacFromJson(self: *Self, json_config: []const u8) !void {
     if (self.container.rbac == null) {
         self.container.rbac = try self.container.allocator.create(root.rbac.RBAC);
@@ -1155,7 +1186,6 @@ pub fn addOAuthKeyRefresher(self: *Self) anyerror!void {
 
 // ===================== Tests =====================
 
-
 test "parseLogLevel / logLevelName round-trip" {
     try std.testing.expectEqual(@as(?u8, 0), parseLogLevel("debug"));
     try std.testing.expectEqual(@as(?u8, 1), parseLogLevel("info"));
@@ -1237,4 +1267,47 @@ test "app: health reports 200 UP when all custom checks pass" {
     try std.testing.expectEqual(@as(u16, 200), pr.status);
     try std.testing.expect(std.mem.indexOf(u8, pr.body, "UP") != null);
     try std.testing.expect(std.mem.indexOf(u8, pr.body, "cache") != null);
+}
+
+test "app: startup probe reports 503 before ready and 200 after" {
+    const t = httpz.testing;
+
+    var c: root.container = .{ .allocator = std.testing.allocator };
+    c.appName = "demo";
+    c.appVersion = "9.9";
+    // `started` defaults to false; the container above did not call App.run().
+    try std.testing.expectEqual(false, c.started.load(.monotonic));
+
+    // Before ready: fresh testing context so the response buffer is clean.
+    {
+        var testing = t.init(.{});
+        defer testing.deinit();
+        var ctx: Context = undefined;
+        ctx.allocator = testing.arena;
+        ctx.container = &c;
+        ctx.request = testing.req;
+        ctx.response = testing.res;
+
+        try startup(&ctx);
+        const pr = try testing.parseResponse();
+        try std.testing.expectEqual(@as(u16, 503), pr.status);
+        try std.testing.expect(std.mem.indexOf(u8, pr.body, "DOWN") != null);
+    }
+
+    // Simulate App.run() having finished wiring and the server listening.
+    c.started.store(true, .monotonic);
+    {
+        var testing = t.init(.{});
+        defer testing.deinit();
+        var ctx: Context = undefined;
+        ctx.allocator = testing.arena;
+        ctx.container = &c;
+        ctx.request = testing.req;
+        ctx.response = testing.res;
+
+        try startup(&ctx);
+        const pr = try testing.parseResponse();
+        try std.testing.expectEqual(@as(u16, 200), pr.status);
+        try std.testing.expect(std.mem.indexOf(u8, pr.body, "UP") != null);
+    }
 }

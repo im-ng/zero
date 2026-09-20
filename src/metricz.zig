@@ -208,8 +208,8 @@ pub fn response(self: *Self, labels: AppHttpResponseLatencyLabel, value: f32) !v
     return self.ResponseBucket.observe(labels, value);
 }
 
-pub fn responseHits(self: *Self, labels: AppHttpResponseHitLabel) !void {
-    return self.ResponseBucketHits.incr(labels);
+pub fn responseHits(self: *Self, labels: AppHttpResponseHitLabel, count: ?u64) !void {
+    return self.ResponseBucketHits.incrBy(labels, count orelse 1);
 }
 
 pub fn clientResponse(self: *Self, labels: ServiceResponseLabel, value: f32) !void {

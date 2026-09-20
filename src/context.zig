@@ -1,5 +1,6 @@
 const std = @import("std");
 const root = @import("zero.zig");
+const otel = root.otel;
 const httpz = root.httpz;
 const zeroClient = root.client;
 const pubSub = root.MQTT;
@@ -41,6 +42,10 @@ pub const Context = struct {
     /// CLI command parameters parsed from argv (e.g. `--name John` -> "John").
     params: std.StringHashMap([]const u8) = undefined,
 
+    /// Active OpenTelemetry span for this request (set by the `tracz` middleware
+    /// before dispatch). Null when OTEL_EXPERIMENTAL is off or outside a request.
+    otel_span: ?otel.ActiveSpan = null,
+
     /// initialize context
     pub fn init(
         allocator: std.mem.Allocator,
@@ -56,7 +61,17 @@ pub const Context = struct {
             .response = res,
         };
 
-        if (container.SQL != null or container.SQLite != null or container.DuckDB != null) {
+        if (container.SQL != null) {
+            // Postgres/MySQL: hand each request its own session that borrows the
+            // shared (thread-safe) connection pool but isolates transaction_conn
+            // /lastId/rows so concurrent requests can't share a transaction or
+            // clobber each other's last-insert-id.
+            const session = try root.SQL.createSession(allocator, container.SQL.?);
+            c.SQL = root.Datasource.init(session, .postgres, container.datasource.breaker);
+        } else if (container.SQLite != null or container.DuckDB != null) {
+            // SQLite/DuckDB backends reuse a single shared connection; the
+            // per-request session does not apply (see ZIG_LEARNINGS.md — their
+            // single-connection concurrency is a separate, documented limitation).
             c.SQL = container.datasource;
         }
 
@@ -95,6 +110,8 @@ pub const Context = struct {
         if (container.pubSub) |ps| {
             c.pubsub = ps;
         }
+
+        c.otel_span = otel.currentSpan();
 
         return c;
     }
@@ -195,6 +212,24 @@ pub const Context = struct {
         return self.request.headers.get("X-Correlation-ID");
     }
 
+    /// Returns the active OpenTelemetry span handle for this request, or null when
+    /// OTEL_EXPERIMENTAL is off or outside a request context.
+    pub fn span(self: *Context) ?otel.ActiveSpan {
+        return self.otel_span;
+    }
+
+    /// Start a child span parented to the active request span. Returns the span
+    /// (or null when OTel is disabled). Caller must `defer span.deinit()` and
+    /// call `ctx.endSpan(&span)` when the work completes.
+    pub fn startChildSpan(self: *Context, name: []const u8) !?otel.Span {
+        return self.container.otel.startChildSpan(self.allocator, name, .Internal);
+    }
+
+    /// End a span started via `startChildSpan` (runs processors/exporters).
+    pub fn endSpan(self: *Context, sp: *otel.Span) void {
+        self.container.otel.endSpan(sp);
+    }
+
     /// returns basic auth username claim
     pub fn getUsername(self: *Context) !?[]const u8 {
         return try self.container.authProvider.retrieveUserName(
@@ -257,7 +292,7 @@ pub const Context = struct {
         var reader = file.reader(self.io, &rbuf);
         const data = try reader.interface.allocRemainingAlignedSentinel(
             self.allocator,
-            std.Io.Limit.limited(100 * 1024 * 1024),
+            std.Io.Limit.limited(constants.DEFAULT_REQUEST_BODY_LIMIT_BYTES),
             std.mem.Alignment.@"1",
             null,
         );

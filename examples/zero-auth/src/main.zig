@@ -41,7 +41,26 @@ pub fn main(init: std.process.Init) !void {
 
     try app.get("/json", jsonResponse);
 
+    // RBAC-protected endpoints demonstrating the endpoint-rule format.
+    //   GET  /api/resource -> requires the USER role
+    //   POST /api/resource -> requires the ADMIN role
+    // Roles come from the `role` claim of an authenticated request (OAuth/JWT).
+    try app.get("/api/resource", getResource);
+    try app.post("/api/resource", postResource);
+
+    // Load RBAC rules from the RBAC_CONFIG env var (endpoint-rule JSON only).
+    // A no-op when RBAC_CONFIG is empty, so the rest of the app stays public.
+    try app.rbacFromEnv();
+
     try app.run();
+}
+
+fn getResource(ctx: *Context) !void {
+    try ctx.json(.{ .msg = "resource read (USER)" });
+}
+
+fn postResource(ctx: *Context) !void {
+    try ctx.json(.{ .msg = "resource written (ADMIN)" });
 }
 
 fn jsonResponse(ctx: *Context) !void {

@@ -133,7 +133,7 @@ pub fn destroy(self: *Self) void {
     // Only producers have pending messages to flush; flushing a consumer
     // returns "Not implemented" and is meaningless here.
     if (self.kafkaMode != root.rdkafka.RD_KAFKA_CONSUMER) {
-        const err_code: c_int = rdkafka.rd_kafka_flush(self.client, 60_000);
+        const err_code: c_int = rdkafka.rd_kafka_flush(self.client, constants.DEFAULT_KAFKA_FLUSH_MS);
         if (err_code != rdkafka.RD_KAFKA_RESP_ERR_NO_ERROR) {
             const msg = utils.combine(
                 self.container.allocator,
@@ -289,8 +289,8 @@ pub fn readPayload(self: *Self, subscriber: kafkaSubscriber) !void {
             // Retry the handler a few times; on a poison message, dead-letter it to
             // `<topic>__dlq` before committing the offset so it isn't silently lost.
             var attempt: u32 = 0;
-            const max_attempts: u32 = 3;
-            const backoff_ms: i64 = 500;
+            const max_attempts: u32 = constants.DEFAULT_PUBSUB_MAX_ATTEMPTS;
+            const backoff_ms: i64 = constants.DEFAULT_PUBSUB_BACKOFF_MS;
             while (attempt < max_attempts) : (attempt += 1) {
                 subscriber.exec(context) catch |err| {
                     self.container.log.Any(self.container.allocator, err);

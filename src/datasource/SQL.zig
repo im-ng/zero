@@ -1,6 +1,7 @@
 const std = @import("std");
 const root = @import("../zero.zig");
 const utils = root.utils;
+const constants = root.constants;
 const SQL = @This();
 const Self = @This();
 
@@ -23,7 +24,7 @@ rows: usize = 0,
     // of writes can be wrapped in one transaction (see begin/commit/rollback).
     transaction_conn: ?*pgz.Conn = null,
     /// Per-statement timeout (ms) applied to every query/exec. null = no timeout.
-    statement_timeout_ms: ?u32 = 30000,
+    statement_timeout_ms: ?u32 = constants.DEFAULT_STATEMENT_TIMEOUT_MS,
 
 // is this neccessary?
 pub const dbConfig = struct {
@@ -47,6 +48,29 @@ pub fn create(allocator: std.mem.Allocator, c: *dbConfig, l: *root.logger, m: *r
     return source;
 }
 
+/// Build a per-request session that borrows the shared connection `Pool` but
+/// keeps its own transaction/last-id/rows state. This is what `Context.init`
+/// hands to each HTTP request so that concurrent requests never share a
+/// transaction connection or clobber each other's `lastId`/`rows`
+/// (see `transaction_conn`/`lastId`/`rows` on this struct). The returned pointer
+/// is request-scoped and is freed when the request arena is reset.
+pub fn createSession(allocator: std.mem.Allocator, shared: *SQL) !*SQL {
+    const session = try allocator.create(SQL);
+    session.* = SQL{
+        .sql = shared.sql,
+        .log = shared.log,
+        .metricz = shared.metricz,
+        .config = shared.config,
+        .options = shared.options,
+        .allocator = shared.allocator,
+        .lastId = 0,
+        .rows = 0,
+        .transaction_conn = null,
+        .statement_timeout_ms = shared.statement_timeout_ms,
+    };
+    return session;
+}
+
 pub fn Dialect(self: *Self) []const u8 {
     return self.config.dialect;
 }
@@ -58,11 +82,11 @@ pub fn recordMetrics(self: *Self, duration: f32, query: []const u8, queryType: [
         .{
             .hostname = "",
             .database = "",
-            .query = "",
-            .operation = "",
-        },
+        .query = "",
+        .operation = "",
+    },
         duration,
-    ) catch unreachable;
+    ) catch {};
 }
 
 pub fn queryRowContext(self: *Self, ctx: *context, comptime Type: type, comptime query: []const u8, args: anytype) !?Type {

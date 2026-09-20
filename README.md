@@ -25,10 +25,10 @@
 
 **One binary. No GC. Build config-driven microservices in Zig.**
 
-**Zero** is a batteries-included web framework for [Zig](https://ziglang.org) that wires REST, SQL, NoSQL, cache, pub/sub, auth, GraphQL, Protobuf, search, metrics and tracing into a single static binary and configured almost entirely through `.env`.
+**Zero** is a batteries-included web framework for [Zig](https://ziglang.org). It wires REST, SQL, NoSQL, cache, pub/sub, auth, GraphQL, Protobuf, search, metrics, and tracing into one static binary, and you configure almost everything through `.env`.
 
 - **Zero boilerplate** — databases, queues, auth and observability plug in with no glue code.
-- **One static binary** — ~16–65 MiB RSS, no runtime, ships anywhere (including Kubernetes).
+- **One static binary** — ~16–65 MiB RSS, no managed runtime, ships anywhere (including Kubernetes).
 - **Observable by default** — structured JSON logs, Prometheus metrics, distributed tracing and health endpoints from the first request.
 - **Fast and small** — tens of thousands of requests/sec at ~50 MiB RSS, no GC pauses, no JIT warm-up.
 
@@ -67,13 +67,13 @@ zig build run
 curl localhost:8080/json   # => {"msg":"hello zero!"}
 ```
 
-That's the whole app. Everything else - Postgres, Redis, Kafka, auth, metrics, is opt-in through configuration.
+That's the whole app. Everything else — Postgres, Redis, Kafka, auth, and metrics — is opt-in through configuration.
 
 Full walkthrough in [Hello Zero](https://zerofmk.in/hello-zero) and [Getting Started](https://zerofmk.in/started).
 
 ## Why Zero?
 
-If you want Go's ergonomics without its runtime, or Node's speed without its footprint, Zero gives you a strongly-opinionated Zig framework: explicit memory, a single binary, and the microservice building blocks you'd otherwise wire together by hand.
+If you want Go's ergonomics without its runtime, or Node's speed without its footprint, Zero is a strongly-opinionated Zig framework. You get explicit memory control, a single binary, and the microservice building blocks you'd otherwise wire together by hand.
 
 Start with [Getting Started](https://zerofmk.in/started) or jump straight to the [Examples](https://zerofmk.in/examples).
 
@@ -105,7 +105,7 @@ See [feature parity](https://zerofmk.in/parity) for the full roadmap.
 
 Recent additions (full detail on [zerofmk.in](https://zerofmk.in)):
 
-- **Zig 0.16 + `std.Io` injection** — `App.new(allocator, io, em)` threads the process I/O reactor through `container`/`Context`; tests are consolidated at each file's end. See [Migrating to 0.16](https://zerofmk.in/migrating-0.16).
+- **Zig 0.16 + `std.Io` injection** — `App.new(allocator, io, em)` routes the process I/O reactor through `container`/`Context`; tests now live at the end of each file. See [Migrating to 0.16](https://zerofmk.in/migrating-0.16).
 
 - **DuckDB in-process OLAP** — register an embedded SQL engine with `app.addDuckDB(":memory:")`, no external service. See [DuckDB](https://zerofmk.in/duckdb).
 
@@ -125,9 +125,9 @@ Recent additions (full detail on [zerofmk.in](https://zerofmk.in)):
 - **Bootstrap arena** — Pre-allocated memory for framework bootstrap (bounded RSS). See [Architecture](https://zerofmk.in/architecture).
 
 - **Outbound rate limiting & REST handlers** — per-service rate limits and struct-model REST handlers for external services. See [Rate Limiter](https://zerofmk.in/rate-limiter) and [REST Handler](https://zerofmk.in/rest-handler).
-- **Resilience** — circuit breakers, request timeouts/bulkheads, and pub/sub reconnect + dead-letter. See [Resilience](https://zerofmk.in/resilience).
+- **Resilience** — circuit breakers, request timeouts and bulkheads, and pub/sub reconnect with dead-letter. See [Resilience](https://zerofmk.in/resilience).
 
-- **Observability** — distributed tracing and structured metrics/tracing wired in from the first request. See [Observability](https://zerofmk.in/observability).
+- **Observability** — distributed tracing and structured metrics wired in from the first request. See [Observability](https://zerofmk.in/observability).
 
 - **Benchmarks in CI** — reproducible throughput/latency/RSS runs. See [Benchmark](https://zerofmk.in/benchmark).
 
@@ -208,7 +208,7 @@ The complete list of keys (Redis, DuckDB, InfluxDB, Solr, Cassandra, Kafka, MQTT
 
 ## Resilience
 
-Resilience is configured, not coded. Request timeouts/bulkheads, datasource circuit breakers, pub/sub auto-reconnect with dead-letter, and structured logging are all on by default or via env. For outbound services you can also set limits explicitly:
+Resilience is configured, not coded. Request timeouts and bulkheads, datasource circuit breakers, pub/sub auto-reconnect with dead-letter, and structured logging are all on by default or set through env. For outbound services, you can also set limits explicitly:
 
 ```zig
 var svc_opts: zero.client.ServiceOptions = .{};
@@ -231,7 +231,7 @@ See [Observability](https://zerofmk.in/observability)
 
 ## Data & Stores
 
-Attach a datastore with one call; `ctx.SQL`, `ctx.KV`, `ctx.FileStore` light up automatically.
+Attach a datastore with one call; `ctx.SQL`, `ctx.KV`, `ctx.FileStore` become available automatically.
 
 ```zig
 // In-process OLAP SQL — no external service required.

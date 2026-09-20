@@ -58,6 +58,7 @@ pub const AuthError = error{
     MissingAuthHeader,
     InvalidAuthKeyHeader,
     InvalidAuthAPIHeader,
+    InvalidCredentials,
     NoSpaceLeft,
     OutOfMemory,
     InvalidCharacter,
@@ -70,6 +71,15 @@ const codecs = std.base64.standard;
 const Decoder = codecs.Decoder;
 const ClientResponse = root.zul.http.client;
 
+/// Constant-time equality for two byte slices (content; length must match).
+/// Avoids leaking the secret via timing side-channels.
+fn constTimeEql(a: []const u8, b: []const u8) bool {
+    if (a.len != b.len) return false;
+    var diff: u8 = 0;
+    for (a, b) |x, y| diff |= x ^ y;
+    return diff == 0;
+}
+
 mode: AuthMode,
 container: *root.container,
 keys: std.StringHashMap([]const u8) = undefined,
@@ -77,8 +87,15 @@ pubKeys: std.StringHashMap(publiKey) = undefined,
 refreshThread: std.Thread = undefined,
 mutex: std.Io.Mutex = undefined,
 
-refreshInterval: i16 = 60, // seconds
-pathUrl: []const u8 = undefined,
+    refreshInterval: i16 = 60, // seconds
+    pathUrl: []const u8 = undefined,
+
+    /// When set, OAuth tokens must carry this `aud` (audience) claim. Optional so
+    /// existing deployments without it are unaffected. Wired from `OAUTH_AUDIENCE`.
+    expected_audience: ?[]const u8 = null,
+    /// When set, OAuth tokens must be issued by this `iss` (issuer). Optional.
+    /// Wired from `OAUTH_ISSUER`.
+    expected_issuer: ?[]const u8 = null,
 
 pub fn create(c: *root.container, m: AuthMode) anyerror!*AuthProvider {
     const auth = try c.allocator.create(AuthProvider);
@@ -88,7 +105,6 @@ pub fn create(c: *root.container, m: AuthMode) anyerror!*AuthProvider {
 }
 
 pub fn validateBasicAuth(self: *Self, allocator: std.mem.Allocator, authHeader: []const u8) AuthError!void {
-    _ = allocator;
     var values = std.mem.splitAny(u8, authHeader, " ");
 
     var header: []const u8 = undefined;
@@ -108,15 +124,11 @@ pub fn validateBasicAuth(self: *Self, allocator: std.mem.Allocator, authHeader: 
         return AuthError.InvalidAuthToken;
     }
 
-    self.container.log.info(token);
-    self.container.log.any(token.len);
-
     const size = try Decoder.calcSizeForSlice(token);
-    self.container.log.any(size);
 
     var decoded: []u8 = undefined;
-    decoded = try self.container.allocator.alloc(u8, size);
-    defer self.container.allocator.free(decoded);
+    decoded = try allocator.alloc(u8, size);
+    defer allocator.free(decoded);
     try Decoder.decode(decoded, token);
 
     values = std.mem.splitAny(u8, decoded, ":");
@@ -139,17 +151,16 @@ pub fn validateBasicAuth(self: *Self, allocator: std.mem.Allocator, authHeader: 
 
     const storedValue = self.keys.get(headerKey);
     if (storedValue) |value| {
-        if (std.mem.eql(u8, value, headerPassword)) {
+        // Constant-time comparison to avoid leaking the password via timing.
+        if (constTimeEql(value, headerPassword)) {
             return;
         }
     }
 
-    // auth key matched
-    return;
+    return AuthError.InvalidCredentials;
 }
 
-pub fn validateAPIKeyAuth(self: *Self, allocator: std.mem.Allocator, authHeader: []const u8) AuthError!void {
-    _ = allocator;
+pub fn validateAPIKeyAuth(self: *Self, _: std.mem.Allocator, authHeader: []const u8) AuthError!void {
     var values = std.mem.splitAny(u8, authHeader, " ");
 
     var header: []const u8 = undefined;
@@ -248,6 +259,25 @@ pub fn validateOAuthToken(self: *Self, allocator: std.mem.Allocator, authHeader:
     // validator.isMinimumTimeBefore(now) // nbf, now is time timestamp
     if (validator.isExpired(now)) {
         return AuthError.TokenInvalidClaims;
+    }
+
+    // Enforce not-before (nbf): reject tokens that are not yet valid. Safe to
+    // always enforce — the validator treats a missing nbf claim as valid.
+    if (!validator.isMinimumTimeBefore(now)) {
+        return AuthError.TokenInvalidClaims;
+    }
+
+    // Enforce audience / issuer only when explicitly configured, so existing
+    // deployments that don't set them are unaffected.
+    if (self.expected_audience) |aud| {
+        if (!validator.isPermittedFor(&[_][]const u8{aud})) {
+            return AuthError.TokenInvalidClaims;
+        }
+    }
+    if (self.expected_issuer) |iss| {
+        if (!validator.hasBeenIssuedBy(&[_][]const u8{iss})) {
+            return AuthError.TokenInvalidClaims;
+        }
     }
 
     return;
@@ -381,4 +411,44 @@ test "validateAPIKeyAuth accepts known API key" {
 
     _ = try auth.validateAPIKeyAuth(allocator, "ApiKey my-api-key");
     try std.testing.expect(1 == 1);
+}
+
+test "validateBasicAuth rejects wrong password" {
+    const allocator = std.testing.allocator;
+    var keys = std.StringHashMap([]const u8).init(allocator);
+    defer keys.deinit();
+    try keys.put("user", "correct");
+
+    var auth = AuthProvider{
+        .mode = AuthMode.Basic,
+        .container = undefined,
+        .keys = keys,
+    };
+
+    var buf: [64]u8 = undefined;
+    const enc = std.base64.standard.Encoder.encode(&buf, "user:wrong");
+    const header = try std.fmt.allocPrint(allocator, "Basic {s}", .{enc});
+    defer allocator.free(header);
+
+    try std.testing.expectError(AuthError.InvalidCredentials, auth.validateBasicAuth(allocator, header));
+}
+
+test "validateBasicAuth accepts correct password" {
+    const allocator = std.testing.allocator;
+    var keys = std.StringHashMap([]const u8).init(allocator);
+    defer keys.deinit();
+    try keys.put("user", "correct");
+
+    var auth = AuthProvider{
+        .mode = AuthMode.Basic,
+        .container = undefined,
+        .keys = keys,
+    };
+
+    var buf: [64]u8 = undefined;
+    const enc = std.base64.standard.Encoder.encode(&buf, "user:correct");
+    const header = try std.fmt.allocPrint(allocator, "Basic {s}", .{enc});
+    defer allocator.free(header);
+
+    try auth.validateBasicAuth(allocator, header);
 }

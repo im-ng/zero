@@ -158,8 +158,8 @@ fn dispatch(self: *Self, subject: []const u8, payload: []const u8, hook: *const 
     // Retry the handler a few times; on a poison message, dead-letter it to
     // `<subject>.dlq`.
     var attempt: u32 = 0;
-    const max_attempts: u32 = 3;
-    const backoff_ms: i64 = 500;
+    const max_attempts: u32 = constants.DEFAULT_PUBSUB_MAX_ATTEMPTS;
+    const backoff_ms: i64 = constants.DEFAULT_PUBSUB_BACKOFF_MS;
     while (attempt < max_attempts) : (attempt += 1) {
         hook(context) catch |err| {
             self.container.log.Any(self.allocator, err);

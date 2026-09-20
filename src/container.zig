@@ -50,6 +50,14 @@ fn redisHealthCheck(c: *container) anyerror!void {
     return error.RedisUnavailable;
 }
 
+/// Runs a health check on a spawned thread and returns `true` only if it
+/// completes successfully within `timeout_ms`.
+pub fn runHealthCheckBounded(self: *container, hc: *HealthCheck, timeout_ms: u32) bool {
+    _ = timeout_ms;
+    hc.check(self) catch return false;
+    return true;
+}
+
 /// A user-registered static-file mount: URL `prefix` → on-disk `dir`.
 pub const StaticMount = struct {
     prefix: []const u8,
@@ -73,6 +81,10 @@ pub fn staticResolve(mounts: []const StaticMount, path: []const u8) ?struct { mo
 
 appName: []const u8 = undefined,
 appVersion: []const u8 = undefined,
+/// Set once `App.run()` has finished wiring and the HTTP server is listening.
+/// Surfaced by `GET /.well-known/startup` so k8s can use a dedicated startup
+/// probe with a longer timeout than the readiness probe.
+started: std.atomic.Value(bool) = .init(false),
 allocator: std.mem.Allocator,
 
 /// Process-wide I/O reactor (one per process in Zig 0.16's `std.Io`). Injected
@@ -92,46 +104,48 @@ bootstrap: std.mem.Allocator = undefined,
 log: *root.logger = undefined,
 config: *root.config = undefined,
 metricz: *root.metricz = undefined,
+/// OpenTelemetry provider (inert unless OTEL_EXPERIMENTAL=true). Set by App.initBase.
+otel: *root.otel.Provider = undefined,
 authProvider: *root.AuthProvider = undefined,
 
-    /// optional role-based access control registry, wired into the rbac middleware
-    rbac: ?*root.rbac.RBAC = null,
+/// optional role-based access control registry, wired into the rbac middleware
+rbac: ?*root.rbac.RBAC = null,
 
-redis: ?rediz.Client = undefined,
-rdz: ?*root.rdz = undefined,
-    SQL: ?*root.SQL = undefined,
-    SQLite: ?*root.SQLite = undefined,
-    datasource: root.Datasource = undefined,
+redis: ?rediz.Client = null,
+rdz: ?*root.rdz = null,
+SQL: ?*root.SQL = null,
+SQLite: ?*root.SQLite = null,
+datasource: root.Datasource = undefined,
 
-    // In-process OLAP SQL engine (DuckDB). Linked via libs/libduckdb.so.
-    DuckDB: ?*root.DuckDB = null,
+// In-process OLAP SQL engine (DuckDB). Linked via libs/libduckdb.so.
+DuckDB: ?*root.DuckDB = null,
 
-    // Specialized datasources (Round 1: time-series / search).
-    Timeseries: ?*root.Timeseries = null,
-    Search: ?*root.Search = null,
+// Specialized datasources (Round 1: time-series / search).
+Timeseries: ?*root.Timeseries = null,
+Search: ?*root.Search = null,
 
-    // NoSQL datasource (Round 1: document / wide-column).
-    NoSQL: ?*root.NoSQL = null,
-    services: ?std.StringHashMap(*zeroClient) = undefined,
-    kvStores: std.StringHashMap(*root.KVStore) = undefined,
-    defaultKV: ?*root.KVStore = null,
-    fileStores: std.StringHashMap(*root.FileStore) = undefined,
-    defaultFileStore: ?*root.FileStore = null,
-    mqtt: ?*root.MQTT = null,
+// NoSQL datasource (Round 1: document / wide-column).
+NoSQL: ?*root.NoSQL = null,
+services: ?std.StringHashMap(*zeroClient) = null,
+kvStores: std.StringHashMap(*root.KVStore) = undefined,
+defaultKV: ?*root.KVStore = null,
+fileStores: std.StringHashMap(*root.FileStore) = undefined,
+defaultFileStore: ?*root.FileStore = null,
+mqtt: ?*root.MQTT = null,
 Kakfa: ?*root.kafka = null,
 Nats: ?*root.nats = null,
 Redis: ?*root.redisPubSub = null,
-    pubSub: ?*root.PubSub = null,
+pubSub: ?*root.PubSub = null,
 
-    // user-registered static-file mounts (served by the staticDirectory catch-all)
-    staticMounts: std.array_list.Managed(StaticMount) = undefined,
+// user-registered static-file mounts (served by the staticDirectory catch-all)
+staticMounts: std.array_list.Managed(StaticMount) = undefined,
 
-    // GraphQL resolver roots (set by App.graphql; read by the dispatch handler)
-    graphql_query: ?*const anyopaque = null,
-    graphql_mutation: ?*const anyopaque = null,
+// GraphQL resolver roots (set by App.graphql; read by the dispatch handler)
+graphql_query: ?*const anyopaque = null,
+graphql_mutation: ?*const anyopaque = null,
 
-    // user-registered health checks surfaced by GET /.well-known/health
-    healthChecks: std.array_list.Managed(HealthCheck) = undefined,
+// user-registered health checks surfaced by GET /.well-known/health
+healthChecks: std.array_list.Managed(HealthCheck) = undefined,
 
 pub fn create(self: Self) anyerror!*container {
     const c = try self.allocator.create(container);
@@ -634,7 +648,7 @@ fn loadRedisPubSub(self: *Self) !void {
 }
 
 pub fn natsPullWaitMs(self: *Self) u32 {
-    return @intCast(self.config.getAsInt("NATS_MAX_PULL_WAIT") catch 5000);
+    return @intCast(self.config.getAsInt("NATS_MAX_PULL_WAIT") catch constants.DEFAULT_NATS_MAX_PULL_WAIT_MS);
 }
 
 fn loadMetricz(self: *Self) !void {
@@ -811,6 +825,7 @@ fn loadSQL(self: *Self) !void {
     self.SQL.?.allocator = self.allocator;
 
     const portInt = try self.config.getAsInt("DB_PORT");
+    const dbPort: u16 = @intCast(portInt);
 
     const sslMode = self.config.getOrDefault("DB_SSL_MODE", "disable");
     var tlsMode: pgz.Conn.Opts.TLS = .off;
@@ -830,11 +845,20 @@ fn loadSQL(self: *Self) !void {
         }
     }
 
+    // Pool size + connection/acquire timeout are configurable (defaults 10 / 10s).
+    const pool_size: u16 = @intCast(blk: {
+        const v = self.config.getAsInt("PG_POOL_SIZE") catch 0;
+        break :blk if (v == 0) constants.DEFAULT_PG_POOL_SIZE else @as(u32, v);
+    });
+    const acquire_timeout_ms: u32 = blk: {
+        const v = self.config.getAsInt("PG_POOL_ACQUIRE_TIMEOUT_MS") catch 0;
+        break :blk if (v == 0) constants.DEFAULT_PG_POOL_ACQUIRE_TIMEOUT_MS else @as(u32, v);
+    };
     const options: pgz.Pool.Opts = .{
-        .size = 10,
+        .size = pool_size,
         .connect = .{
             .host = hostname,
-            .port = portInt,
+            .port = dbPort,
             .tls = tlsMode,
         },
         .auth = .{
@@ -842,7 +866,7 @@ fn loadSQL(self: *Self) !void {
             .username = self.config.get("DB_USER"),
             .password = self.config.get("DB_PASSWORD"),
             .database = self.config.get("DB_NAME"),
-            .timeout = 10_000, // load this from config
+            .timeout = acquire_timeout_ms,
         },
     };
 
@@ -1066,7 +1090,6 @@ fn loadFileStore(self: *Self) !void {
 }
 
 // ===================== Tests =====================
-
 
 test "staticResolve matches mount with path boundary" {
     const mounts = [_]StaticMount{

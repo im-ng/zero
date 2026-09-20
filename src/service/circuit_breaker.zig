@@ -1,10 +1,11 @@
 const std = @import("std");
 const utils = @import("../utils.zig");
+const constants = @import("../constants.zig");
 
 pub const CircuitBreakerConfig = struct {
-    failure_threshold: u32 = 5,
-    cooldown_ms: u64 = 30_000,
-    half_open_trials: u32 = 1,
+    failure_threshold: u32 = constants.DEFAULT_CB_FAILURE_THRESHOLD,
+    cooldown_ms: u64 = constants.DEFAULT_CB_COOLDOWN_MS,
+    half_open_trials: u32 = constants.DEFAULT_CB_HALF_OPEN_TRIALS,
 };
 
 pub const CircuitState = enum {

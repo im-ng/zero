@@ -1,6 +1,6 @@
 .{
     .name = .zero,
-    .version = "0.0.2",
+    .version = "0.5.1",
     .fingerprint = 0xabdef192c03b44cb,
     .minimum_zig_version = "0.16.0",
     .dependencies = .{
@@ -65,6 +65,15 @@
         .graphql = .{
             .url = "git+https://github.com/im-ng/graphql-zig#92ea2176b6f1945bde6acf35af0f9ca3ff770af3",
             .hash = "graphql-0.2.0-13OEDvCaAgCb8FLxnOIW_63Zn8Yu-UVyLbZYP7R8g6MD",
+        },
+        // OpenTelemetry SDK (alpha, tracks main). Gated behind OTEL_EXPERIMENTAL
+        // in config; see src/otel.zig. Tracks a pinned commit for reproducibility.
+        // .opentelemetry = .{
+        //     .path = "../opentelemetry-zig",
+        // },
+        .opentelemetry = .{
+            .url = "git+https://github.com/im-ng/opentelemetry-zig.git#928f309694b0dc8ee02c45b4067b96f3d9cc01fd",
+            .hash = "opentelemetry-0.0.1-U_uKJ8NrIwD5nbZmmLowE41NMPGhiwKQ1sCb3K3L-0lV",
         },
     },
     .paths = .{

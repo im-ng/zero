@@ -9,7 +9,13 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("src/zero.zig"),
         .target = target,
         .optimize = optimize,
+        .link_libc = true,
     });
+
+    // OpenTelemetry SDK (alpha). The `sdk` module links libc itself; we also set
+    // link_libc on the zero module so every consumer artifact links libc too.
+    const opentelemetry = b.dependency("opentelemetry", .{});
+    module.addImport("opentelemetry-sdk", opentelemetry.module("sdk"));
 
     // // `protobuf` is re-exported by `zero` (the generated `*.pb.zig` structs do
     // // `@import("zero").protobuf`). It must be wired into the module so the
@@ -79,6 +85,7 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("src/tests.zig"),
         .target = target,
         .optimize = optimize,
+        .link_libc = true,
     });
     test_module.addImport("pg", pgz.module("pg"));
     test_module.addImport("httpz", httpz.module("httpz"));
@@ -93,6 +100,7 @@ pub fn build(b: *std.Build) void {
     test_module.addImport("nats", nats.module("nats"));
     test_module.addImport("protobuf", protobuf.module("protobuf"));
     test_module.addImport("graphql", graphql.module("graphql"));
+    test_module.addImport("opentelemetry-sdk", opentelemetry.module("sdk"));
     test_module.addImport("zero", module);
 
     if (builtin.os.tag == .macos) {
@@ -116,6 +124,7 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("src/tests_integration.zig"),
         .target = target,
         .optimize = optimize,
+        .link_libc = true,
     });
     integration_module.addImport("pg", pgz.module("pg"));
     integration_module.addImport("httpz", httpz.module("httpz"));
@@ -130,6 +139,7 @@ pub fn build(b: *std.Build) void {
     integration_module.addImport("nats", nats.module("nats"));
     integration_module.addImport("protobuf", protobuf.module("protobuf"));
     integration_module.addImport("graphql", graphql.module("graphql"));
+    integration_module.addImport("opentelemetry-sdk", opentelemetry.module("sdk"));
     integration_module.addImport("zero", module);
 
     if (builtin.os.tag == .macos) {
@@ -157,6 +167,7 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("src/tests_validation.zig"),
         .target = target,
         .optimize = optimize,
+        .link_libc = true,
     });
     validation_module.addImport("pg", pgz.module("pg"));
     validation_module.addImport("httpz", httpz.module("httpz"));
@@ -171,6 +182,7 @@ pub fn build(b: *std.Build) void {
     validation_module.addImport("nats", nats.module("nats"));
     validation_module.addImport("protobuf", protobuf.module("protobuf"));
     validation_module.addImport("graphql", graphql.module("graphql"));
+    validation_module.addImport("opentelemetry-sdk", opentelemetry.module("sdk"));
     validation_module.addImport("zero", module);
 
     if (builtin.os.tag == .macos) {
@@ -201,6 +213,7 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("src/bench/main.zig"),
         .target = target,
         .optimize = optimize,
+        .link_libc = true,
     });
     bench_module.addImport("pg", pgz.module("pg"));
     bench_module.addImport("httpz", httpz.module("httpz"));
@@ -214,6 +227,7 @@ pub fn build(b: *std.Build) void {
     bench_module.addImport("sqlite", sqlite.module("sqlite"));
     bench_module.addImport("nats", nats.module("nats"));
     bench_module.addImport("graphql", graphql.module("graphql"));
+    bench_module.addImport("opentelemetry-sdk", opentelemetry.module("sdk"));
     bench_module.addImport("zero", module);
 
     if (builtin.os.tag == .macos) {
@@ -261,6 +275,11 @@ pub fn build(b: *std.Build) void {
         .name = "zero",
         .root_module = module,
     });
+    const install_zero = b.addInstallArtifact(binary, .{});
+    const zero_step = b.step("zero", "Build the zero CLI (./zig-out/bin/zero)");
+    zero_step.dependOn(&install_zero.step);
+    // `zig build` (the default step) also produces the zero CLI.
+    b.getInstallStep().dependOn(&install_zero.step);
 
     // Protobuf code generation. `zig build gen-proto` compiles .proto files in
     // `proto/` into Zig structs under `src/proto/`. The first run downloads
@@ -278,12 +297,4 @@ pub fn build(b: *std.Build) void {
         },
     });
     gen_proto.dependOn(&protoc_step.step);
-
-    if (b.option(
-        bool,
-        "install-zero",
-        "install zero cli",
-    ) orelse false) {
-        b.installArtifact(binary);
-    }
 }

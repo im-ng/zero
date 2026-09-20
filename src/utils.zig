@@ -51,10 +51,6 @@ pub fn toStringFromInt(allocator: std.mem.Allocator, comptime format: []const u8
     return buffer;
 }
 
-/// Resolved log timezone, cached for the process lifetime. `null` means "not
-/// yet resolved" — `logTimezone()` then falls back to the system local zone, and
-/// ultimately to UTC. A `Timezone` built with a `null` allocator uses the fixed
-/// size `tzif` structure (no heap), so caching it here leaks nothing.
 var log_tz: ?root.zdt.Timezone = null;
 
 /// Set the timezone used for log timestamps from `ZERO_LOG_TIMEZONE`:
@@ -128,9 +124,7 @@ pub fn toCString(allocator: std.mem.Allocator, value: []const u8) [*c]const u8 {
     return @constCast(buffer.ptr);
 }
 
-
 // ===================== Tests =====================
-
 
 test "combine produces correct output" {
     const allocator = std.heap.page_allocator;

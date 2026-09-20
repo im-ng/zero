@@ -36,6 +36,7 @@ pub fn main(init: std.process.Init) !void {
     try app.SubCommand("greet", greet, .{ .description = "print a greeting (pass --name <who>)" });
 
     try app.runCmd(init.minimal.args);
+    if (gpa.detectLeaks() > 0) std.process.exit(1);
 }
 
 fn ensureSchema(ctx: *Context) !void {

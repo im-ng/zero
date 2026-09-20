@@ -1,8 +1,16 @@
 # AGENTS.md
 
+## Communication style
+
+When presenting changes, summaries, or any explanation to the user, follow `writing-style-guide.md`.
+- Simplify the language, not the technical idea.
+- Use short, active, spoken-style sentences.
+- Show the concrete case before the general rule.
+- No marketing, hype, filler, or unnecessary summaries.
+
 ## Toolchain
 
-- **Zig 0.15.2** minimum, pinned in `build.zig.zon`
+- **Zig 0.16.0** minimum, pinned in `build.zig.zon`
 - Requires `librdkafka-dev` (`apt install librdkafka-dev` / `brew install librdkafka`)
 - On macOS, `build.zig` hardcodes `/usr/local/Cellar/librdkafka/2.13.0` include/lib paths
 - **Always `rm -rf .zig-cache zig-out zig-pkg/` before switching Zig versions** — stale cache causes build failures and runtime corruption
@@ -139,6 +147,6 @@ These are used consistently across the codebase and must be referenced as-is:
 | 0.15.2 | Yes | 52/52 (7 leaks) | **Broken** | No log output, no HTTP server — `std.fs.File.stdout()` I/O change in logger.zig breaks httpz |
 | 0.16.0 | Yes | 52+21+3 | Yes | Works in this env with vendored deps; benchmark HTTP server binds and serves |
 
-- See `recommendation.md` for full analysis and 0.16.0 migration plan
+- See `ZIG_LEARNINGS.md` for the 0.16.0 migration plan and upgrade notes
 - **0.15.2 runtime issue**: `src/logger.zig` uses `std.fs.File.stdout().writer(&stdout_buffer)` pattern which silently fails under 0.15.2 — stdout fd becomes a socket, HTTP server never binds
 - **0.16.0 now works here**: the 6 dependency `build.zig` files were updated for the `Module`-based link API and the deps are vendored in `zig-pkg/`, so `zig build {test,test-integration,test-validation,bench}` all pass under 0.16.0.

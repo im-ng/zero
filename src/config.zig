@@ -121,6 +121,23 @@ pub fn getIntByType(self: *Self, key: []const u8, comptime T: type) !T {
     return integer;
 }
 
+/// Return a new env map containing only the entries whose key starts with
+/// `prefix`. Values are resolved through this config (i.e. after `.env` load
+/// and environment overrides), so callers see the same values container/context
+/// do. Used by subsystems (e.g. OTel) that need an `EnvMap` but should not be
+/// handed the whole process environment. The returned map is allocated with
+/// `allocator`; the caller owns it.
+pub fn getEnvironSubset(self: *Self, allocator: std.mem.Allocator, prefix: []const u8) !std.process.Environ.Map {
+    var out = std.process.Environ.Map.init(allocator);
+    var it = self.environments.iterator();
+    while (it.next()) |kv| {
+        if (std.mem.startsWith(u8, kv.key_ptr.*, prefix)) {
+            try out.put(kv.key_ptr.*, kv.value_ptr.*);
+        }
+    }
+    return out;
+}
+
 pub fn getOrDefault(self: *Self, key: []const u8, default: []const u8) []const u8 {
     const value = if (builtin.is_test)
         std.testing.environ.getPosix(key)
@@ -132,9 +149,7 @@ pub fn getOrDefault(self: *Self, key: []const u8, default: []const u8) []const u
     return value.?;
 }
 
-
 // ===================== Tests =====================
-
 
 test "getAsBool returns false for unset env var" {
     const allocator = std.testing.allocator;

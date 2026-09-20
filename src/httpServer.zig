@@ -51,12 +51,19 @@ pub fn create(allocator: std.mem.Allocator, container: *root.container) !*server
         hzs.port = constants.HTTP_PORT;
     }
 
-    // Inbound request timeout: a stalled client must not pin a worker forever.
-    // httpz defaults to effectively-infinite, so cap it (override via config).
-    const default_request_timeout_ms: u32 = 30000;
+    const default_request_timeout_ms: u32 = constants.DEFAULT_REQUEST_TIMEOUT_MS;
     const request_timeout_ms: u32 = blk: {
         const v = hzs.container.config.getOrDefault("ZERO_REQUEST_TIMEOUT_MS", "");
         break :blk std.fmt.parseInt(u32, v, 10) catch default_request_timeout_ms;
+    };
+    const request_timeout_s: u32 = if (request_timeout_ms == 0) 0 else @max(1, request_timeout_ms / 1000);
+
+    // Idle keep-alive timeout: close idle keep-alive connections so they don't
+    // accumulate. Default 60s.
+    const keepalive_timeout_s: u32 = blk: {
+        const v = hzs.container.config.getOrDefault("ZERO_KEEPALIVE_TIMEOUT_MS", "");
+        const ms = std.fmt.parseInt(u32, v, 10) catch constants.DEFAULT_KEEPALIVE_TIMEOUT_MS;
+        break :blk if (ms == 0) 0 else @max(1, ms / 1000);
     };
 
     hzs.handler = root.handler.Handler{
@@ -68,20 +75,45 @@ pub fn create(allocator: std.mem.Allocator, container: *root.container) !*server
     hzs.handler.in_flight = std.atomic.Value(u32).init(0);
     hzs.handler.max_concurrent = parseMaxConcurrent(hzs.container.config);
 
-    // httpz pre-allocates `large_buffer_count` request-body buffers of
-    // `large_buffer_size`. When `workers.large_buffer_size` is unset it defaults
-    // to `request.max_body_size` (32MiB here), giving 16 × 32MiB ≈ 512MiB of
-    // resident memory for the whole process lifetime. Cap the pool explicitly so
-    // steady-state RSS stays small; bodies larger than the pooled buffer still
-    // grow on the per-request arena and are freed at request end. Override via
-    // ZERO_HTTP_LARGE_BUFFER_SIZE (bytes) / ZERO_HTTP_LARGE_BUFFER_COUNT.
+    // --- Event-loop workers (I/O only: accept/parse/write) -------------------
+    // Scale to CPU cores. Your route/handler code does NOT run here; it runs on
+    // the separate `thread_pool` (see below). Override via ZERO_HTTP_WORKERS.
+    const workers_count: u16 = blk: {
+        const v = hzs.container.config.getAsInt("ZERO_HTTP_WORKERS") catch 0;
+        break :blk if (v == 0) constants.DEFAULT_HTTP_WORKERS else @as(u16, v);
+    };
+
+    // --- Max request body ----------------------------------------------------
+    // Hard ceiling; a body larger than this is rejected with 413 (BodyTooBig).
+    // Override via ZERO_HTTP_MAX_BODY_SIZE (bytes).
+    const max_body_size: usize = blk: {
+        const v = hzs.container.config.getAsInt("ZERO_HTTP_MAX_BODY_SIZE") catch 0;
+        break :blk if (v == 0) constants.DEFAULT_HTTP_MAX_BODY_SIZE_BYTES else @as(usize, v);
+    };
+
+    // --- Body-buffer pool (per event-loop worker, eagerly allocated) ---------
+    // httpz pre-allocates `large_buffer_count` buffers of `large_buffer_size`
+    // PER worker. Resident = workers_count * large_buffer_count * large_buffer_size.
+    // Tie `large_buffer_size` to `max_body_size` so every accepted body fits a
+    // pooled buffer (no per-request arena fallback). Bodies larger than the
+    // pooled buffer still grow on the per-request arena and free at request end.
+    // Override via ZERO_HTTP_LARGE_BUFFER_SIZE / ZERO_HTTP_LARGE_BUFFER_COUNT.
     const large_buffer_size: u32 = blk: {
         const v = hzs.container.config.getAsInt("ZERO_HTTP_LARGE_BUFFER_SIZE") catch 0;
-        break :blk if (v == 0) 1 * 1024 * 1024 else @as(u32, v);
+        break :blk if (v == 0) @as(u32, @intCast(max_body_size)) else @as(u32, @intCast(v));
     };
     const large_buffer_count: u16 = blk: {
         const v = hzs.container.config.getAsInt("ZERO_HTTP_LARGE_BUFFER_COUNT") catch 0;
-        break :blk if (v == 0) 16 else v;
+        break :blk if (v == 0) constants.DEFAULT_HTTP_LARGE_BUFFER_COUNT else @as(u16, v);
+    };
+
+    // --- Handler thread pool (runs your route code) --------------------------
+    // Separate from the I/O event-loop workers above. Keep generous: handlers
+    // block on DB/Redis, so more threads hide that latency. Override via
+    // ZERO_HTTP_THREAD_POOL_COUNT.
+    const thread_pool_count: u16 = blk: {
+        const v = hzs.container.config.getAsInt("ZERO_HTTP_THREAD_POOL_COUNT") catch 0;
+        break :blk if (v == 0) constants.DEFAULT_HTTP_THREAD_POOL_COUNT else @as(u16, v);
     };
 
     hzs.http = try httpz.Server(*root.handler.Handler).init(
@@ -91,19 +123,25 @@ pub fn create(allocator: std.mem.Allocator, container: *root.container) !*server
             .address = httpz.Config.Address.all(hzs.port),
             .request = .{
                 .max_multiform_count = 32,
-                .max_body_size = 32 * 1024 * 1024,
+                .max_body_size = max_body_size,
             },
             .workers = .{
+                .count = workers_count,
                 .large_buffer_size = large_buffer_size,
                 .large_buffer_count = large_buffer_count,
             },
-            .timeout = .{ .request = request_timeout_ms },
+            .thread_pool = .{ .count = thread_pool_count },
+            .timeout = .{
+                .request = request_timeout_s,
+                .keepalive = keepalive_timeout_s,
+            },
         },
         &hzs.handler,
     );
 
     const traczMW = try hzs.http.middleware(tracz_mw, .{
         .allocator = allocator,
+        .provider = container.otel,
     });
 
     const corsMW = try hzs.http.middleware(cors_mw, corsConfig);
@@ -130,11 +168,11 @@ pub fn create(allocator: std.mem.Allocator, container: *root.container) !*server
     });
 
     // Rate limiter is ON by default; set RATE_LIMIT_ENABLE=false to disable it.
-    // (In-memory limiter; a distributed store would be configured later.)
     const rlEnabled = blk: {
         const v = hzs.container.config.getOrDefault("RATE_LIMIT_ENABLE", "");
         break :blk !std.mem.eql(u8, v, "false");
     };
+
     var rlKeyMode: rateLimiter_mw.KeyMode = .ip;
     var rlHeaderName: []const u8 = "X-Forwarded-For";
     const rlKey = hzs.container.config.getOrDefault("RATE_LIMIT_KEY", "ip");
@@ -142,12 +180,15 @@ pub fn create(allocator: std.mem.Allocator, container: *root.container) !*server
         rlKeyMode = .header;
         rlHeaderName = rlKey["header:".len..];
     }
+
     // `getAsInt` returns 0 for a missing key (it never errors), so `catch` alone
     // won't apply the default. Treat 0 as "use default".
     const rlMaxRaw = hzs.container.config.getAsInt("RATE_LIMIT_MAX") catch 0;
-    const rlMax: u64 = if (rlMaxRaw == 0) 100 else rlMaxRaw;
+    const rlMax: u64 = if (rlMaxRaw == 0) constants.DEFAULT_RATE_LIMIT_MAX else rlMaxRaw;
+
     const rlWindowRaw = hzs.container.config.getAsInt("RATE_LIMIT_WINDOW") catch 0;
-    const rlWindowS: i64 = if (rlWindowRaw == 0) 60 else rlWindowRaw;
+    const rlWindowS: i64 = if (rlWindowRaw == 0) constants.DEFAULT_RATE_LIMIT_WINDOW_MS / 1000 else rlWindowRaw;
+
     const rateLimitMW = try hzs.http.middleware(rateLimiter_mw, .{
         .allocator = allocator,
         .enabled = rlEnabled,
@@ -158,7 +199,14 @@ pub fn create(allocator: std.mem.Allocator, container: *root.container) !*server
     });
 
     hzs.router = try hzs.http.router(.{
-        .middlewares = &.{ rateLimitMW, traczMW, corsMW, authMW, rbacMW, mwWS },
+        .middlewares = &.{
+            rateLimitMW,
+            traczMW,
+            corsMW,
+            authMW,
+            rbacMW,
+            mwWS,
+        },
     });
 
     if (hzs.provider) |p| {
@@ -175,17 +223,9 @@ pub fn run(self: *Self) !Thread {
 
 pub fn shutdown(self: *Self) void {
     self.container.log.info("server shutting down");
-    // recursively deallocate all resources
-    // self.refresherThread.join();
-
-    // NOTE: the container and pub/sub clients are torn down by App.run() once
-    // the server thread has stopped. Destroying them here (from a signal
-    // handler) would free client state while their background threads (e.g.
-    // the NATS io_task) are still running, which both hangs process exit and
-    // risks a use-after-free.
+    // The listen loop observes the stop flag and exits, so the
+    // thread joins cleanly and App.run() continues into teardown.
     self.http.stop();
-
-    self.http.deinit();
 }
 
 fn loadAuthProviderConfig(self: *Self) anyerror!?*authProvider {
@@ -246,6 +286,11 @@ fn loadAuthProviderConfig(self: *Self) anyerror!?*authProvider {
             provider.?.refreshInterval = refreshAt;
             provider.?.pubKeys = std.StringHashMap(PubKey).init(self.container.bootstrap);
 
+            const oauth_aud = self.container.config.getOrDefault("OAUTH_AUDIENCE", "");
+            provider.?.expected_audience = if (oauth_aud.len == 0) null else oauth_aud;
+            const oauth_iss = self.container.config.getOrDefault("OAUTH_ISSUER", "");
+            provider.?.expected_issuer = if (oauth_iss.len == 0) null else oauth_iss;
+
             self.container.log.info("auth oauth initialized");
 
             return provider;
@@ -302,10 +347,12 @@ fn loadAuthProviderConfig(self: *Self) anyerror!?*authProvider {
     }
 }
 
-/// Reads `INBOUND_MAX_CONCURRENT` from config; 0 (or unparsable) means unlimited.
+/// Reads `INBOUND_MAX_CONCURRENT` from config. When unset/unparsable, apply a
+/// sane default (1024); an explicit `0` opts out (unlimited).
 fn parseMaxConcurrent(config: *root.config) u32 {
-    const v = config.getOrDefault("INBOUND_MAX_CONCURRENT", "0");
-    return std.fmt.parseInt(u32, v, 10) catch 0;
+    const raw = config.getOrDefault("INBOUND_MAX_CONCURRENT", "");
+    if (raw.len == 0) return constants.DEFAULT_INBOUND_MAX_CONCURRENT;
+    return std.fmt.parseInt(u32, raw, 10) catch constants.DEFAULT_INBOUND_MAX_CONCURRENT;
 }
 
 fn registerRefresherThread(self: *Self, provider: *authProvider) !void {

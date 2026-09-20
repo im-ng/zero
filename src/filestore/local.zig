@@ -1,6 +1,7 @@
 const std = @import("std");
 const Io = std.Io;
 const root = @import("../zero.zig");
+const constants = root.constants;
 
 /// Local-disk file store. Keys are treated as posix-style relative paths under
 /// a configured root directory; `..` segments are rejected to prevent path
@@ -8,7 +9,7 @@ const root = @import("../zero.zig");
 pub const FileStoreLocal = struct {
     allocator: std.mem.Allocator,
     root_dir: []const u8,
-    max_bytes: usize = 100 * 1024 * 1024,
+    max_bytes: usize = constants.DEFAULT_FILESTORE_MAX_BYTES_LOCAL,
 
     pub fn open(allocator: std.mem.Allocator, root_dir: []const u8) !*FileStoreLocal {
         const self = try allocator.create(FileStoreLocal);

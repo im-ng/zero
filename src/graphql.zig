@@ -3,7 +3,13 @@ const std = @import("std");
 const parser = @import("graphql").parser;
 const ast = @import("graphql").ast;
 
-pub const error_ = error{ GraphQLExecutionError, GraphQLParseError, GraphQLBadRequest, GraphQLNoQuery, GraphQLNoMutation };
+pub const error_ = error{
+    GraphQLExecutionError,
+    GraphQLParseError,
+    GraphQLBadRequest,
+    GraphQLNoQuery,
+    GraphQLNoMutation,
+};
 
 pub const ErrorObject = struct {
     message: []const u8,
@@ -550,9 +556,7 @@ const TestQuery = struct {
     user: *const fn (*TestCtx, TestArgs) anyerror!TestUser = testUserResolver,
 };
 
-
 // ===================== Tests =====================
-
 
 test "graphql: resolve query with constant, resolver and arguments" {
     const testing = std.testing;
