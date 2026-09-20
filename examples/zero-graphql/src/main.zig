@@ -121,7 +121,6 @@ pub const std_options: std.Options = .{
 };
 
 pub fn main(init: std.process.Init) !void {
-
     var gpa: std.heap.DebugAllocator(.{}) = .init;
     const allocator = gpa.allocator();
 
@@ -140,6 +139,11 @@ pub fn main(init: std.process.Init) !void {
     try app.graphql("/graphql", Query, Mutation, &query_root, &mutation_root);
 
     try app.run();
+
+    // Bail out if leak detected on load test
+    if (gpa.detectLeaks() > 0) {
+        std.process.exit(1);
+    }
 }
 
 fn index(ctx: *Context) !void {

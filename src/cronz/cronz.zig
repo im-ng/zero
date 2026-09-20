@@ -86,8 +86,8 @@ pub fn runSchedules(self: *Self, _: i128) void {
                 defer j.mu.unlock(self.container.io);
 
                 var attempt: u32 = 0;
-                const max_attempts: u32 = 3;
-                const backoff_ms: i64 = 500;
+                const max_attempts: u32 = constants.DEFAULT_PUBSUB_MAX_ATTEMPTS;
+                const backoff_ms: i64 = constants.DEFAULT_PUBSUB_BACKOFF_MS;
                 var ok = false;
 
                 while (attempt < max_attempts) : (attempt += 1) {

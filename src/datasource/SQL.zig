@@ -1,6 +1,7 @@
 const std = @import("std");
 const root = @import("../zero.zig");
 const utils = root.utils;
+const constants = root.constants;
 const SQL = @This();
 const Self = @This();
 
@@ -23,7 +24,7 @@ rows: usize = 0,
     // of writes can be wrapped in one transaction (see begin/commit/rollback).
     transaction_conn: ?*pgz.Conn = null,
     /// Per-statement timeout (ms) applied to every query/exec. null = no timeout.
-    statement_timeout_ms: ?u32 = 30000,
+    statement_timeout_ms: ?u32 = constants.DEFAULT_STATEMENT_TIMEOUT_MS,
 
 // is this neccessary?
 pub const dbConfig = struct {

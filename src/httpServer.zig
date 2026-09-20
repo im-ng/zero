@@ -51,7 +51,7 @@ pub fn create(allocator: std.mem.Allocator, container: *root.container) !*server
         hzs.port = constants.HTTP_PORT;
     }
 
-    const default_request_timeout_ms: u32 = 30000;
+    const default_request_timeout_ms: u32 = constants.DEFAULT_REQUEST_TIMEOUT_MS;
     const request_timeout_ms: u32 = blk: {
         const v = hzs.container.config.getOrDefault("ZERO_REQUEST_TIMEOUT_MS", "");
         break :blk std.fmt.parseInt(u32, v, 10) catch default_request_timeout_ms;
@@ -62,7 +62,7 @@ pub fn create(allocator: std.mem.Allocator, container: *root.container) !*server
     // accumulate. Default 60s.
     const keepalive_timeout_s: u32 = blk: {
         const v = hzs.container.config.getOrDefault("ZERO_KEEPALIVE_TIMEOUT_MS", "");
-        const ms = std.fmt.parseInt(u32, v, 10) catch 60;
+        const ms = std.fmt.parseInt(u32, v, 10) catch constants.DEFAULT_KEEPALIVE_TIMEOUT_MS;
         break :blk if (ms == 0) 0 else @max(1, ms / 1000);
     };
 
@@ -80,7 +80,7 @@ pub fn create(allocator: std.mem.Allocator, container: *root.container) !*server
     // the separate `thread_pool` (see below). Override via ZERO_HTTP_WORKERS.
     const workers_count: u16 = blk: {
         const v = hzs.container.config.getAsInt("ZERO_HTTP_WORKERS") catch 0;
-        break :blk if (v == 0) 2 else @as(u16, v);
+        break :blk if (v == 0) constants.DEFAULT_HTTP_WORKERS else @as(u16, v);
     };
 
     // --- Max request body ----------------------------------------------------
@@ -88,7 +88,7 @@ pub fn create(allocator: std.mem.Allocator, container: *root.container) !*server
     // Override via ZERO_HTTP_MAX_BODY_SIZE (bytes).
     const max_body_size: usize = blk: {
         const v = hzs.container.config.getAsInt("ZERO_HTTP_MAX_BODY_SIZE") catch 0;
-        break :blk if (v == 0) 8 * 1024 * 1024 else @as(usize, v);
+        break :blk if (v == 0) constants.DEFAULT_HTTP_MAX_BODY_SIZE_BYTES else @as(usize, v);
     };
 
     // --- Body-buffer pool (per event-loop worker, eagerly allocated) ---------
@@ -104,7 +104,7 @@ pub fn create(allocator: std.mem.Allocator, container: *root.container) !*server
     };
     const large_buffer_count: u16 = blk: {
         const v = hzs.container.config.getAsInt("ZERO_HTTP_LARGE_BUFFER_COUNT") catch 0;
-        break :blk if (v == 0) 8 else @as(u16, v);
+        break :blk if (v == 0) constants.DEFAULT_HTTP_LARGE_BUFFER_COUNT else @as(u16, v);
     };
 
     // --- Handler thread pool (runs your route code) --------------------------
@@ -113,7 +113,7 @@ pub fn create(allocator: std.mem.Allocator, container: *root.container) !*server
     // ZERO_HTTP_THREAD_POOL_COUNT.
     const thread_pool_count: u16 = blk: {
         const v = hzs.container.config.getAsInt("ZERO_HTTP_THREAD_POOL_COUNT") catch 0;
-        break :blk if (v == 0) 32 else @as(u16, v);
+        break :blk if (v == 0) constants.DEFAULT_HTTP_THREAD_POOL_COUNT else @as(u16, v);
     };
 
     hzs.http = try httpz.Server(*root.handler.Handler).init(
@@ -184,10 +184,10 @@ pub fn create(allocator: std.mem.Allocator, container: *root.container) !*server
     // `getAsInt` returns 0 for a missing key (it never errors), so `catch` alone
     // won't apply the default. Treat 0 as "use default".
     const rlMaxRaw = hzs.container.config.getAsInt("RATE_LIMIT_MAX") catch 0;
-    const rlMax: u64 = if (rlMaxRaw == 0) 100 else rlMaxRaw;
+    const rlMax: u64 = if (rlMaxRaw == 0) constants.DEFAULT_RATE_LIMIT_MAX else rlMaxRaw;
 
     const rlWindowRaw = hzs.container.config.getAsInt("RATE_LIMIT_WINDOW") catch 0;
-    const rlWindowS: i64 = if (rlWindowRaw == 0) 60 else rlWindowRaw;
+    const rlWindowS: i64 = if (rlWindowRaw == 0) constants.DEFAULT_RATE_LIMIT_WINDOW_MS / 1000 else rlWindowRaw;
 
     const rateLimitMW = try hzs.http.middleware(rateLimiter_mw, .{
         .allocator = allocator,
@@ -351,8 +351,8 @@ fn loadAuthProviderConfig(self: *Self) anyerror!?*authProvider {
 /// sane default (1024); an explicit `0` opts out (unlimited).
 fn parseMaxConcurrent(config: *root.config) u32 {
     const raw = config.getOrDefault("INBOUND_MAX_CONCURRENT", "");
-    if (raw.len == 0) return 1024;
-    return std.fmt.parseInt(u32, raw, 10) catch 1024;
+    if (raw.len == 0) return constants.DEFAULT_INBOUND_MAX_CONCURRENT;
+    return std.fmt.parseInt(u32, raw, 10) catch constants.DEFAULT_INBOUND_MAX_CONCURRENT;
 }
 
 fn registerRefresherThread(self: *Self, provider: *authProvider) !void {

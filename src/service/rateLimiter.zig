@@ -1,6 +1,7 @@
 const std = @import("std");
 const root = @import("../zero.zig");
 const utils = root.utils;
+const constants = root.constants;
 
 /// Per-service fixed-window rate limiter for outbound HTTP calls. One instance
 /// is created per registered service (`app.addHttpService`) and guards every
@@ -10,8 +11,8 @@ const utils = root.utils;
 pub const RateLimiterConfig = struct {
     allocator: std.mem.Allocator,
     enabled: bool = false,
-    limit: u64 = 100,
-    window_ms: i64 = 60_000,
+    limit: u64 = constants.DEFAULT_RATE_LIMIT_MAX,
+    window_ms: i64 = constants.DEFAULT_RATE_LIMIT_WINDOW_MS,
 };
 
 const Window = struct {

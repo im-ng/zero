@@ -292,7 +292,7 @@ pub const Context = struct {
         var reader = file.reader(self.io, &rbuf);
         const data = try reader.interface.allocRemainingAlignedSentinel(
             self.allocator,
-            std.Io.Limit.limited(100 * 1024 * 1024),
+            std.Io.Limit.limited(constants.DEFAULT_REQUEST_BODY_LIMIT_BYTES),
             std.mem.Alignment.@"1",
             null,
         );

@@ -23,7 +23,6 @@ const NewUser = struct {
 const NextId = struct { id: i64 };
 
 pub fn main(init: std.process.Init) !void {
-
     var gpa: std.heap.DebugAllocator(.{}) = .init;
     const allocator = gpa.allocator();
 
@@ -41,6 +40,11 @@ pub fn main(init: std.process.Init) !void {
     try app.delete("/users/:id", deleteUser);
 
     try app.run();
+
+    // Bail out if leak detected on load test
+    if (gpa.detectLeaks() > 0) {
+        std.process.exit(1);
+    }
 }
 
 pub fn index(ctx: *Context) !void {

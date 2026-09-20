@@ -211,8 +211,8 @@ fn consume(self: *Self, subscriber: mqSubscriber) !void {
                 // Retry the handler a few times; on a poison message, dead-letter it
                 // to `<topic>/dlq`.
                 var attempt: u32 = 0;
-                const max_attempts: u32 = 3;
-                const backoff_ms: i64 = 500;
+                const max_attempts: u32 = constants.DEFAULT_PUBSUB_MAX_ATTEMPTS;
+                const backoff_ms: i64 = constants.DEFAULT_PUBSUB_BACKOFF_MS;
                 while (attempt < max_attempts) : (attempt += 1) {
                     subscriber.exec(context) catch |err| {
                         self.container.log.Any(self.container.allocator, err);

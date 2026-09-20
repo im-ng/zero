@@ -31,18 +31,27 @@ clean:
 	rm -rf examples/zero-s3/.zig-cache examples/zero-s3/zig-out examples/zero-s3/zig-pkg
 	rm -rf examples/zero-autocrud/.zig-cache examples/zero-autocrud/zig-out examples/zero-autocrud/zig-pkg
 	rm -rf examples/zero-cli/.zig-cache examples/zero-cli/zig-out examples/zero-cli/zig-pkg
+	rm -rf examples/zero-duckdb/.zig-cache examples/zero-duckdb/zig-out examples/zero-duckdb/zig-pkg
+	rm -rf examples/zero-otel/.zig-cache examples/zero-otel/zig-out examples/zero-otel/zig-pkg
+	rm -rf examples/zero-search/.zig-cache examples/zero-search/zig-out examples/zero-search/zig-pkg
+	rm -rf examples/zero-nosql/.zig-cache examples/zero-nosql/zig-out examples/zero-nosql/zig-pkg
+	rm -rf examples/zero-timeseries/.zig-cache examples/zero-timeseries/zig-out examples/zero-timeseries/zig-pkg
 
-release:
-	zig build --release=fast
+fast:
+	zig build --release=fast --summary all
 
-release-prod:
+small:
 	zig build --release=small --summary all
+	zig build bench --release=small --summary all
 
-release-base:
+base:
 	zig build -Dcpu=baseline --release=safe --summary all
 	
-ut:
+coverage:
 	zig build test -Dcoverage --summary all
 
 log:
 	git log --pretty=format:"%h%x09%an%x09%ad%x09%s"
+
+size:
+	ls -alth ./zig-out/bin

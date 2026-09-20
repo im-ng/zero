@@ -294,7 +294,7 @@ pub fn log(
 }
 
     fn retryBackoffMs(self: *Self, attempt: u32) i64 {
-        const base = self.retry_base_ms orelse 100;
+        const base = self.retry_base_ms orelse constants.DEFAULT_SERVICE_RETRY_BASE_MS;
         return @as(i64, base) * @as(i64, attempt);
     }
 

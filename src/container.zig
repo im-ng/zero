@@ -648,7 +648,7 @@ fn loadRedisPubSub(self: *Self) !void {
 }
 
 pub fn natsPullWaitMs(self: *Self) u32 {
-    return @intCast(self.config.getAsInt("NATS_MAX_PULL_WAIT") catch 5000);
+    return @intCast(self.config.getAsInt("NATS_MAX_PULL_WAIT") catch constants.DEFAULT_NATS_MAX_PULL_WAIT_MS);
 }
 
 fn loadMetricz(self: *Self) !void {
@@ -848,11 +848,11 @@ fn loadSQL(self: *Self) !void {
     // Pool size + connection/acquire timeout are configurable (defaults 10 / 10s).
     const pool_size: u16 = @intCast(blk: {
         const v = self.config.getAsInt("PG_POOL_SIZE") catch 0;
-        break :blk if (v == 0) 10 else @as(u32, v);
+        break :blk if (v == 0) constants.DEFAULT_PG_POOL_SIZE else @as(u32, v);
     });
     const acquire_timeout_ms: u32 = blk: {
         const v = self.config.getAsInt("PG_POOL_ACQUIRE_TIMEOUT_MS") catch 0;
-        break :blk if (v == 0) 10_000 else @as(u32, v);
+        break :blk if (v == 0) constants.DEFAULT_PG_POOL_ACQUIRE_TIMEOUT_MS else @as(u32, v);
     };
     const options: pgz.Pool.Opts = .{
         .size = pool_size,

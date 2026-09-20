@@ -2,6 +2,7 @@ const std = @import("std");
 const root = @import("../zero.zig");
 const zul = root.zul;
 const utils = root.utils;
+const constants = root.constants;
 
 /// S3-compatible object store (MinIO / R2 / Spaces / B2 / AWS S3).
 ///
@@ -17,7 +18,7 @@ pub const FileStoreS3 = struct {
     bucket: []const u8,
     access_key: []const u8,
     secret_key: []const u8,
-    max_bytes: usize = 64 * 1024 * 1024,
+    max_bytes: usize = constants.DEFAULT_FILESTORE_MAX_BYTES_S3,
 
     /// A signed (name, value) header participating in the SigV4 signature.
     pub const Header = struct {

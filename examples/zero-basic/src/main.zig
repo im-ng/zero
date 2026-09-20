@@ -30,7 +30,6 @@ fn helloResolver(_: *Context, _: void) anyerror![]const u8 {
 var query_root = Query{ .hello = helloResolver };
 
 pub fn main(init: std.process.Init) !void {
-
     var gpa: std.heap.DebugAllocator(.{}) = .init;
     const allocator = gpa.allocator();
 
@@ -75,6 +74,11 @@ pub fn main(init: std.process.Init) !void {
     try app.get("/nosql/get", nosqlGet);
 
     try app.run();
+
+    // Bail out if leak detected on load test
+    if (gpa.detectLeaks() > 0) {
+        std.process.exit(1);
+    }
 }
 
 pub fn prepareDatasources(ctx: *Context) !void {

@@ -2,6 +2,7 @@ const std = @import("std");
 const httpz = @import("httpz");
 const root = @import("../zero.zig");
 const utils = root.utils;
+const constants = root.constants;
 
 pub const rateLimiter = @This();
 
@@ -13,8 +14,8 @@ pub const KeyMode = enum {
 pub const Config = struct {
     allocator: std.mem.Allocator,
     enabled: bool = false,
-    limit: u64 = 100,
-    window_ms: i64 = 60_000,
+    limit: u64 = constants.DEFAULT_RATE_LIMIT_MAX,
+    window_ms: i64 = constants.DEFAULT_RATE_LIMIT_WINDOW_MS,
     key_mode: KeyMode = .ip,
     header_name: []const u8 = "X-Forwarded-For",
 };

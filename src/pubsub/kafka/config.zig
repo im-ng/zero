@@ -1,8 +1,9 @@
 const std = @import("std");
 const Self = @This();
 const Config = @This();
+const constants = @import("../../constants.zig");
 
-defaulBatchSize: u32 = 100,
+defaulBatchSize: u32 = constants.DEFAULT_KAFKA_BATCH_SIZE,
 defaultBatchBytes: u32 = 1048576,
 defaultBatchTimeout: u32 = 1000,
 defaultMaxBytes: u32 = 10000000,

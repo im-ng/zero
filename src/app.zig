@@ -124,7 +124,7 @@ fn initBase(allocator: std.mem.Allocator, io: std.Io, em: *EnvMap) !*App {
     // error rather than grow unpredictably.
     const framework_mem_mib: usize = blk: {
         const v = config.getAsInt("ZERO_FRAMEWORK_MEM_SIZE") catch 0;
-        break :blk if (v == 0) @as(usize, 8) else @as(usize, v);
+        break :blk if (v == 0) constants.DEFAULT_FRAMEWORK_MEM_SIZE else @as(usize, v);
     };
     const backing = try allocator.alloc(u8, framework_mem_mib * 1024 * 1024);
     errdefer allocator.free(backing);
@@ -426,8 +426,8 @@ pub fn startRemoteLogLevel(self: *Self) !void {
     const url = self.config.getOrDefault("REMOTE_LOG_URL", "");
     if (url.len == 0) return;
 
-    const interval = std.fmt.parseInt(u64, self.config.getOrDefault("REMOTE_LOG_REFRESH_INTERVAL", "30"), 10) catch 30;
-    const step = if (interval == 0) @as(u64, 30) else interval;
+    const interval = std.fmt.parseInt(u64, self.config.getOrDefault("REMOTE_LOG_REFRESH_INTERVAL", ""), 10) catch constants.DEFAULT_REMOTE_LOG_REFRESH_INTERVAL_S;
+    const step = if (interval == 0) constants.DEFAULT_REMOTE_LOG_REFRESH_INTERVAL_S else interval;
 
     try self.addHttpService(remoteLogLevelService, url, .{});
 
@@ -849,7 +849,7 @@ pub fn health(ctx: *Context) !void {
 
     // Run user-registered health checks; any failure flips the overall status.
     // Each check is bounded so a hung dependency can't block the probe forever.
-    const check_timeout_ms: u32 = ctx.container.config.getAsInt("HEALTH_CHECK_TIMEOUT_MS") catch 3000;
+    const check_timeout_ms: u32 = ctx.container.config.getAsInt("HEALTH_CHECK_TIMEOUT_MS") catch constants.DEFAULT_HEALTH_CHECK_TIMEOUT_MS;
     for (ctx.container.healthChecks.items) |*hc| {
         if (ctx.container.runHealthCheckBounded(hc, check_timeout_ms)) {
             try components.put(ctx.allocator, hc.name, std.json.Value{ .string = up });
