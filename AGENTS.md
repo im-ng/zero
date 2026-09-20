@@ -1,8 +1,16 @@
 # AGENTS.md
 
+## Communication style
+
+When presenting changes, summaries, or any explanation to the user, follow `writing-style-guide.md`.
+- Simplify the language, not the technical idea.
+- Use short, active, spoken-style sentences.
+- Show the concrete case before the general rule.
+- No marketing, hype, filler, or unnecessary summaries.
+
 ## Toolchain
 
-- **Zig 0.15.2** minimum, pinned in `build.zig.zon`
+- **Zig 0.16.0** minimum, pinned in `build.zig.zon`
 - Requires `librdkafka-dev` (`apt install librdkafka-dev` / `brew install librdkafka`)
 - On macOS, `build.zig` hardcodes `/usr/local/Cellar/librdkafka/2.13.0` include/lib paths
 - **Always `rm -rf .zig-cache zig-out zig-pkg/` before switching Zig versions** — stale cache causes build failures and runtime corruption
