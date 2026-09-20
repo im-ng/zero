@@ -149,7 +149,7 @@ fn initBase(allocator: std.mem.Allocator, io: std.Io, em: *EnvMap) !*App {
     // memory, so sharing it makes the SDK exhaust and panic (OutOfMemory ->
     // `unreachable`) under load. The SDK's runtime memory is instead bounded by the
     // per-span freeClonedSpan discipline in span_processor.zig (RSS plateaus).
-    app.otelProvider = try otel.Provider.init(allocator, io, em, otel_enabled);
+    app.otelProvider = try otel.Provider.init(allocator, io, config, otel_enabled);
 
     // reset log level
     log.logLevel = app.getLogLevel(config.getOrDefault(

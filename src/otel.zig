@@ -1,5 +1,5 @@
 const std = @import("std");
-
+const root = @import("zero.zig");
 const sdk = @import("opentelemetry-sdk");
 
 const api = sdk.api;
@@ -12,10 +12,10 @@ pub const SpanID = trace_api.SpanID;
 pub const TraceFlags = trace_api.TraceFlags;
 pub const SpanKind = trace_api.SpanKind;
 pub const Status = trace_api.Status;
+
 const InstrumentationScope = sdk.InstrumentationScope;
 const Context = api.context.Context;
 const EnvMap = std.process.Environ.Map;
-
 pub const log = std.log.scoped(.otel);
 
 /// Lightweight, allocation-free handle to the currently-active span. Carries only
@@ -38,6 +38,10 @@ pub const Provider = struct {
     allocator: std.mem.Allocator = undefined,
     io: std.Io = undefined,
 
+    /// Narrow `OTEL_*` env map, resolved through the framework config. Built in
+    /// `init` and owned for the provider's lifetime
+    otel_env: EnvMap = undefined,
+
     server_scope: InstrumentationScope = undefined,
     prng: ?*std.Random.DefaultPrng = null,
     tracer_provider: ?*sdk.trace.TracerProvider = null,
@@ -51,31 +55,37 @@ pub const Provider = struct {
     log_exporter: ?*sdk.logs.OTLPExporter = null,
     log_config: ?*sdk.otlp.ConfigOptions = null,
 
-    /// Build the provider. `em` is the process environment map; the SDK reads
-    /// `OTEL_EXPORTER_OTLP_*` from it automatically. When `enabled` is false the
-    /// returned provider is inert.
-    pub fn init(allocator: std.mem.Allocator, io: std.Io, em: *EnvMap, enabled: bool) !Provider {
+    /// Build the provider. `cfg` is the framework config (same source
+    /// container/context use). The SDK still reads its settings from an `EnvMap`,
+    /// but we hand it only the `OTEL_*` subset resolved through `cfg` — not the
+    /// whole process environment. When `enabled` is false the returned provider
+    /// is inert.
+    pub fn init(allocator: std.mem.Allocator, io: std.Io, cfg: *root.config, enabled: bool) !Provider {
         var p: Provider = .{
             .enabled = enabled,
             .allocator = allocator,
             .io = io,
         };
-        if (!enabled) return p;
+
+        if (!enabled) {
+            return p;
+        }
+
+        // Narrow, config-resolved env map for the SDK. This limits the OTel SDK
+        // to the `OTEL_*` keys (honoring `.env` + env overrides) instead of the
+        // full process environment captured directly.
+        p.otel_env = try cfg.getEnvironSubset(allocator, "OTEL_");
 
         // Make the SDK honor OTEL_* config (service.name resource, sampler,
-        // propagators, resource attributes). The vendored SDK never sets the
-        // global Configuration singleton, so without this spans/logs render as
-        // `unknown_service` and OTEL_TRACES_SAMPLER is a no-op. Derive
-        // service.name from APP_NAME (falling back to the standard
-        // OTEL_SERVICE_NAME if present, else "zero") so no new config keys are
-        // required.
+        // propagators, resource attributes). Derive
+        // service.name from APP_NAME so no new config keys are required.
         if (sdk.config.Configuration.get() == null) {
-            if (em.get("OTEL_SERVICE_NAME") == null) {
-                const app_name = try allocator.dupe(u8, em.get("APP_NAME") orelse "zero");
-                try em.put("OTEL_SERVICE_NAME", app_name);
+            if (p.otel_env.get("OTEL_SERVICE_NAME") == null) {
+                const app_name = try allocator.dupe(u8, cfg.getOrDefault("APP_NAME", "zero"));
+                try p.otel_env.put("OTEL_SERVICE_NAME", app_name);
             }
-            const cfg = try sdk.config.Configuration.init(allocator, io, em);
-            sdk.config.Configuration.set(cfg);
+            const configuration = try sdk.config.Configuration.init(allocator, io, &p.otel_env);
+            sdk.config.Configuration.set(configuration);
         }
 
         // Seed the ID generator from the monotonic clock (no std.crypto.random in 0.16).
@@ -91,14 +101,15 @@ pub const Provider = struct {
         const id_generator = sdk.trace.IDGenerator{ .Random = sdk.trace.RandomIDGenerator.init(p.prng.?.random()) };
 
         p.tracer_provider = try sdk.trace.TracerProvider.init(allocator, io, id_generator);
-        p.config = try sdk.otlp.ConfigOptions.init(allocator, em);
+        p.config = try sdk.otlp.ConfigOptions.init(allocator, &p.otel_env);
         p.otlp_exporter = try sdk.trace.OTLPExporter.init(allocator, io, p.config.?);
         p.batch_processor = try sdk.trace.BatchingProcessor.init(allocator, io, p.otlp_exporter.?.asSpanExporter(), .{});
+
         try p.tracer_provider.?.addSpanProcessor(p.batch_processor.?.asSpanProcessor());
 
         p.server_scope = .{
             .name = "zero.server",
-            .version = "0.0.2",
+            .version = "0.5.1", // TODO: derive this from build step
             .schema_url = "https://opentelemetry.io/schemas/1.21.0",
         };
         p.tracer = try p.tracer_provider.?.getTracer(p.server_scope);
@@ -106,7 +117,7 @@ pub const Provider = struct {
         // Logs: a parallel OTLP exporter that runs alongside the existing stdout
         // writer. When no collector is reachable the background exporter logs (and
         // drops) — the app keeps logging locally regardless.
-        p.log_config = try sdk.otlp.ConfigOptions.init(allocator, em);
+        p.log_config = try sdk.otlp.ConfigOptions.init(allocator, &p.otel_env);
         p.log_exporter = try sdk.logs.OTLPExporter.init(allocator, io, p.log_config.?);
         p.log_processor = try sdk.logs.BatchingLogRecordProcessor.init(
             allocator,
@@ -120,39 +131,39 @@ pub const Provider = struct {
         active_log_logger = p.logger;
         logs_export_enabled = true;
 
-        // Auth + custom OTLP headers. The vendored SDK's ConfigOptions does not
-        // read these from env (see its mergeFromEnvMap TODO), so we install them
-        // here. Both exporters receive the same set.
         //   OTEL_EXPORTER_OTLP_AUTH_HEADER : bare credential, e.g. "Bearer <token>"
         //       or "Basic <b64>" — mapped to the standard `Authorization` header.
         //   OTEL_EXPORTER_OTLP_HEADERS     : raw "Key=Value,..." custom headers.
-        try applyOtlpHeaders(allocator, em, p.config.?);
-        try applyOtlpHeaders(allocator, em, p.log_config.?);
+        try applyOtlpHeaders(allocator, cfg, p.config.?);
+
+        try applyOtlpHeaders(allocator, cfg, p.log_config.?);
 
         return p;
     }
 
-    // Reads OTLP auth/custom headers from the env map and installs them on a
-    // ConfigOptions instance. `config.headers` is consumed by the SDK's exporter
-    // on every send. We dupe into `allocator` and free it in `shutdown`.
-    fn applyOtlpHeaders(allocator: std.mem.Allocator, em: *EnvMap, config: *sdk.otlp.ConfigOptions) !void {
+    // Reads OTLP auth/custom headers from the framework config and installs them
+    // on a ConfigOptions instance. `config.headers` is consumed by the SDK's
+    // exporter on every send. We dupe into `allocator` and free it in `shutdown`.
+    fn applyOtlpHeaders(allocator: std.mem.Allocator, cfg: *root.config, config: *sdk.otlp.ConfigOptions) !void {
         var buf = std.ArrayList(u8).empty;
         errdefer buf.deinit(allocator);
+
         // Bare credential -> Authorization: <value>.
-        if (em.get("OTEL_EXPORTER_OTLP_AUTH_HEADER")) |auth| {
-            if (auth.len > 0) {
-                try buf.appendSlice(allocator, "Authorization=");
-                try buf.appendSlice(allocator, auth);
-            }
+        const auth = cfg.getOrDefault("OTEL_EXPORTER_OTLP_AUTH_HEADER", "");
+        if (auth.len > 0) {
+            try buf.appendSlice(allocator, "Authorization=");
+            try buf.appendSlice(allocator, auth);
         }
+
         // Raw custom headers ("Key=Value,...").
-        if (em.get("OTEL_EXPORTER_OTLP_HEADERS")) |h| {
-            if (h.len > 0) {
-                if (buf.items.len > 0) try buf.append(allocator, ',');
-                try buf.appendSlice(allocator, h);
-            }
+        const headers = cfg.getOrDefault("OTEL_EXPORTER_OTLP_HEADERS", "");
+        if (headers.len > 0) {
+            if (buf.items.len > 0) try buf.append(allocator, ',');
+            try buf.appendSlice(allocator, headers);
         }
+
         if (buf.items.len == 0) return;
+
         config.headers = try buf.toOwnedSlice(allocator);
     }
 
@@ -164,15 +175,22 @@ pub const Provider = struct {
     /// fiber may still be unwinding, and freeing its arena from this thread
     /// corrupts the heap. The OS reclaims all of it on process exit.
     pub fn shutdown(self: *Provider) void {
-        if (!self.enabled) return;
+        if (!self.enabled) {
+            return;
+        }
+
         // Traces: stop the background export task and wait for it to exit (drains
         // any pending spans first). Do NOT forceFlush() concurrently with the
         // still-running task — it races on the shared exporter/queue.
-        if (self.tracer_provider) |tp| tp.shutdown();
+        if (self.tracer_provider) |tp| {
+            tp.shutdown();
+        }
+
         // Logs: stop exporting *before* tearing down so any log emitted during
         // shutdown doesn't hit a half-torn-down provider.
         logs_export_enabled = false;
         active_log_logger = null;
+
         if (self.logger_provider) |lp| lp.shutdown() catch {};
     }
 
@@ -194,7 +212,11 @@ pub const Provider = struct {
             owned = try parentContext(allocator, p);
             parent_ctx = owned;
         }
-        const span = try tracer.startSpan(allocator, name, .{ .kind = kind, .parent_context = parent_ctx });
+        const span = try tracer.startSpan(
+            allocator,
+            name,
+            .{ .kind = kind, .parent_context = parent_ctx },
+        );
         if (owned) |*ctx| {
             trace_api.freeSerializedSpanContext(allocator, ctx.*);
             ctx.deinit();
@@ -246,8 +268,14 @@ pub fn logsEnabled() bool {
 /// also flow through std.log). Correlates the record with the active span when
 /// one exists.
 pub fn emitLog(level: std.log.Level, body: []const u8) void {
-    if (!logs_export_enabled) return;
-    if (in_emit_log) return;
+    if (!logs_export_enabled) {
+        return;
+    }
+
+    if (in_emit_log) {
+        return;
+    }
+
     in_emit_log = true;
     defer in_emit_log = false;
 
@@ -258,10 +286,12 @@ pub fn emitLog(level: std.log.Level, body: []const u8) void {
         .warn => .warn,
         .err => .err,
     };
+
     const span_context = if (currentSpan()) |active|
         spanContextFromActive(std.heap.page_allocator, active)
     else
         null;
+
     lg.emit(severity, body, .{ .span_context = span_context });
 }
 
@@ -298,7 +328,13 @@ pub fn activeFromSpan(sc: SpanContext) ActiveSpan {
 }
 
 pub fn spanContextFromActive(allocator: std.mem.Allocator, a: ActiveSpan) SpanContext {
-    return SpanContext.init(a.trace_id, a.span_id, a.trace_flags, trace_api.TraceState.init(allocator), a.is_remote);
+    return SpanContext.init(
+        a.trace_id,
+        a.span_id,
+        a.trace_flags,
+        trace_api.TraceState.init(allocator),
+        a.is_remote,
+    );
 }
 
 fn parentContext(allocator: std.mem.Allocator, parent: ActiveSpan) !Context {
@@ -316,17 +352,33 @@ fn parentContext(allocator: std.mem.Allocator, parent: ActiveSpan) !Context {
 /// Returns null on any malformed input.
 pub fn parseTraceparent(header: []const u8) ?ActiveSpan {
     var it = std.mem.splitScalar(u8, header, '-');
+
     const ver = it.next() orelse return null;
-    if (ver.len != 2) return null;
+    if (ver.len != 2) {
+        return null;
+    }
+
     const tid = it.next() orelse return null;
-    if (tid.len != 32) return null;
+    if (tid.len != 32) {
+        return null;
+    }
+
     const sid = it.next() orelse return null;
-    if (sid.len != 16) return null;
+    if (sid.len != 16) {
+        return null;
+    }
+
     const fl = it.next() orelse return null;
-    if (fl.len != 2) return null;
+    if (fl.len != 2) {
+        return null;
+    }
+
     const trace_id = TraceID.fromHex(tid) catch return null;
+
     const span_id = SpanID.fromHex(sid) catch return null;
+
     const flags_val = std.fmt.parseInt(u8, fl, 16) catch return null;
+
     return ActiveSpan{
         .trace_id = trace_id,
         .span_id = span_id,
