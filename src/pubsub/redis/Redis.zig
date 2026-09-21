@@ -34,18 +34,18 @@ wbuf: [8192]u8 = undefined,
 sub_rdbuf: [8192]u8 = undefined,
 sub_wbuf: [8192]u8 = undefined,
 
-    subscriber: std.array_list.Managed(Subscriber) = undefined,
-    mu: std.Io.Mutex = undefined,
-    signal: Atomic(bool) = undefined,
-    thread: std.Thread = undefined,
-    started: bool = false,
-    isPubSubSet: bool = false,
-    // Connection parameters retained so the consumer can reconnect on drop.
-    host: []const u8 = undefined,
-    port: u16 = 0,
-    user: []const u8 = undefined,
-    password: []const u8 = undefined,
-    db: u16 = 0,
+subscriber: std.array_list.Managed(Subscriber) = undefined,
+mu: std.Io.Mutex = undefined,
+signal: Atomic(bool) = undefined,
+thread: std.Thread = undefined,
+started: bool = false,
+isPubSubSet: bool = false,
+// Connection parameters retained so the consumer can reconnect on drop.
+host: []const u8 = undefined,
+port: u16 = 0,
+user: []const u8 = undefined,
+password: []const u8 = undefined,
+db: u16 = 0,
 
 pub fn create(
     container: *root.container,
@@ -267,7 +267,7 @@ fn runHook(self: *Self, hook: *const fn (*root.Context) anyerror!void, channel: 
 fn encodeCommand(w: *std.Io.Writer, args: []const []const u8) !void {
     try w.print("*{d}\r\n", .{args.len});
     for (args) |a| {
-        try w.print("${d}\r\n{s}\r\n", .{a.len, a});
+        try w.print("${d}\r\n{s}\r\n", .{ a.len, a });
     }
 }
 
@@ -357,7 +357,6 @@ fn writtenLen(buf: []const u8) usize {
 }
 
 // ===================== Tests =====================
-
 
 test "redis readSubFrame parses a message push frame" {
     const payload = "*3\r\n$7\r\nmessage\r\n$5\r\nusers\r\n$11\r\nhello world\r\n";

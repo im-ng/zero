@@ -16,7 +16,6 @@ const List = std.array_list.AlignedManaged(u8, null);
 /// directly on `std.posix` so it has no external dependencies. Covers the subset
 /// needed by the `NoSQL` interface: STARTUP/AUTH handshake + QUERY (no bound
 /// values, consistency ONE) + Rows result parsing. Compression is not negotiated.
-
 pub const Consistency = enum(u16) {
     any = 0x0000,
     one = 0x0001,
@@ -514,9 +513,7 @@ fn writeValue(list: *List, alloc: std.mem.Allocator, cell: Cell) !void {
     }
 }
 
-
 // ===================== Tests =====================
-
 
 test "cassandra live round-trip (set CASSANDRA_TEST=1 to run)" {
     if (std.testing.environ.getPosix("CASSANDRA_TEST")) |_| {} else return;

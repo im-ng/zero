@@ -152,7 +152,7 @@ pub const CountingAllocator = struct {
         var it = self.sizes.iterator();
         while (it.next()) |e| {
             const ptr = @as([*]u8, @ptrFromInt(e.key_ptr.*));
-            self.backing.rawFree(ptr[0 .. e.value_ptr.*.len], e.value_ptr.*.alignment, @returnAddress());
+            self.backing.rawFree(ptr[0..e.value_ptr.*.len], e.value_ptr.*.alignment, @returnAddress());
             self.total_freed += e.value_ptr.*.len;
             self.free_count += 1;
         }

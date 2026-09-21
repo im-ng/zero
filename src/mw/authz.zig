@@ -41,88 +41,61 @@ pub fn execute(self: *const authz, req: *httpz.Request, res: *httpz.Response, ex
     if (self.provider) |provider| {
         switch (provider.mode) {
             .Basic => {
-                var buffer = try utils.combine(req.arena, "auth basic provider called", .{});
+                const buffer = try utils.combine(req.arena, "auth basic provider called", .{});
                 self.container.?.log.Info(req.arena, buffer);
 
                 const header = req.header(constants.AUTH_HEADER);
                 if (header == null) {
-                    buffer = try utils.combine(req.arena, "authorization header is not found.", .{});
-                    self.container.?.log.Info(req.arena, buffer);
-
-                    res.setStatus(.unauthorized);
+                    self.deny(res, req.arena, "authorization header is not found.");
                     return;
                 }
 
                 provider.validateBasicAuth(req.arena, header.?) catch |err| switch (err) {
                     AuthError.InvalidAuthKeyHeader => {
-                        buffer = try utils.combine(req.arena, "invalid authorization header found", .{});
-                        self.container.?.log.Info(req.arena, buffer);
-
-                        res.setStatus(.unauthorized);
+                        self.deny(res, req.arena, "invalid authorization header found");
                         return;
                     },
-                    else => {
-                        //do nothing
-                    },
+                    else => {},
                 };
             },
             .APIKey => {
-                var buffer = try utils.combine(req.arena, "auth api key called", .{});
+                const buffer = try utils.combine(req.arena, "auth api key called", .{});
                 self.container.?.log.info(buffer);
 
                 const header = req.header(constants.APIKEY_HEADER);
                 if (header == null) {
-                    buffer = try utils.combine(req.arena, "api key header is not found.", .{});
-                    self.container.?.log.Info(req.arena, buffer);
-
-                    res.setStatus(.unauthorized);
+                    self.deny(res, req.arena, "api key header is not found.");
                     return;
                 }
 
                 provider.validateAPIKeyAuth(req.arena, header.?) catch |err| switch (err) {
                     AuthError.InvalidAuthAPIHeader => {
-                        buffer = try utils.combine(req.arena, "invalid jwt header found", .{});
-                        self.container.?.log.Info(req.arena, buffer);
-
-                        res.setStatus(.unauthorized);
+                        self.deny(res, req.arena, "invalid jwt header found");
                         return;
                     },
-                    else => {
-                        //do nothing
-                    },
+                    else => {},
                 };
             },
             .OAuth => {
-                var buffer = try utils.combine(req.arena, "auth oauth called", .{});
+                const buffer = try utils.combine(req.arena, "auth oauth called", .{});
                 self.container.?.log.Info(req.arena, buffer);
 
                 const header = req.header(constants.AUTH_HEADER);
                 if (header == null) {
-                    buffer = try utils.combine(req.arena, "authorization header is not found.", .{});
-                    self.container.?.log.Info(req.arena, buffer);
-
-                    res.setStatus(.unauthorized);
+                    self.deny(res, req.arena, "authorization header is not found.");
                     return;
                 }
 
                 provider.validateOAuthToken(req.arena, header.?) catch |err| switch (err) {
                     AuthError.InvalidAuthToken => {
-                        buffer = try utils.combine(req.arena, "invalid auth token found", .{});
-                        self.container.?.log.Info(req.arena, buffer);
-
-                        res.setStatus(.unauthorized);
+                        self.deny(res, req.arena, "invalid auth token found");
                         return;
                     },
                     AuthError.TokenInvalidClaims => {
-                        buffer = try utils.combine(req.arena, "invalid token claims found", .{});
-                        self.container.?.log.Info(req.arena, buffer);
-
-                        res.setStatus(.unauthorized);
+                        self.deny(res, req.arena, "invalid token claims found");
                         return;
                     },
-                    else => {
-                        //do nothing
-                    },
+                    else => {},
                 };
             },
             else => {
@@ -133,6 +106,14 @@ pub fn execute(self: *const authz, req: *httpz.Request, res: *httpz.Response, ex
     }
 
     return executor.next();
+}
+
+/// Log a denial and set 401. Centralizes the repeated "header/claims invalid"
+/// branches so each auth mode stays a thin switch arm.
+fn deny(self: *const authz, res: *httpz.Response, arena: std.mem.Allocator, comptime msg: []const u8) void {
+    const buffer = utils.combine(arena, msg, .{}) catch "auth denied";
+    self.container.?.log.Info(arena, buffer);
+    res.setStatus(.unauthorized);
 }
 
 fn isWellKnownPath(_: *const authz, req: *httpz.Request) bool {
@@ -173,9 +154,7 @@ const MockExecutor = struct {
     }
 };
 
-
 // ===================== Tests =====================
-
 
 test "well-known path constants are correct" {
     try std.testing.expectEqualStrings("/.well-known/health", constants.HEALTH_PATH);

@@ -9,6 +9,11 @@ pub const KVSQLite = struct {
     db: *root.SQLite,
     allocator: std.mem.Allocator,
 
+    /// Frees the wrapper. `db` is borrowed from `container.SQL`, destroyed separately.
+    pub fn deinit(self: *KVSQLite, allocator: std.mem.Allocator) void {
+        allocator.destroy(self);
+    }
+
     fn ensure(self: *KVSQLite, ctx: *root.Context) !void {
         _ = try self.db.execWithContext(
             ctx,

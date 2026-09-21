@@ -38,10 +38,11 @@ pub const PubSubDLQLabel = PubSubSubscriberTotalLabel;
 // Type-erased handle for an app-registered custom metric. The metrics library
 // has no global registry, so custom metrics are kept in a dynamic list and
 // written alongside the built-ins. `ptr` points at the heap-allocated metric
-// `Impl`; `write` casts it back and serializes it.
+// `Impl`; `write` casts it back and serializes it, `deinit` frees it.
 pub const CustomMetric = struct {
     ptr: *anyopaque,
     write: *const fn (*anyopaque, *std.Io.Writer) anyerror!void,
+    deinit: *const fn (*anyopaque) void,
 };
 
 // Returns a writer shim for a concrete metric `Impl` type.
@@ -50,6 +51,20 @@ fn writeCustom(comptime ImplT: type) *const fn (*anyopaque, *std.Io.Writer) anye
         fn f(ptr: *anyopaque, w: *std.Io.Writer) !void {
             const m = @as(*ImplT, @ptrCast(@alignCast(ptr)));
             try m.write(w);
+        }
+    }.f;
+}
+
+// Returns a destructor shim for a concrete metric `Impl` type. It calls the
+// metric's own `.deinit()` (which frees its label strings / hashmaps) and then
+// releases the `allocator.create(ImplT)` backing pointer.
+fn deinitCustom(comptime ImplT: type) *const fn (*anyopaque) void {
+    return struct {
+        fn f(ptr: *anyopaque) void {
+            const m = @as(*ImplT, @ptrCast(@alignCast(ptr)));
+            m.deinit();
+            const allocator = m.allocator;
+            allocator.destroy(m);
         }
     }.f;
 }
@@ -252,7 +267,7 @@ pub fn Counter(self: *Self, comptime L: type, allocator: Allocator, comptime nam
     const impl = try allocator.create(T);
     errdefer allocator.destroy(impl);
     impl.* = try T.init(allocator, utils.io, name, .{ .help = help });
-    try self.addCustom(impl, writeCustom(T));
+    try self.addCustom(impl, writeCustom(T), deinitCustom(T));
     return impl;
 }
 
@@ -262,7 +277,7 @@ pub fn Gauge(self: *Self, comptime L: type, allocator: Allocator, comptime name:
     const impl = try allocator.create(T);
     errdefer allocator.destroy(impl);
     impl.* = try T.init(allocator, name, .{ .help = help });
-    try self.addCustom(impl, writeCustom(T));
+    try self.addCustom(impl, writeCustom(T), deinitCustom(T));
     return impl;
 }
 
@@ -273,14 +288,14 @@ pub fn Histogram(self: *Self, comptime L: type, allocator: Allocator, comptime n
     const impl = try allocator.create(T);
     errdefer allocator.destroy(impl);
     impl.* = try T.init(allocator, utils.io, name, .{ .help = help });
-    try self.addCustom(impl, writeCustom(T));
+    try self.addCustom(impl, writeCustom(T), deinitCustom(T));
     return impl;
 }
 
-fn addCustom(self: *Self, ptr: *anyopaque, write_fn: *const fn (*anyopaque, *std.Io.Writer) anyerror!void) !void {
+fn addCustom(self: *Self, ptr: *anyopaque, write_fn: *const fn (*anyopaque, *std.Io.Writer) anyerror!void, deinit_fn: *const fn (*anyopaque) void) !void {
     self.mut.lockUncancelable(utils.io);
     defer self.mut.unlock(utils.io);
-    try self.custom.append(.{ .ptr = ptr, .write = write_fn });
+    try self.custom.append(.{ .ptr = ptr, .write = write_fn, .deinit = deinit_fn });
 }
 
 pub fn initialize(allocator: Allocator, comptime _: metrics.RegistryOpts) !*metricz {
@@ -339,6 +354,37 @@ pub fn initialize(allocator: Allocator, comptime _: metrics.RegistryOpts) !*metr
     m.custom = std.array_list.Managed(CustomMetric).init(allocator);
 
     return m;
+}
+
+/// Frees every built-in metric vec (which in turn release their duped label
+/// strings, attribute buffers, and value hashmaps), the custom metric list, and
+/// the `metricz` struct itself. Safe to call only after the metrics server
+/// thread has been stopped and joined (see `App.run` teardown order).
+pub fn deinit(self: *Self, allocator: Allocator) void {
+    self.mut.lockUncancelable(utils.io);
+    defer self.mut.unlock(utils.io);
+
+    self.Info.deinit();
+    self.Threads.deinit();
+    self.MemoryUsage.deinit();
+    self.MemoryTotal.deinit();
+    self.ResponseBucket.deinit();
+    self.ResponseBucketHits.deinit();
+    self.ServiceResponseBucket.deinit();
+    self.SQLBucket.deinit();
+    self.PubSubPublisherTotal.deinit();
+    self.PubSubPublisherSuccess.deinit();
+    self.PubSubSubscriberTotal.deinit();
+    self.PubSubSubscriberSuccess.deinit();
+    self.CircuitOpenTotal.deinit();
+    self.PubSubDLQTotal.deinit();
+
+    for (self.custom.items) |c| {
+        c.deinit(c.ptr);
+    }
+    self.custom.deinit();
+
+    allocator.destroy(self);
 }
 
 pub fn write(self: *Self, ctx: *Context) !void {

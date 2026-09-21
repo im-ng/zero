@@ -87,15 +87,15 @@ pubKeys: std.StringHashMap(publiKey) = undefined,
 refreshThread: std.Thread = undefined,
 mutex: std.Io.Mutex = undefined,
 
-    refreshInterval: i16 = 60, // seconds
-    pathUrl: []const u8 = undefined,
+refreshInterval: i16 = 60, // seconds
+pathUrl: []const u8 = undefined,
 
-    /// When set, OAuth tokens must carry this `aud` (audience) claim. Optional so
-    /// existing deployments without it are unaffected. Wired from `OAUTH_AUDIENCE`.
-    expected_audience: ?[]const u8 = null,
-    /// When set, OAuth tokens must be issued by this `iss` (issuer). Optional.
-    /// Wired from `OAUTH_ISSUER`.
-    expected_issuer: ?[]const u8 = null,
+/// When set, OAuth tokens must carry this `aud` (audience) claim. Optional so
+/// existing deployments without it are unaffected. Wired from `OAUTH_AUDIENCE`.
+expected_audience: ?[]const u8 = null,
+/// When set, OAuth tokens must be issued by this `iss` (issuer). Optional.
+/// Wired from `OAUTH_ISSUER`.
+expected_issuer: ?[]const u8 = null,
 
 pub fn create(c: *root.container, m: AuthMode) anyerror!*AuthProvider {
     const auth = try c.allocator.create(AuthProvider);
@@ -250,7 +250,7 @@ pub fn validateOAuthToken(self: *Self, allocator: std.mem.Allocator, authHeader:
     };
     defer validator.deinit();
 
-    const now = @as(i64, @intCast(@divTrunc(utils.nowReal().nanoseconds, 1_000_000_000)));
+    const now = @as(i64, @intCast(@divFloor(utils.nowReal().nanoseconds, 1_000_000_000)));
     // validator.hasBeenIssuedBy(publicKey.) // iss
     // validator.isRelatedTo("sub") // sub
     // validator.isIdentifiedBy("jti rrr") // jti
@@ -371,9 +371,7 @@ pub fn refreshKeys(ctx: *Context) !void {
     ctx.info("oatuh keys refreshed");
 }
 
-
 // ===================== Tests =====================
-
 
 test "AuthMode.str returns correct strings" {
     try std.testing.expectEqualStrings("Basic", AuthMode.Basic.str());

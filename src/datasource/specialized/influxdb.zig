@@ -50,7 +50,7 @@ pub const InfluxDB = struct {
         if (res.status < 200 or res.status > 299) {
             const sb = try res.allocBody(ctx.allocator, .{});
             defer sb.deinit();
-            std.log.err("influxdb write failed: status={d} body={s}", .{ res.status, sb.buf[0..sb.pos] });
+            std.log.warn("influxdb write failed: status={d} body={s}", .{ res.status, sb.buf[0..sb.pos] });
             return error.InfluxDBWriteFailed;
         }
     }
@@ -72,11 +72,20 @@ pub const InfluxDB = struct {
         if (res.status < 200 or res.status > 299) {
             const sb = try res.allocBody(ctx.allocator, .{});
             defer sb.deinit();
-            std.log.err("influxdb query failed: status={d} body={s}", .{ res.status, sb.buf[0..sb.pos] });
+            std.log.warn("influxdb query failed: status={d} body={s}", .{ res.status, sb.buf[0..sb.pos] });
             return error.InfluxDBQueryFailed;
         }
         const sb = try res.allocBody(ctx.allocator, .{});
         defer sb.deinit();
         return try ctx.allocator.dupe(u8, sb.buf[0..sb.pos]);
+    }
+
+    pub fn deinit(self: *InfluxDB, allocator: std.mem.Allocator) void {
+        self.client.deinit();
+        allocator.free(self.base_url);
+        allocator.free(self.org);
+        allocator.free(self.bucket);
+        if (self.token) |t| allocator.free(t);
+        allocator.destroy(self);
     }
 };

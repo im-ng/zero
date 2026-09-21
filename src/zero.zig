@@ -59,6 +59,7 @@ pub const SQL = @import("datasource/SQL.zig");
 pub const SQLite = @import("datasource/SQLite.zig");
 
 pub const DuckDB = @import("datasource/DuckDB.zig").DuckDB;
+pub const ClickHouse = @import("datasource/ClickHouse.zig").ClickHouse;
 pub const datasourceInterface = @import("datasource/interface.zig");
 pub const Datasource = datasourceInterface.Interface;
 
@@ -77,6 +78,7 @@ pub const Solr = @import("datasource/specialized/solr.zig").Solr;
 // NoSQL datasource (document / wide-column)
 pub const nosqlInterface = @import("datasource/nosqlInterface.zig");
 pub const NoSQL = nosqlInterface.NoSQL;
+pub const Couchbase = @import("datasource/couchbase.zig").Couchbase;
 pub const Cassandra = @import("datasource/cassandra.zig").Cassandra;
 
 pub const client = @import("service/client.zig");

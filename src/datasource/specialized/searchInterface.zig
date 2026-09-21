@@ -146,9 +146,7 @@ pub const MockBackend = struct {
     }
 };
 
-
 // ===================== Tests =====================
-
 
 test "Search dispatches through the type-erased handle" {
     var mock: MockBackend = .{ .last_doc = "" };

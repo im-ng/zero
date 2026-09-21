@@ -20,9 +20,7 @@ fn envOr(allocator: std.mem.Allocator, name: []const u8, default: []const u8) []
     return envGet(name) orelse default;
 }
 
-
 // ===================== Tests =====================
-
 
 // Real-database integration tests. Kept out of the kcov-traced coverage build
 // because `sqlitez.Db.init` aborts under kcov's ptrace. Run them via the separate

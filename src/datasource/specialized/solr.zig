@@ -45,7 +45,7 @@ pub const Solr = struct {
         if (res.status < 200 or res.status > 299) {
             const sb = try res.allocBody(ctx.allocator, .{});
             defer sb.deinit();
-            std.log.err("solr index failed: status={d} body={s}", .{ res.status, sb.buf[0..sb.pos] });
+            std.log.warn("solr index failed: status={d} body={s}", .{ res.status, sb.buf[0..sb.pos] });
             return error.SolrIndexFailed;
         }
     }
@@ -65,7 +65,7 @@ pub const Solr = struct {
         if (res.status < 200 or res.status > 299) {
             const sb = try res.allocBody(ctx.allocator, .{});
             defer sb.deinit();
-            std.log.err("solr query failed: status={d} body={s}", .{ res.status, sb.buf[0..sb.pos] });
+            std.log.warn("solr query failed: status={d} body={s}", .{ res.status, sb.buf[0..sb.pos] });
             return error.SolrQueryFailed;
         }
         const sb = try res.allocBody(ctx.allocator, .{});
@@ -97,8 +97,16 @@ pub const Solr = struct {
         if (res.status < 200 or res.status > 299) {
             const sb = try res.allocBody(ctx.allocator, .{});
             defer sb.deinit();
-            std.log.err("solr delete failed: status={d} body={s}", .{ res.status, sb.buf[0..sb.pos] });
+            std.log.warn("solr delete failed: status={d} body={s}", .{ res.status, sb.buf[0..sb.pos] });
             return error.SolrDeleteFailed;
         }
+    }
+
+    pub fn deinit(self: *Solr, allocator: std.mem.Allocator) void {
+        self.client.deinit();
+        allocator.free(self.base_url);
+        allocator.free(self.default_collection);
+        if (self.basic_auth) |a| allocator.free(a);
+        allocator.destroy(self);
     }
 };

@@ -218,6 +218,10 @@ fn expandSteps(
 }
 
 fn expandOccurances(self: *Self, value: []const u8, map: *std.AutoHashMap(u8, bool), max: u8, min: u8) !void {
+    // Each recursive step consumes a comma-separated token, so the recursion
+    // depth is bounded by the number of tokens, which is bounded by the
+    // field length. A pathological/invalid schedule must fail fast.
+    std.debug.assert(value.len <= 256);
     if (value.len == 0) return;
 
     // if it *, expand to the limits

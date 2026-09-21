@@ -36,7 +36,7 @@ pub fn run(args: std.process.Args) !void {
                     return error.MissingNameValue;
                 };
             } else if (std.mem.startsWith(u8, arg, "--name=")) {
-                name = arg["--name=".len ..];
+                name = arg["--name=".len..];
             } else {
                 std.debug.print("error: unknown flag '{s}'\n", .{arg});
                 return error.UnknownFlag;
@@ -61,8 +61,7 @@ pub fn run(args: std.process.Args) !void {
 
 fn printHelp() void {
     const out = std.Io.File.stdout();
-    out.writeStreamingAll(
-        zero.utils.io,
+    out.writeStreamingAll(zero.utils.io,
         \\zero - the zero framework CLI
         \\
         \\Usage:

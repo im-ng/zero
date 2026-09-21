@@ -59,6 +59,19 @@ pub const FileStoreS3 = struct {
         return self;
     }
 
+    /// Frees the S3 client and all owned config strings allocated in `open`.
+    pub fn deinit(self: *FileStoreS3) void {
+        const allocator = self.allocator;
+        self.client.deinit();
+        allocator.free(self.endpoint);
+        allocator.free(self.host);
+        allocator.free(self.region);
+        allocator.free(self.bucket);
+        allocator.free(self.access_key);
+        allocator.free(self.secret_key);
+        allocator.destroy(self);
+    }
+
     fn objectUrl(self: *FileStoreS3, allocator: std.mem.Allocator, key: []const u8) ![]const u8 {
         const enc = try encodePath(allocator, key);
         defer allocator.free(enc);
@@ -151,7 +164,7 @@ pub const FileStoreS3 = struct {
         try req.header("x-amz-content-sha256", h.content_sha256);
         try req.header("authorization", h.authorization);
 
-                var res = try req.getResponse(.{});
+        var res = try req.getResponse(.{});
         if (res.status == 404) return null;
         if (res.status < 200 or res.status > 299) return error.S3GetFailed;
 
@@ -213,7 +226,7 @@ pub const FileStoreS3 = struct {
         try req.header("x-amz-content-sha256", h.content_sha256);
         try req.header("authorization", h.authorization);
 
-                var res = try req.getResponse(.{});
+        var res = try req.getResponse(.{});
         if (res.status < 200 or res.status > 299) return error.S3ListFailed;
 
         var sb = try res.allocBody(ctx.allocator, .{ .max_size = self.max_bytes });
@@ -275,7 +288,7 @@ fn encodePath(allocator: std.mem.Allocator, path: []const u8) ![]const u8 {
 
 /// Current UTC time in AWS `YYYYMMDDTHHMMSSZ` form.
 fn amzDate(allocator: std.mem.Allocator) ![]const u8 {
-    const epoch_seconds: u64 = @intCast(@divTrunc(utils.nowReal().nanoseconds, 1_000_000_000));
+    const epoch_seconds: u64 = @intCast(@divFloor(utils.nowReal().nanoseconds, 1_000_000_000));
     const es = std.time.epoch.EpochSeconds{ .secs = epoch_seconds };
     const ed = es.getEpochDay();
     const yd = ed.calculateYearDay();
@@ -397,9 +410,7 @@ pub fn signAuthorization(
     , .{ access_key, scope, sh, sig_hex });
 }
 
-
 // ===================== Tests =====================
-
 
 test "FileStoreS3: hmac-sha256 (RFC 4231 case 2)" {
     const key = [_]u8{0x0b} ** 20;

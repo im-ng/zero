@@ -72,9 +72,7 @@ const MemUsage = struct {
     }
 };
 
-
 // ===================== Tests =====================
-
 
 test "memory" {
     const mem_usage = try usage();

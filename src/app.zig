@@ -90,13 +90,6 @@ fn initBase(allocator: std.mem.Allocator, io: std.Io, em: *EnvMap) !*App {
 
     const log = try root.logger.create(allocator);
 
-    // structured logging: LOG_FORMAT=json emits one JSON object per log line.
-    // Set this before config creation so early logs (e.g. "Loaded config from file")
-    // are also emitted as JSON.
-    if (em.get("LOG_FORMAT") != null and std.mem.eql(u8, em.get("LOG_FORMAT").?, "json")) {
-        root.logger.setJsonFormat(true);
-    }
-
     // log timestamps use the system local zone by default; ZERO_LOG_TIMEZONE can
     // force a specific zone ("utc" | "local" | IANA name). Set this before config
     // creation so even the first log line ("Loaded config from file") honors it.
@@ -108,15 +101,7 @@ fn initBase(allocator: std.mem.Allocator, io: std.Io, em: *EnvMap) !*App {
         .environments = em,
     });
 
-    // LOG_FORMAT=json may be set in configs/.env (loaded into `config.environments`),
-    // which the early `em.get` check above cannot see. Honor it here so JSON logs
-    // work when configured via the .env file.
-    if (std.mem.eql(u8, config.getOrDefault("LOG_FORMAT", ""), "json")) {
-        root.logger.setJsonFormat(true);
-    }
-    if (std.mem.eql(u8, config.getOrDefault("OTEL_LOG_JSON", ""), "true")) {
-        root.logger.setOtelJsonFormat(true);
-    }
+    configureLogFormat(em, config);
 
     // One fixed region, sized by ZERO_FRAMEWORK_MEM_SIZE (MiB, default 8), holding
     // all framework-internal bootstrap allocations. It is never tied to a request
@@ -191,26 +176,42 @@ fn initBase(allocator: std.mem.Allocator, io: std.Io, em: *EnvMap) !*App {
     };
     app.subcommands = std.StringHashMap(CliSubCommand).init(allocator);
 
-    // Fail-fast on missing required config keys. Opt-in via REQUIRED_CONFIG_KEYS
-    // (comma-separated). Empty by default so existing apps/tests are unaffected.
-    const reqKeys = config.getOrDefault("REQUIRED_CONFIG_KEYS", "");
-    if (reqKeys.len > 0) {
-        var it = std.mem.splitScalar(u8, reqKeys, ',');
-        while (it.next()) |k| {
-            const trimmed = std.mem.trim(u8, k, " ");
-            if (trimmed.len == 0) continue;
-            if (config.get(trimmed).len == 0) {
-                const msg = try utils.combine(container.allocator, "required config key missing or empty: {s}", .{trimmed});
-                log.err(msg);
-                return error.MissingRequiredConfig;
-            }
-        }
-    }
+    // Fail-fast on missing required config keys (opt-in via REQUIRED_CONFIG_KEYS).
+    try checkRequiredConfigKeys(allocator, config, log);
 
     try app.printPid();
     AppInstance = app;
 
     return app;
+}
+
+/// Apply JSON/OTEL log formatting from env (early) and from config (.env file).
+fn configureLogFormat(em: *EnvMap, config: *root.config) void {
+    if (em.get("LOG_FORMAT")) |fmt| {
+        if (std.mem.eql(u8, fmt, "json")) root.logger.setJsonFormat(true);
+    }
+    if (std.mem.eql(u8, config.getOrDefault("LOG_FORMAT", ""), "json")) {
+        root.logger.setJsonFormat(true);
+    }
+    if (std.mem.eql(u8, config.getOrDefault("OTEL_LOG_JSON", ""), "true")) {
+        root.logger.setOtelJsonFormat(true);
+    }
+}
+
+/// Fail-fast on missing required config keys (opt-in via REQUIRED_CONFIG_KEYS).
+fn checkRequiredConfigKeys(allocator: std.mem.Allocator, config: *root.config, log: *root.logger) !void {
+    const req_keys = config.getOrDefault("REQUIRED_CONFIG_KEYS", "");
+    if (req_keys.len == 0) return;
+    var it = std.mem.splitScalar(u8, req_keys, ',');
+    while (it.next()) |k| {
+        const trimmed = std.mem.trim(u8, k, " ");
+        if (trimmed.len == 0) continue;
+        if (config.get(trimmed).len == 0) {
+            const msg = try utils.combine(allocator, "required config key missing or empty: {s}", .{trimmed});
+            log.err(msg);
+            return error.MissingRequiredConfig;
+        }
+    }
 }
 
 /// Create the full application: config, logging, container/datasources, and the
@@ -470,6 +471,14 @@ fn runStartupHooks(self: *Self) !void {
     const _req: *httpz.Request = undefined;
     const _res: *httpz.Response = undefined;
     var context = try Context.init(self.container.allocator, self.container, _req, _res);
+    // The startup `Context` (and its Postgres session) is heap-allocated from the
+    // container allocator and is not request-scoped, so free the session here.
+    defer {
+        if (self.container.SQL != null) {
+            const session = @as(*root.SQL, @ptrCast(@alignCast(context.SQL.ptr)));
+            self.container.allocator.destroy(session);
+        }
+    }
 
     if (self.startupHook) |hook| {
         hook(&context) catch |err| {
@@ -488,8 +497,9 @@ fn printPid(self: *Self) !void {
     const appName = self.config.getOrDefault("APP_NAME", "NA");
     var buffer: []u8 = undefined;
     buffer = try self.container.allocator.alloc(u8, 100);
-    buffer = try std.fmt.bufPrint(buffer, "{s} app pid {d}", .{ appName, std.c.getpid() });
-    self.log.info(buffer);
+    const msg = try std.fmt.bufPrint(buffer, "{s} app pid {d}", .{ appName, std.c.getpid() });
+    self.log.info(msg);
+    self.container.allocator.free(buffer);
 }
 
 fn prepareDefaultRoutes(self: *Self) !void {
@@ -509,11 +519,8 @@ fn prepareDefaultRoutes(self: *Self) !void {
 
     // register static routes
     self.httpServer.router.get("/*", staticDirectory, .{});
-    const buffer = try utils.toString(
-        self.container.allocator,
-        "registered static files from directory {s}",
-        constants.STATIC_DIR,
-    );
+    var buf: [256]u8 = undefined;
+    const buffer = try std.fmt.bufPrint(&buf, "registered static files from directory {s}", .{constants.STATIC_DIR});
     self.log.info(buffer);
 
     // add open api spec if available
@@ -547,6 +554,7 @@ pub fn run(self: *Self) !void {
     // down. (It used to be deinited from the signal handler, racing the still
     // running thread and skipping this teardown path.)
     self.httpServer.http.deinit();
+    self.allocator.destroy(self.httpServer);
 
     // The http server has stopped (e.g. after a SIGINT/SIGTERM via the
     // shutdown handler). Tear down the rest in NORMAL execution flow — never
@@ -557,6 +565,7 @@ pub fn run(self: *Self) !void {
         self.metriczServer.stop();
         mthread.join();
         self.metriczServer.deinit();
+        self.allocator.destroy(self.metriczServer);
     }
     if (self.cronz) |cronz| {
         cronz.destroy();
@@ -571,6 +580,7 @@ pub fn run(self: *Self) !void {
         k.destroy();
     }
 
+    self.migrations.deinit();
     self.container.destroy();
 
     // Flush any in-flight OpenTelemetry spans/metrics and stop its background
@@ -579,6 +589,9 @@ pub fn run(self: *Self) !void {
 
     // All framework subsystems are torn down; release the bootstrap arena.
     self.deinit();
+
+    // Finally, free the `App` struct itself.
+    self.allocator.destroy(self);
 }
 
 fn startPubSubSubscriptions(self: Self) !void {
@@ -654,12 +667,12 @@ fn startMetricsServer(self: *Self) !void {
 }
 
 fn startHttpServer(self: Self) !void {
-    var buffer: []u8 = try self.container.allocator.alloc(u8, 100);
-    buffer = try std.fmt.bufPrint(buffer, "Starting server on port: {d}", .{self.httpServer.port});
-    self.container.log.info(buffer);
+    const buffer: []u8 = try self.container.allocator.alloc(u8, 100);
+    const msg = try std.fmt.bufPrint(buffer, "Starting server on port: {d}", .{self.httpServer.port});
+    self.container.log.info(msg);
+    self.container.allocator.free(buffer);
 
     const thread = self.httpServer.run() catch |err| {
-        buffer = try std.fmt.bufPrint(buffer, "Server starting failed: {any}. check configs.", .{error.AddressInUse});
         self.container.log.any(err);
         return;
     };
@@ -667,9 +680,10 @@ fn startHttpServer(self: Self) !void {
 }
 
 pub fn prepareHttpServer(self: Self) !std.Thread {
-    var buffer: []u8 = try self.container.allocator.alloc(u8, 100);
-    buffer = try std.fmt.bufPrint(buffer, "Starting server on port: {d}", .{self.httpServer.port});
-    self.container.log.info(buffer);
+    const buffer: []u8 = try self.container.allocator.alloc(u8, 100);
+    const msg = try std.fmt.bufPrint(buffer, "Starting server on port: {d}", .{self.httpServer.port});
+    self.container.log.info(msg);
+    self.container.allocator.free(buffer);
 
     // register signal handlers
     // TODO: make it clean
@@ -1047,6 +1061,9 @@ pub fn addKVStore(self: *Self, name: []const u8, backend: root.kvstore.Backend, 
 
 pub fn addFileStore(self: *Self, name: []const u8, backend: root.filestore.Backend, opts: root.filestore.Options) !void {
     const store = try root.filestore.build(self.container, backend, opts);
+    if (self.container.fileStores.fetchRemove(name)) |old| {
+        old.value.deinit(self.container.allocator);
+    }
     try self.container.fileStores.put(name, store);
     if (self.container.defaultFileStore == null) self.container.defaultFileStore = store;
 }
@@ -1069,9 +1086,35 @@ pub fn addNoSQL(self: *Self, backend: root.nosqlInterface.Backend, opts: root.no
     self.container.NoSQL = try root.NoSQL.build(self.container, backend, opts);
 }
 
+/// Register the Couchbase document backend over N1QL/HTTP and expose it on the
+/// request context as `ctx.NoSQL`. No `libcouchbase` C library required.
+pub fn addCouchbase(self: *Self, opts: root.nosqlInterface.Options) !void {
+    self.container.NoSQL = try root.NoSQL.build(self.container, .couchbase, opts);
+}
+
 /// Register the in-process OLAP SQL engine (DuckDB). Exposed on the request
 /// context as `ctx.SQL` (reusing the relational `Datasource` interface). When
 /// `path` is empty an in-memory database is used.
+/// Register the columnar OLAP SQL backend (ClickHouse) over HTTP and expose it
+/// on the request context as `ctx.SQL`. No native driver / C library required.
+pub fn addClickhouse(self: *Self, url: []const u8, database: []const u8, opts: struct { user: ?[]const u8 = null, password: ?[]const u8 = null }) !void {
+    const db = try root.ClickHouse.create(self.container.allocator, .{
+        .url = url,
+        .database = database,
+        .user = opts.user,
+        .password = opts.password,
+    });
+    self.container.ClickHouse = db;
+    self.container.datasource = root.Datasource.init(
+        db,
+        .clickhouse,
+        if (self.container.config.getAsBool("SQL_CIRCUIT_BREAKER_ENABLE"))
+            root.circuit_breaker.CircuitBreaker.init(.{})
+        else
+            null,
+    );
+}
+
 pub fn addDuckDB(self: *Self, path: []const u8) !void {
     const db = try root.DuckDB.create(self.container.allocator, path);
     self.container.DuckDB = db;

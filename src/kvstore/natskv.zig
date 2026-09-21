@@ -8,6 +8,11 @@ const utils = root.utils;
 pub const KVNats = struct {
     kv: natslib.jetstream.KeyValue,
 
+    /// Frees the wrapper. `kv` is borrowed from `container.Nats`, destroyed separately.
+    pub fn deinit(self: *KVNats, allocator: std.mem.Allocator) void {
+        allocator.destroy(self);
+    }
+
     pub fn get(self: *KVNats, ctx: *root.Context, key: []const u8) !?[]const u8 {
         const entry = try self.kv.get(key);
         if (entry) |e| {

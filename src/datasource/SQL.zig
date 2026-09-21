@@ -12,6 +12,11 @@ const context = root.Context;
 const sqlStats = root.metricz.AppSQLStatsLabel;
 const Mapper = root.pgz.Mapper;
 
+/// Hard ceiling on rows a single query may materialize in memory. A result
+/// set larger than this is a runaway query (missing LIMIT) and must fail fast
+/// rather than grow the allocator without bound.
+const max_query_rows: usize = 10_000;
+
 sql: *pgz.Pool,
 log: *root.logger,
 metricz: *root.metricz = undefined,
@@ -20,11 +25,11 @@ options: *pgz.Pool.Opts = undefined,
 allocator: std.mem.Allocator = undefined,
 lastId: i64 = 0,
 rows: usize = 0,
-    // When non-null, all statements run on this single pinned connection so a set
-    // of writes can be wrapped in one transaction (see begin/commit/rollback).
-    transaction_conn: ?*pgz.Conn = null,
-    /// Per-statement timeout (ms) applied to every query/exec. null = no timeout.
-    statement_timeout_ms: ?u32 = constants.DEFAULT_STATEMENT_TIMEOUT_MS,
+// When non-null, all statements run on this single pinned connection so a set
+// of writes can be wrapped in one transaction (see begin/commit/rollback).
+transaction_conn: ?*pgz.Conn = null,
+/// Per-statement timeout (ms) applied to every query/exec. null = no timeout.
+statement_timeout_ms: ?u32 = constants.DEFAULT_STATEMENT_TIMEOUT_MS,
 
 // is this neccessary?
 pub const dbConfig = struct {
@@ -46,6 +51,12 @@ pub fn create(allocator: std.mem.Allocator, c: *dbConfig, l: *root.logger, m: *r
     source.metricz = m;
     source.transaction_conn = null;
     return source;
+}
+
+/// Closes the underlying connection pool and frees the `SQL` struct's own state.
+/// The request-scoped sessions borrow this pool and are freed via their arenas.
+pub fn deinit(self: *SQL) void {
+    self.sql.deinit();
 }
 
 /// Build a per-request session that borrows the shared connection `Pool` but
@@ -82,9 +93,9 @@ pub fn recordMetrics(self: *Self, duration: f32, query: []const u8, queryType: [
         .{
             .hostname = "",
             .database = "",
-        .query = "",
-        .operation = "",
-    },
+            .query = "",
+            .operation = "",
+        },
         duration,
     ) catch {};
 }
@@ -143,7 +154,10 @@ pub fn queryRows(self: *Self, ctx: *root.Context, comptime Type: type, comptime 
 
     var list = std.array_list.Managed(Type).init(ctx.allocator);
     var res = rows.mapper(Type, .{ .allocator = ctx.allocator });
-    while (try res.next()) |t| try list.append(t);
+    while (try res.next()) |t| {
+        if (list.items.len >= max_query_rows) return error.ResultSetExceedsLimit;
+        try list.append(t);
+    }
     return try list.toOwnedSlice();
 }
 
@@ -239,6 +253,7 @@ pub fn selectSlice(
 
     var res = rows.mapper(_type, .{ .dupe = true });
     while (try res.next()) |T| {
+        if (list.items.len >= max_query_rows) return error.ResultSetExceedsLimit;
         try list.append(T);
     }
 

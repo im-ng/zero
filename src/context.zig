@@ -68,7 +68,7 @@ pub const Context = struct {
             // clobber each other's last-insert-id.
             const session = try root.SQL.createSession(allocator, container.SQL.?);
             c.SQL = root.Datasource.init(session, .postgres, container.datasource.breaker);
-        } else if (container.SQLite != null or container.DuckDB != null) {
+        } else if (container.SQLite != null or container.DuckDB != null or container.ClickHouse != null) {
             // SQLite/DuckDB backends reuse a single shared connection; the
             // per-request session does not apply (see ZIG_LEARNINGS.md — their
             // single-connection concurrency is a separate, documented limitation).
@@ -126,7 +126,7 @@ pub const Context = struct {
             .params = std.StringHashMap([]const u8).init(allocator),
         };
 
-        if (container.SQL != null or container.SQLite != null or container.DuckDB != null) {
+        if (container.SQL != null or container.SQLite != null or container.DuckDB != null or container.ClickHouse != null) {
             c.SQL = container.datasource;
         }
         if (container.defaultKV) |kv| c.KV = kv;
@@ -466,9 +466,7 @@ pub const Context = struct {
     }
 };
 
-
 // ===================== Tests =====================
-
 
 test "context: protobuf bindProto and protobuf round-trip" {
     const protobuf = @import("protobuf");

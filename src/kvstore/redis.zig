@@ -30,6 +30,7 @@ const BlockingMutex = struct {
 /// ZIG_LEARNINGS.md.)
 pub const KVRedis = struct {
     client: rediz.Client,
+
     mutex: BlockingMutex = .{},
 
     pub fn get(self: *KVRedis, ctx: *root.Context, key: []const u8) !?[]const u8 {
@@ -61,5 +62,11 @@ pub const KVRedis = struct {
         self.mutex.lock();
         defer self.mutex.unlock();
         try self.client.send(void, .{ "PEXPIRE", key, ms });
+    }
+
+    /// Frees the wrapper. `client` is borrowed from `container.redis`, which is
+    /// destroyed separately during container teardown.
+    pub fn deinit(self: *KVRedis, allocator: std.mem.Allocator) void {
+        allocator.destroy(self);
     }
 };

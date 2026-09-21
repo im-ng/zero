@@ -8,9 +8,7 @@ pub const ErrData = struct {
     data: Response,
 };
 
-
 // ===================== Tests =====================
-
 
 test "Response struct can hold pointer to data" {
     var val: i32 = 42;

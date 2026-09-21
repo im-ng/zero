@@ -56,21 +56,21 @@ auth: ?OutboundAuth = null,
 breaker: ?CircuitBreaker = null,
 /// Per-service fixed-window rate limiter (null = disabled).
 limiter: ?RateLimiter = null,
-    /// Optional connect timeout (ms) applied to outbound requests to this service.
-    timeout_ms: ?u64 = null,
-    /// Max additional attempts for transient failures (network errors + 5xx).
-    max_retries: ?u32 = null,
-    /// Base backoff (ms) between retries; delay = base * attempt (linear).
-    retry_base_ms: ?i64 = null,
+/// Optional connect timeout (ms) applied to outbound requests to this service.
+timeout_ms: ?u64 = null,
+/// Max additional attempts for transient failures (network errors + 5xx).
+max_retries: ?u32 = null,
+/// Base backoff (ms) between retries; delay = base * attempt (linear).
+retry_base_ms: ?i64 = null,
 
 /// OAuth token cache (runtime, managed by `ensureOAuthToken`).
 oauth_token: ?[]const u8 = null,
 oauth_expires_at: i128 = 0,
 oauth_mutex: std.Io.Mutex = .init,
-    oauth_client: ?zul.http.Client = null,
-    /// Circuit breaker guarding the OAuth token endpoint (separate from the
-    /// downstream breaker so a flapping IdP can't pin every outbound call).
-    oauth_breaker: ?CircuitBreaker = null,
+oauth_client: ?zul.http.Client = null,
+/// Circuit breaker guarding the OAuth token endpoint (separate from the
+/// downstream breaker so a flapping IdP can't pin every outbound call).
+oauth_breaker: ?CircuitBreaker = null,
 
 pub fn create(
     ct: *root.container,
@@ -293,10 +293,10 @@ pub fn log(
     ctx.info(buffer);
 }
 
-    fn retryBackoffMs(self: *Self, attempt: u32) i64 {
-        const base = self.retry_base_ms orelse constants.DEFAULT_SERVICE_RETRY_BASE_MS;
-        return @as(i64, base) * @as(i64, attempt);
-    }
+fn retryBackoffMs(self: *Self, attempt: u32) i64 {
+    const base = self.retry_base_ms orelse constants.DEFAULT_SERVICE_RETRY_BASE_MS;
+    return @as(i64, base) * @as(i64, attempt);
+}
 
 pub fn get(
     self: *Self,
@@ -377,6 +377,26 @@ pub fn delete(
     );
 }
 
+/// Copy query params and headers from the options maps onto the outbound request.
+fn applyRequestMaps(
+    req: *zul.http.Request,
+    queryParams: ?std.StringHashMap([]const u8),
+    headers: ?std.StringHashMap([]const u8),
+) !void {
+    if (queryParams) |params| {
+        var iterator = params.iterator();
+        while (iterator.next()) |param| {
+            try req.query(param.key_ptr.*, param.value_ptr.*);
+        }
+    }
+    if (headers) |custom_headers| {
+        var iterator = custom_headers.iterator();
+        while (iterator.next()) |header| {
+            try req.header(header.key_ptr.*, header.value_ptr.*);
+        }
+    }
+}
+
 fn createAndSendRequest(
     self: *Self,
     ctx: *Context,
@@ -430,19 +450,7 @@ fn createAndSendRequest(
             try req.header("traceparent", tp);
         }
 
-        if (queryParams) |params| {
-            var iterator = params.iterator();
-            while (iterator.next()) |param| {
-                try req.query(param.key_ptr.*, param.value_ptr.*);
-            }
-        }
-
-        if (headers) |custom_headers| {
-            var iterator = custom_headers.iterator();
-            while (iterator.next()) |header| {
-                try req.header(header.key_ptr.*, header.value_ptr.*);
-            }
-        }
+        try applyRequestMaps(&req, queryParams, headers);
 
         if (payload) |body| {
             req.body(body);
@@ -698,9 +706,7 @@ fn getResponseTraceIDBuffer(_: *Self, allocator: std.mem.Allocator) ![]const u8 
     return try std.fmt.allocPrint(allocator, "{s:>36}", .{" "});
 }
 
-
 // ===================== Tests =====================
-
 
 test "client: downstream rate limiter is created from options and trips" {
     // Allocate everything in an arena and free the arena afterwards: a full

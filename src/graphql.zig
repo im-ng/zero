@@ -238,7 +238,7 @@ fn resolve(comptime T: type, instance: T, ss: ast.SelectionSetNode, ec: anytype)
             .FragmentSpread => |sp| {
                 if (findFragment(ec.doc, sp.name.value)) |frag| {
                     const sub = try resolve(T, instance, frag.selection_set, ec);
-                    mergeObjects(&obj, sub.object, ec.alloc);
+                    try mergeObjects(&obj, sub.object, ec.alloc);
                 }
             },
             .InlineFragment => |inf| {
@@ -246,17 +246,18 @@ fn resolve(comptime T: type, instance: T, ss: ast.SelectionSetNode, ec: anytype)
                     if (!std.mem.eql(u8, tc.name.value, @typeName(T))) continue;
                 }
                 const sub = try resolve(T, instance, inf.selection_set, ec);
-                mergeObjects(&obj, sub.object, ec.alloc);
+                try mergeObjects(&obj, sub.object, ec.alloc);
             },
         }
     }
     return .{ .object = obj };
 }
 
-fn mergeObjects(dest: *std.json.ObjectMap, src: std.json.ObjectMap, alloc: std.mem.Allocator) void {
+fn mergeObjects(dest: *std.json.ObjectMap, src: std.json.ObjectMap, alloc: std.mem.Allocator) !void {
     var it = src.iterator();
     while (it.next()) |e| {
-        dest.put(alloc, e.key_ptr.*, e.value_ptr.*) catch {};
+        // Propagate OOM instead of silently dropping a merged field.
+        try dest.put(alloc, e.key_ptr.*, e.value_ptr.*);
     }
 }
 

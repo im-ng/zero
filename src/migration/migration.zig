@@ -33,6 +33,13 @@ pub fn create(c: *root.container) !*migration {
     return m;
 }
 
+/// Frees the migration registry maps and the `migration` struct.
+pub fn deinit(self: *Self) void {
+    self.map.deinit();
+    self.keys.deinit();
+    self.container.allocator.destroy(self);
+}
+
 pub fn run(self: *Self) anyerror!void {
     std.mem.sort(i64, self.keys.items, {}, std.sort.asc(i64));
 
@@ -93,7 +100,7 @@ pub fn run(self: *Self) anyerror!void {
                 continue;
             };
 
-            const duration: u64 = @as(u64, @intCast(@divTrunc(start.nanoseconds, 1_000_000)));
+            const duration: u64 = @as(u64, @intCast(@divFloor(start.nanoseconds, 1_000_000)));
 
             _ = sqlMigrator.insertMigration(ctx, m, duration) catch |err| {
                 ctx.any(err);

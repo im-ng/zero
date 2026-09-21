@@ -9,33 +9,9 @@ top:
 
 clean:
 	rm -rf .zig-cache zig-out zig-pkg
-	rm -rf examples/zero-auth/.zig-cache examples/zero-auth/zig-out	examples/zero-auth/zig-pkg
-	rm -rf examples/zero-basic/.zig-cache examples/zero-basic/zig-out examples/zero-basic/zig-pkg 
-	rm -rf examples/zero-cronz/.zig-cache examples/zero-cronz/zig-out	examples/zero-cronz/zig-pkg
-	rm -rf examples/zero-migration/.zig-cache examples/zero-migration/zig-out	examples/zero-migration/zig-pkg
-	rm -rf examples/zero-mqtt-publisher/.zig-cache examples/zero-mqtt-publisher/zig-out	examples/zero-mqtt-publisher/zig-pkg
-	rm -rf examples/zero-mqtt-subscriber/.zig-cache examples/zero-mqtt-subscriber/zig-out examples/zero-mqtt-subscriber/zig-pkg
-	rm -rf examples/zero-redis/.zig-cache examples/zero-redis/zig-out	examples/zero-redis/zig-pkg
-	rm -rf examples/zero-service-client/.zig-cache examples/zero-service-client/zig-out	examples/zero-service-client/zig-pkg
-	rm -rf examples/zero-stream/.zig-cache examples/zero-stream/zig-out	examples/zero-stream/zig-pkg
-	rm -rf examples/zero-todo-htmx/.zig-cache examples/zero-todo-htmx/zig-out	examples/zero-todo-htmx/zig-pkg
-	rm -rf examples/zero-websocket/.zig-cache examples/zero-websocket/zig-out	examples/zero-websocket/zig-pkg
-	rm -rf examples/zero-kafka-publisher/.zig-cache examples/zero-kafka-publisher/zig-out	examples/zero-kafka-publisher/zig-pkg
-	rm -rf examples/zero-kafka-subscriber/.zig-cache examples/zero-kafka-subscriber/zig-out	examples/zero-kafka-subscriber/zig-pkg
-	rm -rf examples/zero-sqlite/.zig-cache examples/zero-sqlite/zig-out	examples/zero-sqlite/zig-pkg
-	rm -rf examples/zero-nats-publisher/.zig-cache examples/zero-nats-publisher/zig-out	examples/zero-nats-publisher/zig-pkg
-	rm -rf examples/zero-nats-subscriber/.zig-cache examples/zero-nats-subscriber/zig-out examples/zero-nats-subscriber/zig-pkg
-	rm -rf examples/zero-proto/.zig-cache examples/zero-proto/zig-out examples/zero-proto/zig-pkg
-	rm -rf examples/zero-graphql/.zig-cache examples/zero-graphql/zig-out examples/zero-graphql/zig-pkg
-	rm -rf examples/zero-filestore/.zig-cache examples/zero-filestore/zig-out examples/zero-filestore/zig-pkg
-	rm -rf examples/zero-s3/.zig-cache examples/zero-s3/zig-out examples/zero-s3/zig-pkg
-	rm -rf examples/zero-autocrud/.zig-cache examples/zero-autocrud/zig-out examples/zero-autocrud/zig-pkg
-	rm -rf examples/zero-cli/.zig-cache examples/zero-cli/zig-out examples/zero-cli/zig-pkg
-	rm -rf examples/zero-duckdb/.zig-cache examples/zero-duckdb/zig-out examples/zero-duckdb/zig-pkg
-	rm -rf examples/zero-otel/.zig-cache examples/zero-otel/zig-out examples/zero-otel/zig-pkg
-	rm -rf examples/zero-search/.zig-cache examples/zero-search/zig-out examples/zero-search/zig-pkg
-	rm -rf examples/zero-nosql/.zig-cache examples/zero-nosql/zig-out examples/zero-nosql/zig-pkg
-	rm -rf examples/zero-timeseries/.zig-cache examples/zero-timeseries/zig-out examples/zero-timeseries/zig-pkg
+	@for ex in examples/*/; do \
+		rm -rf "$$ex.zig-cache" "$$ex.zig-out" "$$ex.zig-pkg"; \
+	done
 
 fast:
 	zig build --release=fast --summary all

@@ -27,9 +27,22 @@ pub const KVMemory = struct {
         const v = self.map.get(key);
         const e = self.exp.get(key) orelse 0;
         const expired = e != 0 and utils.nowMonotonic().nanoseconds >= e;
+        if (v == null or expired) {
+            // Evict eagerly so expired keys (and the values they hold) cannot
+            // accumulate forever — a cache that never reclaims is a leak.
+            if (self.map.fetchRemove(key)) |removed| {
+                self.allocator.free(removed.key);
+                self.allocator.free(removed.value_ptr.*);
+            }
+            if (self.exp.fetchRemove(key)) |removed| {
+                self.allocator.free(removed.key);
+            }
+            self.mu.unlock(utils.io);
+            return null;
+        }
+        const duped = try ctx.allocator.dupe(u8, v.?);
         self.mu.unlock(utils.io);
-        if (v == null or expired) return null;
-        return try ctx.allocator.dupe(u8, v.?);
+        return duped;
     }
 
     pub fn set(self: *KVMemory, _: *root.Context, key: []const u8, value: []const u8) !void {
@@ -63,8 +76,20 @@ pub const KVMemory = struct {
         const v = self.map.get(key);
         const e = self.exp.get(key) orelse 0;
         const expired = e != 0 and utils.nowMonotonic().nanoseconds >= e;
+        if (v == null or expired) {
+            // Mirror `get`: reclaim expired entries on read so they cannot leak.
+            if (self.map.fetchRemove(key)) |removed| {
+                self.allocator.free(removed.key);
+                self.allocator.free(removed.value_ptr.*);
+            }
+            if (self.exp.fetchRemove(key)) |removed| {
+                self.allocator.free(removed.key);
+            }
+            self.mu.unlock(utils.io);
+            return false;
+        }
         self.mu.unlock(utils.io);
-        return v != null and !expired;
+        return true;
     }
 
     pub fn expire(self: *KVMemory, _: *root.Context, key: []const u8, ms: i64) !void {
@@ -72,11 +97,21 @@ pub const KVMemory = struct {
         _ = self.exp.put(key, utils.nowMonotonic().nanoseconds + @as(i128, ms) * 1_000_000) catch 0;
         self.mu.unlock(utils.io);
     }
+
+    /// Frees every stored value, both indexes, and the wrapper struct.
+    pub fn deinit(self: *KVMemory) void {
+        var it = self.map.iterator();
+        while (it.next()) |kv| {
+            self.allocator.free(kv.key_ptr.*);
+            self.allocator.free(kv.value_ptr.*);
+        }
+        self.map.deinit();
+        self.exp.deinit();
+        self.allocator.destroy(self);
+    }
 };
 
-
 // ===================== Tests =====================
-
 
 test "KVMemory get/set/delete/exists/expire" {
     var gpa: std.heap.DebugAllocator(.{}) = .init;

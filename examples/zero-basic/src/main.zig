@@ -73,6 +73,14 @@ pub fn main(init: std.process.Init) !void {
 
     try app.get("/nosql/get", nosqlGet);
 
+    try app.get("/clickhouse/query", clickhouseQuery);
+
+    try app.get("/clickhouse/write", clickhouseWrite);
+
+    try app.get("/couchbase/put", couchbasePut);
+
+    try app.get("/couchbase/get", couchbaseGet);
+
     try app.run();
 
     // Bail out if leak detected on load test
@@ -222,8 +230,6 @@ pub fn tsQuery(ctx: *Context) !void {
     }
 }
 
-// --- Round 1: search (Solr) ---
-
 pub fn solrIndex(ctx: *Context) !void {
     if (ctx.Search) |s| {
         try s.index(ctx, "demo", "{\"id\":\"1\",\"title\":\"example\"}");
@@ -244,8 +250,6 @@ pub fn solrQuery(ctx: *Context) !void {
         try ctx.response.json(.{ .message = "SOLR_URL not configured" }, .{});
     }
 }
-
-// --- Round 1: NoSQL (Cassandra) ---
 
 pub fn nosqlPut(ctx: *Context) !void {
     if (ctx.NoSQL) |n| {
@@ -269,5 +273,57 @@ pub fn nosqlGet(ctx: *Context) !void {
     } else {
         ctx.response.setStatus(.not_implemented);
         try ctx.response.json(.{ .message = "CASSANDRA_CONTACT_POINTS not configured" }, .{});
+    }
+}
+
+pub fn clickhouseWrite(ctx: *Context) !void {
+    if (ctx.container.ClickHouse) |_| {
+        const name: []const u8 = "alice";
+        _ = try ctx.SQL.exec(ctx, "CREATE TABLE IF NOT EXISTS events (id Int64, name String)", .{});
+        _ = try ctx.SQL.exec(ctx, "INSERT INTO events (id, name) VALUES (?, ?)", .{ @as(i64, 1), name });
+        try ctx.response.json(.{ .status = "stored" }, .{});
+    } else {
+        ctx.response.setStatus(.not_implemented);
+        try ctx.response.json(.{ .message = "CLICKHOUSE_URL not configured" }, .{});
+    }
+}
+
+pub fn clickhouseQuery(ctx: *Context) !void {
+    if (ctx.container.ClickHouse) |_| {
+        const Event = struct { id: i64, name: []const u8 };
+        const row = try ctx.SQL.queryRow(ctx, Event, "SELECT id, name FROM events LIMIT 1", .{});
+        if (row) |r| {
+            try ctx.response.json(.{ .event = r }, .{});
+        } else {
+            try ctx.response.json(.{ .event = null }, .{});
+        }
+    } else {
+        ctx.response.setStatus(.not_implemented);
+        try ctx.response.json(.{ .message = "CLICKHOUSE_URL not configured" }, .{});
+    }
+}
+
+pub fn couchbasePut(ctx: *Context) !void {
+    if (ctx.NoSQL) |n| {
+        try n.put(ctx, "users", "alice", "{\"age\":30}");
+        try ctx.response.json(.{ .status = "stored" }, .{});
+    } else {
+        ctx.response.setStatus(.not_implemented);
+        try ctx.response.json(.{ .message = "COUCHBASE_CONTACT_POINTS not configured" }, .{});
+    }
+}
+
+pub fn couchbaseGet(ctx: *Context) !void {
+    if (ctx.NoSQL) |n| {
+        const doc = try n.get(ctx, "users", "alice");
+        if (doc) |d| {
+            defer ctx.allocator.free(d);
+            try ctx.response.json(.{ .doc = d }, .{});
+        } else {
+            try ctx.response.json(.{ .doc = null }, .{});
+        }
+    } else {
+        ctx.response.setStatus(.not_implemented);
+        try ctx.response.json(.{ .message = "COUCHBASE_CONTACT_POINTS not configured" }, .{});
     }
 }

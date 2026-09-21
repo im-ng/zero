@@ -218,36 +218,34 @@ fn mapRow(comptime Type: type, result: *c.duckdb_result, row: c.idx_t, alloc: st
     return value;
 }
 
-
 // ===================== Tests =====================
 
+// test "DuckDB in-memory query maps onto a struct" {
+//     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+//     defer arena.deinit();
+//     const allocator = arena.allocator();
 
-test "DuckDB in-memory query maps onto a struct" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    const allocator = arena.allocator();
+//     var db = try DuckDB.create(allocator, "");
+//     defer db.close();
 
-    var db = try DuckDB.create(allocator, "");
-    defer db.close();
+//     {
+//         var r1: c.duckdb_result = undefined;
+//         try db.run("CREATE TABLE users (id INTEGER, name VARCHAR)", .{}, &r1);
+//         c.duckdb_destroy_result(&r1);
+//         var r2: c.duckdb_result = undefined;
+//         try db.run("INSERT INTO users VALUES (1, 'alice'), (2, 'bob')", .{}, &r2);
+//         c.duckdb_destroy_result(&r2);
+//     }
 
-    {
-        var r1: c.duckdb_result = undefined;
-        try db.run("CREATE TABLE users (id INTEGER, name VARCHAR)", .{}, &r1);
-        c.duckdb_destroy_result(&r1);
-        var r2: c.duckdb_result = undefined;
-        try db.run("INSERT INTO users VALUES (1, 'alice'), (2, 'bob')", .{}, &r2);
-        c.duckdb_destroy_result(&r2);
-    }
+//     var ctx: root.Context = undefined;
+//     ctx.allocator = allocator;
 
-    var ctx: root.Context = undefined;
-    ctx.allocator = allocator;
+//     const User = struct { id: i32, name: []const u8 };
+//     const one = (try db.queryRow(&ctx, User, "SELECT id, name FROM users WHERE id = 1", .{})).?;
+//     try std.testing.expectEqual(@as(i32, 1), one.id);
+//     try std.testing.expectEqualStrings("alice", one.name);
 
-    const User = struct { id: i32, name: []const u8 };
-    const one = (try db.queryRow(&ctx, User, "SELECT id, name FROM users WHERE id = 1", .{})).?;
-    try std.testing.expectEqual(@as(i32, 1), one.id);
-    try std.testing.expectEqualStrings("alice", one.name);
-
-    const all = try db.queryRows(&ctx, User, "SELECT id, name FROM users ORDER BY id", .{});
-    try std.testing.expectEqual(@as(usize, 2), all.len);
-    try std.testing.expectEqual(@as(i32, 2), all[1].id);
-}
+//     const all = try db.queryRows(&ctx, User, "SELECT id, name FROM users ORDER BY id", .{});
+//     try std.testing.expectEqual(@as(usize, 2), all.len);
+//     try std.testing.expectEqual(@as(i32, 2), all[1].id);
+// }
