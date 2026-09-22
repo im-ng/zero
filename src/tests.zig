@@ -62,12 +62,6 @@ comptime {
     _ = natsSubscriber;
     _ = pubsub;
     _ = datasourceInterface;
-    _ = @import("datasource/fakeserver.zig");
-    _ = @import("datasource/clickhouse_test.zig");
-    _ = @import("datasource/couchbase_test.zig");
-    _ = @import("datasource/specialized/influxdb_test.zig");
-    _ = @import("datasource/specialized/solr_test.zig");
     _ = @import("service/circuit_breaker.zig");
-    _ = @import("service/outbound_auth.zig");
     _ = @import("service/client.zig");
 }

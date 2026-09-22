@@ -636,6 +636,7 @@ fn runExtraScenario(
 }
 
 pub fn main(init: std.process.Init) !void {
+    utils.setIo(init.io);
     bumpNoFileLimit();
 
     var duration_s: f64 = 3;

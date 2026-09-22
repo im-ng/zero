@@ -34,3 +34,4 @@ session*.md
 hallucinations/
 sessions/
 soak/
+kcov-src/
