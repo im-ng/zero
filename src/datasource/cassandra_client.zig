@@ -556,7 +556,15 @@ fn writeValue(list: *List, alloc: std.mem.Allocator, cell: Cell) !void {
 
 test "cassandra live round-trip (set CASSANDRA_TEST=1 to run)" {
     if (std.testing.environ.getPosix("CASSANDRA_TEST")) |_| {} else return;
-    var conn = Connection.init(std.testing.allocator, "127.0.0.1:9042", "cassandra", "cassandra", "zero_test");
+    const host = std.testing.environ.getPosix("CASSANDRA_HOST") orelse "127.0.0.1";
+    const port = std.fmt.parseInt(u16, std.testing.environ.getPosix("CASSANDRA_PORT") orelse "9042", 10) catch 9042;
+    const hostport = try std.fmt.allocPrint(std.testing.allocator, "{s}:{d}", .{ host, port });
+    defer std.testing.allocator.free(hostport);
+
+    // Connect without a keyspace: a fresh container has none, so the client must
+    // not issue `USE` until this test creates it. Statements qualify the
+    // keyspace explicitly instead.
+    var conn = Connection.init(std.testing.allocator, hostport, "cassandra", "cassandra", null);
     defer conn.deinit();
 
     var rv = try conn.query("SELECT release_version FROM system.local");
