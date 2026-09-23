@@ -6,6 +6,7 @@ const Context = root.Context;
 const SQL = root.SQL;
 const SQLite = root.SQLite;
 const DuckDB = root.DuckDB;
+const ClickHouse = root.ClickHouse;
 const Datasource = root.Datasource;
 const MockBackend = root.datasourceInterface.MockBackend;
 
@@ -129,6 +130,10 @@ fn backendDuckDB(ctx: *Context) *DuckDB {
     return @as(*DuckDB, @ptrCast(@alignCast(ctx.SQL.ptr)));
 }
 
+fn backendClickHouse(ctx: *Context) *ClickHouse {
+    return @as(*ClickHouse, @ptrCast(@alignCast(ctx.SQL.ptr)));
+}
+
 fn listHandler(comptime T: type, comptime st: Stmts) *const fn (*Context) anyerror!void {
     const impl = struct {
         fn call(ctx: *Context) anyerror!void {
@@ -143,6 +148,10 @@ fn listHandler(comptime T: type, comptime st: Stmts) *const fn (*Context) anyerr
                 },
                 .duckdb => {
                     const rows = try backendDuckDB(ctx).queryRows(ctx, T, st.list, .{});
+                    try ctx.json(rows);
+                },
+                .clickhouse => {
+                    const rows = try backendClickHouse(ctx).queryRows(ctx, T, st.list, .{});
                     try ctx.json(rows);
                 },
                 .mock => {
@@ -169,6 +178,7 @@ fn getHandler(comptime T: type, comptime st: Stmts, comptime id_idx: usize) *con
                 .postgres => try backendPg(ctx).queryRow(ctx, T, st.get_pg, .{idv}),
                 .sqlite => try backendSqlite(ctx).queryRow(ctx, T, st.get_q, .{idv}),
                 .duckdb => try backendDuckDB(ctx).queryRow(ctx, T, st.get_q, .{idv}),
+                .clickhouse => try backendClickHouse(ctx).queryRow(ctx, T, st.get_q, .{idv}),
                 .mock => try @as(*MockBackend, @ptrCast(@alignCast(ctx.SQL.ptr))).queryRow(ctx, T, st.get_q, .{idv}),
             };
             if (row) |r| {
@@ -200,6 +210,7 @@ fn createHandler(comptime T: type, comptime st: Stmts) *const fn (*Context) anye
                 .postgres => _ = try backendPg(ctx).execWithContext(ctx, st.insert_pg, args),
                 .sqlite => _ = try backendSqlite(ctx).execWithContext(ctx, st.insert_q, args),
                 .duckdb => _ = try backendDuckDB(ctx).execWithContext(ctx, st.insert_q, args),
+                .clickhouse => _ = try backendClickHouse(ctx).execWithContext(ctx, st.insert_q, args),
                 .mock => _ = try @as(*MockBackend, @ptrCast(@alignCast(ctx.SQL.ptr))).execWithContext(ctx, st.insert_q, args),
             }
             try ctx.json(o);
@@ -234,6 +245,7 @@ fn updateHandler(comptime T: type, comptime st: Stmts, comptime id_idx: usize) *
                 .postgres => (try backendPg(ctx).execWithContext(ctx, st.update_pg, args)) > 0,
                 .sqlite => (try backendSqlite(ctx).execWithContext(ctx, st.update_q, args)) > 0,
                 .duckdb => (try backendDuckDB(ctx).execWithContext(ctx, st.update_q, args)) > 0,
+                .clickhouse => (try backendClickHouse(ctx).execWithContext(ctx, st.update_q, args)) > 0,
                 .mock => (try @as(*MockBackend, @ptrCast(@alignCast(ctx.SQL.ptr))).execWithContext(ctx, st.update_q, args)) > 0,
             };
             if (!updated) {
@@ -245,6 +257,7 @@ fn updateHandler(comptime T: type, comptime st: Stmts, comptime id_idx: usize) *
                 .postgres => try backendPg(ctx).queryRow(ctx, T, st.get_pg, .{idv}),
                 .sqlite => try backendSqlite(ctx).queryRow(ctx, T, st.get_q, .{idv}),
                 .duckdb => try backendDuckDB(ctx).queryRow(ctx, T, st.get_q, .{idv}),
+                .clickhouse => try backendClickHouse(ctx).queryRow(ctx, T, st.get_q, .{idv}),
                 .mock => try @as(*MockBackend, @ptrCast(@alignCast(ctx.SQL.ptr))).queryRow(ctx, T, st.get_q, .{idv}),
             };
             if (row) |r| {
@@ -280,6 +293,10 @@ fn deleteHandler(comptime T: type, comptime st: Stmts, comptime id_idx: usize) *
                 .duckdb => blk: {
                     _ = try backendDuckDB(ctx).execWithContext(ctx, st.delete_q, .{idv});
                     break :blk backendDuckDB(ctx).rowsAffected();
+                },
+                .clickhouse => blk: {
+                    _ = try backendClickHouse(ctx).execWithContext(ctx, st.delete_q, .{idv});
+                    break :blk backendClickHouse(ctx).rowsAffected();
                 },
                 .mock => blk: {
                     _ = try @as(*MockBackend, @ptrCast(@alignCast(ctx.SQL.ptr))).execWithContext(ctx, st.delete_q, .{idv});

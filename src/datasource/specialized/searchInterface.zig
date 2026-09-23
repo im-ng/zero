@@ -60,6 +60,23 @@ pub const Search = struct {
         return handle;
     }
 
+    /// Free the type-erased handle and the backend implementation it wraps. The
+    /// backend owns any connections / duplicated config strings it allocated, so
+    /// each branch tears down the impl before the handle struct is destroyed.
+    pub fn deinit(self: *Search, allocator: std.mem.Allocator) void {
+        switch (self.backend) {
+            .solr => {
+                const c = @as(*root.Solr, @ptrCast(@alignCast(self.ptr)));
+                c.deinit(allocator);
+            },
+            .mock => {
+                const mb = @as(*MockBackend, @ptrCast(@alignCast(self.ptr)));
+                allocator.destroy(mb);
+            },
+        }
+        allocator.destroy(self);
+    }
+
     /// Index (upsert) a JSON document into `collection`.
     pub fn index(self: *Search, ctx: *root.Context, collection: []const u8, doc_json: []const u8) !void {
         if (self.breaker) |*b| b.before() catch return error.CircuitOpen;

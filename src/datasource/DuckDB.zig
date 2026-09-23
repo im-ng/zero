@@ -34,6 +34,13 @@ pub const DuckDB = struct {
         c.duckdb_close(&self.db);
     }
 
+    /// Free the C handles and the `*DuckDB` struct allocated by `create`. Called
+    /// from `container.destroy` on shutdown so the engine does not leak.
+    pub fn deinit(self: *DuckDB, allocator: std.mem.Allocator) void {
+        self.close();
+        allocator.destroy(self);
+    }
+
     /// Run `sql`. When `args` is non-empty it is treated as a tuple of positional
     /// `?` bind parameters and a prepared statement is used; otherwise the SQL is
     /// executed directly. This lets callers pass runtime values safely.
@@ -89,11 +96,22 @@ pub const DuckDB = struct {
             .bool => {
                 if (c.duckdb_bind_boolean(ps.*, idx, v) != 0) return error.DuckDBQueryFailed;
             },
-            .pointer => |p| if (p.size == .slice and p.child == u8) {
-                const s = try c.toCStr(self.allocator, v);
+            .pointer => |p| {
+                // Strings arrive as []u8 / []const u8 slices, or as a pointer to a
+                // u8 array (sentinel-terminated, e.g. a string literal or
+                // `*const [N:0]u8`). Both bind as a varchar via the C string form.
+                const child_is_u8 = if (p.child == u8) true else switch (@typeInfo(p.child)) {
+                    .array => |a| a.child == u8,
+                    else => false,
+                };
+                if (!child_is_u8) {
+                    @compileError("DuckDB: unsupported bind pointer type " ++ @typeName(T));
+                }
+                const slice: []const u8 = if (p.size == .slice) v else v[0..];
+                const s = try c.toCStr(self.allocator, slice);
                 defer self.allocator.free(s);
                 if (c.duckdb_bind_varchar(ps.*, idx, s) != 0) return error.DuckDBQueryFailed;
-            } else @compileError("DuckDB: unsupported bind pointer type " ++ @typeName(T)),
+            },
             else => @compileError("DuckDB: unsupported bind type " ++ @typeName(T)),
         }
     }
@@ -217,7 +235,6 @@ fn mapRow(comptime Type: type, result: *c.duckdb_result, row: c.idx_t, alloc: st
             } else {
                 return error.NonNullColumnIsNull;
             }
-            continue;
         }
         @field(value, field.name) = try readValue(field.type, result, col, row, alloc);
     }

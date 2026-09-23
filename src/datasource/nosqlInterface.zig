@@ -74,6 +74,28 @@ pub const NoSQL = struct {
         return handle;
     }
 
+    /// Free the type-erased handle and the backend implementation it wraps. The
+    /// backend owns any connections / duplicated config strings it allocated, so
+    /// each branch tears down the impl before the handle struct is destroyed.
+    pub fn deinit(self: *NoSQL, allocator: std.mem.Allocator) void {
+        switch (self.backend) {
+            .cassandra => {
+                const c = @as(*root.NoSQLBackend, @ptrCast(@alignCast(self.ptr)));
+                c.conn.deinit();
+                allocator.destroy(c);
+            },
+            .couchbase => {
+                const cb = @as(*root.Couchbase, @ptrCast(@alignCast(self.ptr)));
+                cb.deinit(allocator);
+            },
+            .mock => {
+                const mb = @as(*MockBackend, @ptrCast(@alignCast(self.ptr)));
+                allocator.destroy(mb);
+            },
+        }
+        allocator.destroy(self);
+    }
+
     /// Fetch the first column of the first row returned by `query`, owned by
     /// `ctx.allocator`, or `null` when no row matches. Caller frees. The caller
     /// supplies the full CQL/N1QL statement (this dispatch layer builds nothing).

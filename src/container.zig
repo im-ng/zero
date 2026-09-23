@@ -268,9 +268,32 @@ pub fn destroy(self: *Self) void {
         allocator.destroy(sql);
     }
 
+    // In-process OLAP engine (DuckDB): closes the C database/connection and the
+    // struct allocated by `create` / `addDuckDB`.
+    if (self.DuckDB) |db| {
+        db.deinit(allocator);
+    }
+
+    // Columnar OLAP engine (ClickHouse): frees the HTTP client and the struct.
+    if (self.ClickHouse) |ch| {
+        ch.deinit(allocator);
+    }
+
     // Time-series backend (InfluxDB/Couchbase/mock): frees the client and handle.
     if (self.Timeseries) |ts| {
         ts.deinit(allocator);
+    }
+
+    // NoSQL backend (Cassandra/Couchbase/mock): frees the type-erased handle and
+    // the backend implementation it wraps (connection + any duped config strings).
+    if (self.NoSQL) |n| {
+        n.deinit(allocator);
+    }
+
+    // Search backend (Solr/mock): frees the type-erased handle and the backend
+    // implementation it wraps (HTTP client + duped url/collection strings).
+    if (self.Search) |s| {
+        s.deinit(allocator);
     }
 
     allocator.destroy(self);

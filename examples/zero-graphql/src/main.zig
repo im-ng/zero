@@ -130,8 +130,12 @@ pub fn main(init: std.process.Init) !void {
 
     // Register the migration and run it explicitly (app.run() does not
     // auto-run migrations; re-runs are skipped via the zero_migrations table).
-    const key = try utils.toStringFromInt(app.container.allocator, "{d}", createUsersMigration.migrationNumber);
+    // `allocPrint` returns a correctly-sized, freeable buffer (unlike the util's
+    // `toStringFromInt`, which hands back an unfreeable 256-byte subslice).
+    // `addMigration` copies the key into its registry, so free it right after.
+    const key = try std.fmt.allocPrint(app.container.allocator, "{d}", .{createUsersMigration.migrationNumber});
     try app.addMigration(key, createUsersMigration);
+    app.container.allocator.free(key);
     try app.runMigrations();
 
     // GraphQL-over-HTTP endpoint. POST {"query":"...","variables":{...}} or

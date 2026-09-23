@@ -65,11 +65,21 @@ pub fn lastMigration(ctx: *Context) !i64 {
     if (std.mem.eql(u8, "postgres", dialect)) {
         const result = try ctx.SQL.queryRowContext(ctx, zeroTable, lastMigrationRecord, .{});
         if (result) |r| {
+            // pg dupes the text columns (`execution`, `start_time`) into
+            // `ctx.allocator`; free them before returning the scalar we care about.
+            defer {
+                ctx.allocator.free(r.execution);
+                ctx.allocator.free(r.start_time);
+            }
             return r.epoch;
         }
     } else if (std.mem.eql(u8, "sqlite", dialect)) {
         const result = try ctx.SQL.queryRowContext(ctx, zeroTable, lastMigrationRecord, .{});
         if (result) |r| {
+            defer {
+                ctx.allocator.free(r.execution);
+                ctx.allocator.free(r.start_time);
+            }
             return r.epoch;
         }
     }
@@ -83,12 +93,15 @@ pub fn insertMigration(ctx: *Context, m: *const migrate, duration: u64) !i64 {
         const epoch = m.migrationNumber;
         const status = "UP";
         const startTime = try utils.sqlTimestampz(ctx.allocator);
+        // `sqlTimestampz` returns a caller-owned buffer; free it once the bind is done.
+        defer ctx.allocator.free(startTime);
 
         return try ctx.SQL.exec(ctx, insertMigrationRecordPostgres, .{ epoch, status, startTime, duration });
     } else if (std.mem.eql(u8, "sqlite", dialect)) {
         const epoch = m.migrationNumber;
         const status = "UP";
         const startTime = try utils.sqlTimestampz(ctx.allocator);
+        defer ctx.allocator.free(startTime);
 
         _ = ctx.SQL.exec(
             ctx,

@@ -232,10 +232,14 @@ pub const Context = struct {
 
     /// returns basic auth username claim
     pub fn getUsername(self: *Context) !?[]const u8 {
-        return try self.container.authProvider.retrieveUserName(
-            self.allocator,
-            self.request.header(constants.AUTH_HEADER).?,
-        );
+        if (self.request.header(constants.AUTH_HEADER)) |header| {
+            return try self.container.authProvider.retrieveUserName(
+                self.allocator,
+                header,
+            );
+        }
+
+        return "";
     }
 
     /// returns basic auth claim
@@ -248,7 +252,11 @@ pub const Context = struct {
 
     /// returns api key claim
     pub fn getAuthKey(self: *Context) !?[]const u8 {
-        return self.request.header(constants.APIKEY_HEADER).?;
+        if (self.request.header(constants.APIKEY_HEADER)) |header| {
+            return header;
+        }
+
+        return "";
     }
 
     /// returns registered http service
