@@ -129,7 +129,9 @@ pub const DuckDB = struct {
 
     pub fn selectSlice(self: *DuckDB, ctx: *root.Context, comptime Type: type, list: *std.array_list.Managed(Type), comptime stmt: []const u8, args: anytype) !i64 {
         const rows = try self.queryRows(ctx, Type, stmt, args);
-        for (rows) |r| try list.append(r);
+        for (rows) |r| {
+            try list.append(r);
+        }
         return @intCast(list.items.len);
     }
 
@@ -164,6 +166,8 @@ pub const DuckDB = struct {
 
     pub fn rollback(self: *DuckDB) void {
         var result: c.duckdb_result = undefined;
+        // Best-effort: a failed rollback cannot be recovered here, and the
+        // result is destroyed regardless, so the error is intentionally ignored.
         self.run("ROLLBACK", .{}, &result) catch {};
         c.duckdb_destroy_result(&result);
     }
@@ -199,7 +203,9 @@ fn readValue(comptime T: type, result: *c.duckdb_result, col: c.idx_t, row: c.id
 
 fn mapRow(comptime Type: type, result: *c.duckdb_result, row: c.idx_t, alloc: std.mem.Allocator) !Type {
     const ti = @typeInfo(Type);
-    if (ti != .@"struct") @compileError("DuckDB queryRow requires a struct type, got " ++ @typeName(Type));
+    if (ti != .@"struct") {
+        @compileError("DuckDB queryRow requires a struct type, got " ++ @typeName(Type));
+    }
 
     var value: Type = undefined;
     const col_count = c.duckdb_column_count(result);

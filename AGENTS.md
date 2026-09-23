@@ -8,6 +8,45 @@ When presenting changes, summaries, or any explanation to the user, follow `writ
 - Show the concrete case before the general rule.
 - No marketing, hype, filler, or unnecessary summaries.
 
+## Coding style (STYLE.md is authoritative)
+
+Every change to `src/**/*.zig` and `examples/**/*.zig` MUST comply with `STYLE.md`
+(adapted TigerBeetle TIGER_STYLE). Do not wait to be reminded — apply it on
+write. The hard rules that get missed most often:
+
+- **`zig fmt` must pass.** Run `zig fmt --check <files>` (or `zig fmt <files>`)
+  before reporting done. This enforces 4-space indent, 100-column limit, and
+  `snake_case`.
+- **Braces on every `if`/`for`.** The ONLY exception is a bare
+  `if (c) return/continue/break;` (a bare `return error.X` counts). A body that
+  is any other statement — `try …`, `_ = …`, `free(…)`, `b.before() catch return …` —
+  MUST have braces. Braceless single-statement `for` and nested `for … if …`
+  also need braces.
+- **No silent `catch {}` / `catch unreachable`** on request or error paths. A
+  genuinely infallible site (exact-size `bufPrint`, comptime parse) may keep
+  `catch unreachable` but must say why in a comment. Best-effort sites
+  (`std.Thread.yield() catch {}`, response writes at error time) are OK.
+- **Comments explain *why*, as full sentences.** Show your workings.
+- **Handle every error.** Never swallow a failure.
+- **Cap every unbounded collection** and assert pre/postconditions; fail fast.
+
+### Verify before reporting done
+
+After editing source, run from the repo root:
+
+```bash
+# 1) formatting (fail if not clean)
+zig fmt --check src/datasource/*.zig src/bench/main.zig examples/zero-nosql/src/main.zig
+# 2) brace audit — flags braceless if/for with non-return bodies
+grep -rnE "^\s*(for|if) ?\([^)]*\) [^{]*[;]$" src examples \
+  | grep -vE "return|continue|break" || echo "style: braces OK"
+# 3) no silent catches on request paths
+grep -rnE "catch \{\}" src examples || true
+```
+
+Fix anything the audit surfaces in the files you touched. `zig build test` and
+the affected example (`zig build` inside `examples/<name>`) must still pass.
+
 ## Toolchain
 
 - **Zig 0.16.0** minimum, pinned in `build.zig.zon`

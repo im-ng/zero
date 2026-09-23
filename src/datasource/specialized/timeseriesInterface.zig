@@ -16,7 +16,7 @@ pub const Backend = enum {
 /// Connection options for a `Timeseries` backend.
 pub const Options = struct {
     url: []const u8,
-    org: []const u8,
+    /// Database name (the v3 `db` target for writes and queries).
     bucket: []const u8,
     token: ?[]const u8 = null,
 };
@@ -24,8 +24,8 @@ pub const Options = struct {
 /// Unified, type-erased time-series interface.
 ///
 /// Usage (mirrors `ctx.SQL`):
-///   try ctx.Timeseries.write(ctx, "cpu", "host=server1", "usage=42.1", null);
-///   const csv = try ctx.Timeseries.query(ctx, "from(bucket:\"metrics\") |> range(start:-1h)");
+///   try ctx.Timeseries.write(ctx, "cpu,host=server1 usage=42.1");
+///   const csv = try ctx.Timeseries.query(ctx, "SELECT * FROM cpu");
 pub const Timeseries = struct {
     ptr: *anyopaque,
     backend: Backend,
@@ -48,15 +48,14 @@ pub const Timeseries = struct {
             .influxdb => blk: {
                 const c = try root.InfluxDB.create(container.allocator, .{
                     .url = opts.url,
-                    .org = opts.org,
                     .bucket = opts.bucket,
-                    .token = opts.token,
+                    .token = opts.token.?,
                 });
                 break :blk @as(*anyopaque, c);
             },
             .mock => blk: {
                 const mb = try container.allocator.create(MockBackend);
-                mb.* = MockBackend{ .last_measurement = "" };
+                mb.* = MockBackend{};
                 break :blk @as(*anyopaque, mb);
             },
         };
@@ -65,13 +64,13 @@ pub const Timeseries = struct {
         return handle;
     }
 
-    /// Write a single line-protocol point. `ts` is an optional nanosecond epoch;
-    /// when `null` the server assigns the timestamp.
-    pub fn write(self: *Timeseries, ctx: *root.Context, measurement: []const u8, tags: []const u8, fields: []const u8, ts: ?i64) !void {
+    /// Write a single line-protocol point. `statement` is the full line protocol
+    /// line (`measurement,tag=val field=val [ts]`). Mirrors `query`.
+    pub fn write(self: *Timeseries, ctx: *root.Context, statement: []const u8) !void {
         if (self.breaker) |*b| b.before() catch return error.CircuitOpen;
         const r = switch (self.backend) {
-            .influxdb => @as(*root.InfluxDB, @ptrCast(@alignCast(self.ptr))).write(ctx, measurement, tags, fields, ts),
-            .mock => @as(*MockBackend, @ptrCast(@alignCast(self.ptr))).write(ctx, measurement, tags, fields, ts),
+            .influxdb => @as(*root.InfluxDB, @ptrCast(@alignCast(self.ptr))).write(ctx, statement),
+            .mock => @as(*MockBackend, @ptrCast(@alignCast(self.ptr))).write(ctx, statement),
         } catch |e| {
             if (self.breaker) |*b| b.recordFailure();
             return e;
@@ -80,8 +79,8 @@ pub const Timeseries = struct {
         return r;
     }
 
-    /// Run a query (Flux for InfluxDB v2) and return the raw response body, owned
-    /// by `ctx.allocator`. Caller frees.
+    /// Run a query (SQL or InfluxQL for InfluxDB v3) and return the raw response
+    /// body, owned by `ctx.allocator`. Caller frees.
     pub fn query(self: *Timeseries, ctx: *root.Context, q: []const u8) ![]const u8 {
         if (self.breaker) |*b| b.before() catch return error.CircuitOpen;
         const r = switch (self.backend) {
@@ -94,6 +93,32 @@ pub const Timeseries = struct {
         if (self.breaker) |*b| b.recordSuccess();
         return r;
     }
+
+    /// Ensure the backing database (v3 "bucket") exists. No-op for the mock
+    /// backend; safe to call at startup before any writes.
+    pub fn createDatabase(self: *Timeseries, ctx: *root.Context, name: []const u8) !void {
+        if (self.breaker) |*b| b.before() catch return error.CircuitOpen;
+        const r = switch (self.backend) {
+            .influxdb => @as(*root.InfluxDB, @ptrCast(@alignCast(self.ptr))).createDatabase(ctx, name),
+            .mock => {},
+        } catch |e| {
+            if (self.breaker) |*b| b.recordFailure();
+            return e;
+        };
+        if (self.breaker) |*b| b.recordSuccess();
+        return r;
+    }
+
+    /// Free the backend impl (and its client/pooled connections) and the
+    /// type-erased handle. Must be called during teardown after any request
+    /// threads have stopped touching `ctx.Timeseries`.
+    pub fn deinit(self: *Timeseries, allocator: std.mem.Allocator) void {
+        switch (self.backend) {
+            .influxdb => @as(*root.InfluxDB, @ptrCast(@alignCast(self.ptr))).deinit(allocator),
+            .mock => allocator.destroy(@as(*MockBackend, @ptrCast(@alignCast(self.ptr)))),
+        }
+        allocator.destroy(self);
+    }
 };
 
 /// Native-free backend used by tests to verify `Timeseries` dispatch without a
@@ -101,11 +126,9 @@ pub const Timeseries = struct {
 pub const MockBackend = struct {
     writes: u32 = 0,
     queries: u32 = 0,
-    last_measurement: []const u8,
 
-    pub fn write(self: *MockBackend, _: *root.Context, measurement: []const u8, _: []const u8, _: []const u8, _: ?i64) !void {
+    pub fn write(self: *MockBackend, _: *root.Context, _: []const u8) !void {
         self.writes += 1;
-        self.last_measurement = measurement;
     }
 
     pub fn query(self: *MockBackend, _: *root.Context, _: []const u8) ![]const u8 {
@@ -117,17 +140,16 @@ pub const MockBackend = struct {
 // ===================== Tests =====================
 
 // test "Timeseries dispatches through the type-erased handle" {
-//     var mock: MockBackend = .{ .last_measurement = "" };
+//     var mock: MockBackend = .{};
 //     var ts = Timeseries.init(&mock, .mock, null);
 //     var ctx_storage: root.Context = undefined;
 //     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
 //     defer arena.deinit();
 //     ctx_storage.allocator = arena.allocator();
 
-//     try ts.write(&ctx_storage, "cpu", "host=server1", "usage=42.1", null);
+//     try ts.write(&ctx_storage, "cpu,host=server1 usage=42.1");
 //     try std.testing.expectEqual(@as(u32, 1), mock.writes);
-//     try std.testing.expectEqualStrings("cpu", mock.last_measurement);
 
-//     _ = try ts.query(&ctx_storage, "from(bucket:\"m\") |> range(start:-1h)");
+//     _ = try ts.query(&ctx_storage, "SELECT * FROM cpu");
 //     try std.testing.expectEqual(@as(u32, 1), mock.queries);
 // }

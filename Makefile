@@ -31,3 +31,6 @@ log:
 
 size:
 	ls -alth ./zig-out/bin
+
+fmt:
+	zig fmt --check .

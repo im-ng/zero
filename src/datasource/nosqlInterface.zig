@@ -27,9 +27,9 @@ pub const Options = struct {
 
 /// Unified, type-erased NoSQL interface.
 ///
-/// Usage (mirrors `ctx.SQL`):
-///   try ctx.NoSQL.put(ctx, "users", "alice", "{...}");
-///   const doc = try ctx.NoSQL.get(ctx, "users", "alice");
+/// Usage (mirrors `ctx.SQL` — the caller supplies the statement):
+///   try ctx.NoSQL.put(ctx, "INSERT INTO users (id, data) VALUES ('alice', '{...}')");
+///   const doc = try ctx.NoSQL.get(ctx, "SELECT data FROM users WHERE id = 'alice'");
 pub const NoSQL = struct {
     ptr: *anyopaque,
     backend: Backend,
@@ -46,7 +46,7 @@ pub const NoSQL = struct {
     pub fn build(container: *root.container, backend: Backend, opts: Options) !*NoSQL {
         const impl: *anyopaque = switch (backend) {
             .cassandra => blk: {
-                const c = try root.Cassandra.create(container.allocator, .{
+                const c = try root.NoSQLBackend.create(container.allocator, .{
                     .contact_points = opts.contact_points,
                     .keyspace = opts.keyspace,
                     .user = opts.user,
@@ -74,66 +74,90 @@ pub const NoSQL = struct {
         return handle;
     }
 
-    /// Fetch a document/row by key. Returns the raw value (owned by `ctx.allocator`)
-    /// or `null` if absent. Caller frees.
-    pub fn get(self: *NoSQL, ctx: *root.Context, collection: []const u8, key: []const u8) !?[]const u8 {
-        if (self.breaker) |*b| b.before() catch return error.CircuitOpen;
+    /// Fetch the first column of the first row returned by `query`, owned by
+    /// `ctx.allocator`, or `null` when no row matches. Caller frees. The caller
+    /// supplies the full CQL/N1QL statement (this dispatch layer builds nothing).
+    pub fn get(self: *NoSQL, ctx: *root.Context, statement: []const u8) !?[]const u8 {
+        if (self.breaker) |*b| {
+            b.before() catch return error.CircuitOpen;
+        }
         const r = switch (self.backend) {
-            .cassandra => @as(*root.Cassandra, @ptrCast(@alignCast(self.ptr))).get(ctx, collection, key),
-            .couchbase => @as(*root.Couchbase, @ptrCast(@alignCast(self.ptr))).get(ctx, collection, key),
-            .mock => @as(*MockBackend, @ptrCast(@alignCast(self.ptr))).get(ctx, collection, key),
+            .cassandra => @as(*root.NoSQLBackend, @ptrCast(@alignCast(self.ptr))).get(ctx, statement),
+            .couchbase => @as(*root.Couchbase, @ptrCast(@alignCast(self.ptr))).get(ctx, statement),
+            .mock => @as(*MockBackend, @ptrCast(@alignCast(self.ptr))).get(ctx, statement),
         } catch |e| {
-            if (self.breaker) |*b| b.recordFailure();
+            if (self.breaker) |*b| {
+                b.recordFailure();
+            }
             return e;
         };
-        if (self.breaker) |*b| b.recordSuccess();
+        if (self.breaker) |*b| {
+            b.recordSuccess();
+        }
         return r;
     }
 
-    /// Upsert a document/row by key. `value` is the raw payload (JSON for
-    /// document backends, a CQL literal for wide-column).
-    pub fn put(self: *NoSQL, ctx: *root.Context, collection: []const u8, key: []const u8, value: []const u8) !void {
-        if (self.breaker) |*b| b.before() catch return error.CircuitOpen;
+    /// Run a write statement (`query`). The result set is discarded.
+    pub fn put(self: *NoSQL, ctx: *root.Context, statement: []const u8) !void {
+        if (self.breaker) |*b| {
+            b.before() catch return error.CircuitOpen;
+        }
         const r = switch (self.backend) {
-            .cassandra => @as(*root.Cassandra, @ptrCast(@alignCast(self.ptr))).put(ctx, collection, key, value),
-            .couchbase => @as(*root.Couchbase, @ptrCast(@alignCast(self.ptr))).put(ctx, collection, key, value),
-            .mock => @as(*MockBackend, @ptrCast(@alignCast(self.ptr))).put(ctx, collection, key, value),
+            .cassandra => @as(*root.NoSQLBackend, @ptrCast(@alignCast(self.ptr))).put(ctx, statement),
+            .couchbase => @as(*root.Couchbase, @ptrCast(@alignCast(self.ptr))).put(ctx, statement),
+            .mock => @as(*MockBackend, @ptrCast(@alignCast(self.ptr))).put(ctx, statement),
         } catch |e| {
-            if (self.breaker) |*b| b.recordFailure();
+            if (self.breaker) |*b| {
+                b.recordFailure();
+            }
             return e;
         };
-        if (self.breaker) |*b| b.recordSuccess();
+        if (self.breaker) |*b| {
+            b.recordSuccess();
+        }
         return r;
     }
 
-    /// Delete a document/row by key.
-    pub fn delete(self: *NoSQL, ctx: *root.Context, collection: []const u8, key: []const u8) !void {
-        if (self.breaker) |*b| b.before() catch return error.CircuitOpen;
+    /// Run a DELETE statement (`query`). The result set is discarded.
+    pub fn delete(self: *NoSQL, ctx: *root.Context, statement: []const u8) !void {
+        if (self.breaker) |*b| {
+            b.before() catch return error.CircuitOpen;
+        }
         const r = switch (self.backend) {
-            .cassandra => @as(*root.Cassandra, @ptrCast(@alignCast(self.ptr))).delete(ctx, collection, key),
-            .couchbase => @as(*root.Couchbase, @ptrCast(@alignCast(self.ptr))).delete(ctx, collection, key),
-            .mock => @as(*MockBackend, @ptrCast(@alignCast(self.ptr))).delete(ctx, collection, key),
+            .cassandra => @as(*root.NoSQLBackend, @ptrCast(@alignCast(self.ptr))).delete(ctx, statement),
+            .couchbase => @as(*root.Couchbase, @ptrCast(@alignCast(self.ptr))).delete(ctx, statement),
+            .mock => @as(*MockBackend, @ptrCast(@alignCast(self.ptr))).delete(ctx, statement),
         } catch |e| {
-            if (self.breaker) |*b| b.recordFailure();
+            if (self.breaker) |*b| {
+                b.recordFailure();
+            }
             return e;
         };
-        if (self.breaker) |*b| b.recordSuccess();
+        if (self.breaker) |*b| {
+            b.recordSuccess();
+        }
         return r;
     }
 
-    /// Run a backend-native query (CQL / MQL) and return the raw response body,
-    /// owned by `ctx.allocator`. Caller frees.
-    pub fn query(self: *NoSQL, ctx: *root.Context, collection: []const u8, q: []const u8) ![]const u8 {
-        if (self.breaker) |*b| b.before() catch return error.CircuitOpen;
+    /// Run an arbitrary backend-native statement (CQL / N1QL) and return the rows
+    /// as a JSON array, owned by `ctx.allocator`. Caller frees.
+    pub fn query(self: *NoSQL, ctx: *root.Context, statement: []const u8) ![]const u8 {
+        if (self.breaker) |*b| {
+            b.before() catch return error.CircuitOpen;
+        }
         const r = switch (self.backend) {
-            .cassandra => @as(*root.Cassandra, @ptrCast(@alignCast(self.ptr))).query(ctx, collection, q),
-            .couchbase => @as(*root.Couchbase, @ptrCast(@alignCast(self.ptr))).query(ctx, collection, q),
-            .mock => @as(*MockBackend, @ptrCast(@alignCast(self.ptr))).query(ctx, collection, q),
+            .cassandra => @as(*root.NoSQLBackend, @ptrCast(@alignCast(self.ptr))).query(ctx, statement),
+            .couchbase => @as(*root.Couchbase, @ptrCast(@alignCast(self.ptr))).query(ctx, statement),
+            .mock => @as(*MockBackend, @ptrCast(@alignCast(self.ptr))).query(ctx, statement),
         } catch |e| {
-            if (self.breaker) |*b| b.recordFailure();
+            if (self.breaker) |*b| {
+                b.recordFailure();
+            }
             return e;
         };
-        if (self.breaker) |*b| b.recordSuccess();
+        if (self.breaker) |*b| {
+            b.recordSuccess();
+        }
         return r;
     }
 };
@@ -146,21 +170,21 @@ pub const MockBackend = struct {
     queries: u32 = 0,
     last_value: []const u8,
 
-    pub fn get(self: *MockBackend, _: *root.Context, _: []const u8, _: []const u8) !?[]const u8 {
+    pub fn get(self: *MockBackend, _: *root.Context, _: []const u8) !?[]const u8 {
         self.gets += 1;
         return null;
     }
 
-    pub fn put(self: *MockBackend, _: *root.Context, _: []const u8, _: []const u8, value: []const u8) !void {
+    pub fn put(self: *MockBackend, _: *root.Context, _: []const u8) !void {
         self.puts += 1;
-        self.last_value = value;
+        self.last_value = "";
     }
 
-    pub fn delete(self: *MockBackend, _: *root.Context, _: []const u8, _: []const u8) !void {
+    pub fn delete(self: *MockBackend, _: *root.Context, _: []const u8) !void {
         self.deletes += 1;
     }
 
-    pub fn query(self: *MockBackend, _: *root.Context, _: []const u8, _: []const u8) ![]const u8 {
+    pub fn query(self: *MockBackend, _: *root.Context, _: []const u8) ![]const u8 {
         self.queries += 1;
         return "";
     }

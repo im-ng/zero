@@ -43,9 +43,15 @@ pub const ClickHouse = struct {
             req.deinit();
         }
         req.method = .POST;
-        if (self.database.len > 0) try req.query("database", self.database);
-        if (self.user) |u| try req.header("X-ClickHouse-User", u);
-        if (self.password) |p| try req.header("X-ClickHouse-Key", p);
+        if (self.database.len > 0) {
+            try req.query("database", self.database);
+        }
+        if (self.user) |u| {
+            try req.header("X-ClickHouse-User", u);
+        }
+        if (self.password) |p| {
+            try req.header("X-ClickHouse-Key", p);
+        }
         req.body(sql);
 
         var res: zul.http.Response = try req.getResponse(.{});
@@ -72,11 +78,15 @@ pub const ClickHouse = struct {
         var buf: std.array_list.Managed(u8) = .init(self.allocator);
         var it = std.mem.splitScalar(u8, stmt, '?');
         inline for (fields) |field| {
-            if (it.next()) |part| try buf.appendSlice(part);
+            if (it.next()) |part| {
+                try buf.appendSlice(part);
+            }
             try appendLiteral(&buf, @field(args, field.name));
         }
         // Trailing text after the final `?` (if any).
-        if (it.next()) |part| try buf.appendSlice(part);
+        if (it.next()) |part| {
+            try buf.appendSlice(part);
+        }
         return try buf.toOwnedSlice();
     }
 
@@ -111,7 +121,9 @@ pub const ClickHouse = struct {
                     @compileError("ClickHouse: unsupported arg type " ++ @typeName(T));
                 try buf.append('\'');
                 for (slice) |ch| {
-                    if (ch == '\'') try buf.append('\'');
+                    if (ch == '\'') {
+                        try buf.append('\'');
+                    }
                     try buf.append(ch);
                 }
                 try buf.append('\'');
@@ -168,7 +180,9 @@ pub const ClickHouse = struct {
 
     pub fn selectSlice(self: *ClickHouse, ctx: *root.Context, comptime Type: type, list: *std.array_list.Managed(Type), comptime stmt: []const u8, args: anytype) !i64 {
         const rows = try self.queryRows(ctx, Type, stmt, args);
-        for (rows) |r| try list.append(r);
+        for (rows) |r| {
+            try list.append(r);
+        }
         return @intCast(list.items.len);
     }
 
@@ -211,8 +225,12 @@ pub const ClickHouse = struct {
         self.client.deinit();
         allocator.free(self.url);
         allocator.free(self.database);
-        if (self.user) |u| allocator.free(u);
-        if (self.password) |p| allocator.free(p);
+        if (self.user) |u| {
+            allocator.free(u);
+        }
+        if (self.password) |p| {
+            allocator.free(p);
+        }
         allocator.destroy(self);
     }
 };

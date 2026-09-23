@@ -350,7 +350,7 @@ fn duckdbQueryHandler(ctx: *Context) !void {
 
 fn tsWriteHandler(ctx: *Context) !void {
     if (ctx.Timeseries) |ts| {
-        try ts.write(ctx, "demo", "host=example", "value=1.0", null);
+        try ts.write(ctx, "demo,host=example value=1.0");
         try ctx.response.json(.{ .status = "written" }, .{});
     } else {
         ctx.response.setStatus(.not_implemented);
@@ -392,7 +392,7 @@ fn solrQueryHandler(ctx: *Context) !void {
 
 fn nosqlPutHandler(ctx: *Context) !void {
     if (ctx.NoSQL) |n| {
-        try n.put(ctx, "users", "alice", "{\"age\":30}");
+        try n.put(ctx, "INSERT INTO users (id, data) VALUES ('alice', '{\"age\":30}')");
         try ctx.response.json(.{ .status = "stored" }, .{});
     } else {
         ctx.response.setStatus(.not_implemented);
@@ -402,7 +402,7 @@ fn nosqlPutHandler(ctx: *Context) !void {
 
 fn nosqlGetHandler(ctx: *Context) !void {
     if (ctx.NoSQL) |n| {
-        const doc = try n.get(ctx, "users", "alice");
+        const doc = try n.get(ctx, "SELECT data FROM users WHERE id = 'alice'");
         if (doc) |d| {
             defer ctx.allocator.free(d);
             try ctx.response.json(.{ .doc = d }, .{});
@@ -448,7 +448,7 @@ fn clickhouseQueryHandler(ctx: *Context) !void {
 
 fn couchbasePutHandler(ctx: *Context) !void {
     if (ctx.NoSQL) |n| {
-        try n.put(ctx, "users", "alice", "{\"age\":30}");
+        try n.put(ctx, "UPSERT INTO users (KEY, VALUE) VALUES ('alice', {\"age\":30})");
         try ctx.response.json(.{ .status = "stored" }, .{});
     } else {
         ctx.response.setStatus(.not_implemented);
@@ -458,7 +458,7 @@ fn couchbasePutHandler(ctx: *Context) !void {
 
 fn couchbaseGetHandler(ctx: *Context) !void {
     if (ctx.NoSQL) |n| {
-        const doc = try n.get(ctx, "users", "alice");
+        const doc = try n.get(ctx, "SELECT RAW b FROM users b WHERE meta(b).id = 'alice'");
         if (doc) |d| {
             defer ctx.allocator.free(d);
             try ctx.response.json(.{ .doc = d }, .{});

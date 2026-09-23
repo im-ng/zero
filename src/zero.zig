@@ -79,7 +79,7 @@ pub const Solr = @import("datasource/specialized/solr.zig").Solr;
 pub const nosqlInterface = @import("datasource/nosqlInterface.zig");
 pub const NoSQL = nosqlInterface.NoSQL;
 pub const Couchbase = @import("datasource/couchbase.zig").Couchbase;
-pub const Cassandra = @import("datasource/cassandra.zig").Cassandra;
+pub const NoSQLBackend = @import("datasource/nosql.zig").NoSQL;
 
 pub const client = @import("service/client.zig");
 pub const circuit_breaker = @import("service/circuit_breaker.zig");

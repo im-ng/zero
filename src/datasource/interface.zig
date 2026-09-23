@@ -62,7 +62,9 @@ pub const MockBackend = struct {
 
     pub fn selectSlice(self: *MockBackend, ctx: *root.Context, comptime Type: type, list: *std.array_list.Managed(Type), comptime stmt: []const u8, args: anytype) !i64 {
         const rows = try self.queryRowsContext(ctx, Type, stmt, args);
-        for (rows) |r| try list.append(r);
+        for (rows) |r| {
+            try list.append(r);
+        }
         self.select_slice_calls += 1;
         return @intCast(list.items.len);
     }
@@ -117,7 +119,9 @@ pub const Interface = struct {
 
     /// Single typed row. `null` when the query matches no rows.
     pub fn queryRow(self: *Interface, ctx: *root.Context, comptime Type: type, comptime stmt: []const u8, args: anytype) !?Type {
-        if (self.breaker) |*b| b.before() catch return error.CircuitOpen;
+        if (self.breaker) |*b| {
+            b.before() catch return error.CircuitOpen;
+        }
         const r = switch (self.dialect) {
             .sqlite => @as(*SQLite, @ptrCast(@alignCast(self.ptr))).queryRow(
                 ctx,
@@ -150,16 +154,22 @@ pub const Interface = struct {
                 args,
             ),
         } catch |e| {
-            if (self.breaker) |*b| b.recordFailure();
+            if (self.breaker) |*b| {
+                b.recordFailure();
+            }
             return e;
         };
-        if (self.breaker) |*b| b.recordSuccess();
+        if (self.breaker) |*b| {
+            b.recordSuccess();
+        }
         return r;
     }
 
     /// Multiple typed rows, owned by the connection allocator.
     pub fn queryRows(self: *Interface, ctx: *root.Context, comptime Type: type, comptime stmt: []const u8, args: anytype) ![]Type {
-        if (self.breaker) |*b| b.before() catch return error.CircuitOpen;
+        if (self.breaker) |*b| {
+            b.before() catch return error.CircuitOpen;
+        }
         const r = switch (self.dialect) {
             .sqlite => @as(*SQLite, @ptrCast(@alignCast(self.ptr))).queryRows(
                 ctx,
@@ -192,16 +202,22 @@ pub const Interface = struct {
                 args,
             ),
         } catch |e| {
-            if (self.breaker) |*b| b.recordFailure();
+            if (self.breaker) |*b| {
+                b.recordFailure();
+            }
             return e;
         };
-        if (self.breaker) |*b| b.recordSuccess();
+        if (self.breaker) |*b| {
+            b.recordSuccess();
+        }
         return r;
     }
 
     /// Single typed row with a request context (tracing / metrics).
     pub fn queryRowContext(self: *Interface, ctx: *root.Context, comptime Type: type, comptime stmt: []const u8, args: anytype) !?Type {
-        if (self.breaker) |*b| b.before() catch return error.CircuitOpen;
+        if (self.breaker) |*b| {
+            b.before() catch return error.CircuitOpen;
+        }
         const r = switch (self.dialect) {
             .sqlite => @as(*SQLite, @ptrCast(@alignCast(self.ptr))).queryRowContext(
                 ctx,
@@ -234,16 +250,22 @@ pub const Interface = struct {
                 args,
             ),
         } catch |e| {
-            if (self.breaker) |*b| b.recordFailure();
+            if (self.breaker) |*b| {
+                b.recordFailure();
+            }
             return e;
         };
-        if (self.breaker) |*b| b.recordSuccess();
+        if (self.breaker) |*b| {
+            b.recordSuccess();
+        }
         return r;
     }
 
     /// Multiple typed rows with a request context.
     pub fn queryRowsContext(self: *Interface, ctx: *root.Context, comptime Type: type, comptime stmt: []const u8, args: anytype) ![]Type {
-        if (self.breaker) |*b| b.before() catch return error.CircuitOpen;
+        if (self.breaker) |*b| {
+            b.before() catch return error.CircuitOpen;
+        }
         const r = switch (self.dialect) {
             .sqlite => @as(*SQLite, @ptrCast(@alignCast(self.ptr))).queryRowsContext(
                 ctx,
@@ -276,16 +298,22 @@ pub const Interface = struct {
                 args,
             ),
         } catch |e| {
-            if (self.breaker) |*b| b.recordFailure();
+            if (self.breaker) |*b| {
+                b.recordFailure();
+            }
             return e;
         };
-        if (self.breaker) |*b| b.recordSuccess();
+        if (self.breaker) |*b| {
+            b.recordSuccess();
+        }
         return r;
     }
 
     /// Append typed rows into `list`. Returns the number of rows appended.
     pub fn selectSlice(self: *Interface, ctx: *root.Context, comptime Type: type, list: *std.array_list.Managed(Type), comptime stmt: []const u8, args: anytype) !i64 {
-        if (self.breaker) |*b| b.before() catch return error.CircuitOpen;
+        if (self.breaker) |*b| {
+            b.before() catch return error.CircuitOpen;
+        }
         const r = switch (self.dialect) {
             .sqlite => @as(*SQLite, @ptrCast(@alignCast(self.ptr))).selectSlice(
                 ctx,
@@ -323,16 +351,22 @@ pub const Interface = struct {
                 args,
             ),
         } catch |e| {
-            if (self.breaker) |*b| b.recordFailure();
+            if (self.breaker) |*b| {
+                b.recordFailure();
+            }
             return e;
         };
-        if (self.breaker) |*b| b.recordSuccess();
+        if (self.breaker) |*b| {
+            b.recordSuccess();
+        }
         return r;
     }
 
     /// Execute a write statement (INSERT/UPDATE/DELETE). Returns the last insert id.
     pub fn exec(self: *Interface, ctx: *root.Context, comptime stmt: []const u8, args: anytype) !i64 {
-        if (self.breaker) |*b| b.before() catch return error.CircuitOpen;
+        if (self.breaker) |*b| {
+            b.before() catch return error.CircuitOpen;
+        }
         const r = switch (self.dialect) {
             .sqlite => @as(*SQLite, @ptrCast(@alignCast(self.ptr))).execWithContext(
                 ctx,
@@ -360,10 +394,14 @@ pub const Interface = struct {
                 args,
             ),
         } catch |e| {
-            if (self.breaker) |*b| b.recordFailure();
+            if (self.breaker) |*b| {
+                b.recordFailure();
+            }
             return e;
         };
-        if (self.breaker) |*b| b.recordSuccess();
+        if (self.breaker) |*b| {
+            b.recordSuccess();
+        }
         return r;
     }
 

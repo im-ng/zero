@@ -211,7 +211,7 @@ pub fn dbResponse(ctx: *Context) !void {
 
 pub fn tsWrite(ctx: *Context) !void {
     if (ctx.Timeseries) |ts| {
-        try ts.write(ctx, "demo", "host=example", "value=1.0", null);
+        try ts.write(ctx, "demo,host=example value=1.0");
         try ctx.response.json(.{ .status = "written" }, .{});
     } else {
         ctx.response.setStatus(.not_implemented);
@@ -253,7 +253,7 @@ pub fn solrQuery(ctx: *Context) !void {
 
 pub fn nosqlPut(ctx: *Context) !void {
     if (ctx.NoSQL) |n| {
-        try n.put(ctx, "users", "alice", "{\"age\":30}");
+        try n.put(ctx, "INSERT INTO users (id, data) VALUES ('alice', '{\"age\":30}')");
         try ctx.response.json(.{ .status = "stored" }, .{});
     } else {
         ctx.response.setStatus(.not_implemented);
@@ -263,7 +263,7 @@ pub fn nosqlPut(ctx: *Context) !void {
 
 pub fn nosqlGet(ctx: *Context) !void {
     if (ctx.NoSQL) |n| {
-        const doc = try n.get(ctx, "users", "alice");
+        const doc = try n.get(ctx, "SELECT data FROM users WHERE id = 'alice'");
         if (doc) |d| {
             defer ctx.allocator.free(d);
             try ctx.response.json(.{ .doc = d }, .{});
@@ -305,7 +305,7 @@ pub fn clickhouseQuery(ctx: *Context) !void {
 
 pub fn couchbasePut(ctx: *Context) !void {
     if (ctx.NoSQL) |n| {
-        try n.put(ctx, "users", "alice", "{\"age\":30}");
+        try n.put(ctx, "INSERT INTO users (id, data) VALUES ('alice', '{\"age\":30}')");
         try ctx.response.json(.{ .status = "stored" }, .{});
     } else {
         ctx.response.setStatus(.not_implemented);
@@ -315,7 +315,7 @@ pub fn couchbasePut(ctx: *Context) !void {
 
 pub fn couchbaseGet(ctx: *Context) !void {
     if (ctx.NoSQL) |n| {
-        const doc = try n.get(ctx, "users", "alice");
+        const doc = try n.get(ctx, "SELECT data FROM users WHERE id = 'alice'");
         if (doc) |d| {
             defer ctx.allocator.free(d);
             try ctx.response.json(.{ .doc = d }, .{});

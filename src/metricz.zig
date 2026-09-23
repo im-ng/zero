@@ -359,11 +359,10 @@ pub fn initialize(allocator: Allocator, comptime _: metrics.RegistryOpts) !*metr
 /// Frees every built-in metric vec (which in turn release their duped label
 /// strings, attribute buffers, and value hashmaps), the custom metric list, and
 /// the `metricz` struct itself. Safe to call only after the metrics server
-/// thread has been stopped and joined (see `App.run` teardown order).
+/// thread has been stopped and joined (see `App.run` teardown order), so no
+/// concurrent `writeRaw` can touch `self` and the mutex must stay locked-free
+/// here — locking it would force an `unlock` on freed memory after `destroy`.
 pub fn deinit(self: *Self, allocator: Allocator) void {
-    self.mut.lockUncancelable(utils.io);
-    defer self.mut.unlock(utils.io);
-
     self.Info.deinit();
     self.Threads.deinit();
     self.MemoryUsage.deinit();

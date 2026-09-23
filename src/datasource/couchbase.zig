@@ -4,8 +4,7 @@ const zul = root.zul;
 const utils = root.utils;
 
 /// Couchbase document backend over N1QL/HTTP.
-/// Talks the query service (`8093`) via the framework's
-/// `zul` HTTP client with HTTP Basic auth — no `libcouchbase` C library to link.
+/// Talks the query service (`8093`) via the framework's HTTP client with HTTP Basic auth.
 /// Documents are projected onto a Couchbase bucket/collection; the document id
 /// maps to `meta().id` and the JSON body is the document value.
 pub const Couchbase = struct {
@@ -104,39 +103,32 @@ pub const Couchbase = struct {
         return try std.json.Stringify.valueAlloc(alloc, value, .{});
     }
 
-    pub fn get(self: *Couchbase, ctx: *root.Context, collection: []const u8, key: []const u8) !?[]const u8 {
-        const bucket = if (collection.len == 0) self.bucket else collection;
-        const stmt = try std.fmt.allocPrint(ctx.allocator, "SELECT RAW b FROM `{s}` b WHERE meta(b).id = '{s}'", .{ bucket, key });
-        defer ctx.allocator.free(stmt);
-        const resp = try self.runN1ql(ctx, stmt);
+    pub fn get(self: *Couchbase, ctx: *root.Context, statement: []const u8) !?[]const u8 {
+        const resp = try self.runN1ql(ctx, statement);
         const rows = try self.results(resp);
         if (rows.len == 0) return null;
         return try self.dump(ctx.allocator, rows[0]);
     }
 
-    /// Upsert a document. `value` must be a valid JSON string (the document body).
-    pub fn put(self: *Couchbase, ctx: *root.Context, collection: []const u8, key: []const u8, value: []const u8) !void {
-        const bucket = if (collection.len == 0) self.bucket else collection;
-        const stmt = try std.fmt.allocPrint(ctx.allocator, "UPSERT INTO `{s}` (KEY, VALUE) VALUES ('{s}', {s})", .{ bucket, key, value });
-        defer ctx.allocator.free(stmt);
-        _ = try self.runN1ql(ctx, stmt);
+    /// Run an arbitrary N1QL write `statement` (UPSERT/INSERT/DELETE). The
+    /// response is parsed only to surface query-service errors.
+    pub fn put(self: *Couchbase, ctx: *root.Context, statement: []const u8) !void {
+        _ = try self.runN1ql(ctx, statement);
     }
 
-    pub fn delete(self: *Couchbase, ctx: *root.Context, collection: []const u8, key: []const u8) !void {
-        const bucket = if (collection.len == 0) self.bucket else collection;
-        const stmt = try std.fmt.allocPrint(ctx.allocator, "DELETE FROM `{s}` b WHERE meta(b).id = '{s}'", .{ bucket, key });
-        defer ctx.allocator.free(stmt);
-        _ = try self.runN1ql(ctx, stmt);
+    pub fn delete(self: *Couchbase, ctx: *root.Context, statement: []const u8) !void {
+        _ = try self.runN1ql(ctx, statement);
     }
 
-    /// Run an arbitrary N1QL statement and return the `results` array as JSON,
+    /// Run an arbitrary N1QL `statement` and return the `results` array as JSON,
     /// owned by `ctx.allocator`. Caller frees.
-    pub fn query(self: *Couchbase, ctx: *root.Context, collection: []const u8, q: []const u8) ![]const u8 {
-        _ = collection;
-        const resp = try self.runN1ql(ctx, q);
+    pub fn query(self: *Couchbase, ctx: *root.Context, statement: []const u8) ![]const u8 {
+        const resp = try self.runN1ql(ctx, statement);
         const rows = try self.results(resp);
         var arr = std.json.Array.init(ctx.allocator);
-        for (rows) |r| try arr.append(r);
+        for (rows) |r| {
+            try arr.append(r);
+        }
         return try self.dump(ctx.allocator, std.json.Value{ .array = arr });
     }
 
@@ -145,8 +137,12 @@ pub const Couchbase = struct {
         self.client.deinit();
         allocator.free(self.contact_point);
         allocator.free(self.bucket);
-        if (self.user) |u| allocator.free(u);
-        if (self.password) |p| allocator.free(p);
+        if (self.user) |u| {
+            allocator.free(u);
+        }
+        if (self.password) |p| {
+            allocator.free(p);
+        }
         allocator.destroy(self);
     }
 };

@@ -48,62 +48,72 @@ pub fn index(ctx: *Context) !void {
 }
 
 pub fn indexDoc(ctx: *Context) !void {
-    if (ctx.Search) |s| {
-        const doc = ctx.request.body() orelse "";
-        try s.index(ctx, COLLECTION, doc);
-        try ctx.response.json(.{ .status = "indexed" }, .{});
-    } else {
+    if (ctx.Search == null) {
         notConfigured(ctx);
+        return;
     }
+
+    const doc = ctx.request.body() orelse "";
+    try ctx.Search.?.index(ctx, COLLECTION, doc);
+
+    try ctx.response.json(.{ .status = "indexed" }, .{});
 }
 
 pub fn getDoc(ctx: *Context) !void {
-    if (ctx.Search) |s| {
-        const id = ctx.request.params.get("id") orelse {
-            badRequest(ctx, "missing :id");
-            return;
-        };
-        const doc = try s.get(ctx, COLLECTION, id);
-        if (doc) |d| {
-            defer ctx.allocator.free(d);
-            ctx.response.content_type = .JSON;
-            try ctx.response.writer().writeAll(d);
-        } else {
-            ctx.response.setStatus(.not_found);
-            try ctx.response.json(.{ .message = "not found", .id = id }, .{});
-        }
-    } else {
+    if (ctx.Search == null) {
         notConfigured(ctx);
+        return;
+    }
+
+    const id = ctx.request.params.get("id") orelse {
+        badRequest(ctx, "missing :id");
+        return;
+    };
+    const doc = try ctx.Search.?.get(ctx, COLLECTION, id);
+
+    if (doc) |d| {
+        defer ctx.allocator.free(d);
+
+        ctx.response.content_type = .JSON;
+        try ctx.response.writer().writeAll(d);
+    } else {
+        ctx.response.setStatus(.not_found);
+        try ctx.response.json(.{ .message = "not found", .id = id }, .{});
     }
 }
 
 pub fn deleteDoc(ctx: *Context) !void {
-    if (ctx.Search) |s| {
-        const id = ctx.request.params.get("id") orelse {
-            badRequest(ctx, "missing :id");
-            return;
-        };
-        try s.delete(ctx, COLLECTION, id);
-        try ctx.response.json(.{ .status = "deleted", .id = id }, .{});
-    } else {
+    if (ctx.Search == null) {
         notConfigured(ctx);
+        return;
     }
+
+    const id = ctx.request.params.get("id") orelse {
+        badRequest(ctx, "missing :id");
+        return;
+    };
+
+    try ctx.Search.?.delete(ctx, COLLECTION, id);
+    try ctx.response.json(.{ .status = "deleted", .id = id }, .{});
 }
 
 pub fn search(ctx: *Context) !void {
-    if (ctx.Search) |s| {
-        const q: []const u8 = blk: {
-            if (ctx.request.method == .POST) break :blk ctx.request.body() orelse "";
-            const qs = ctx.request.query() catch break :blk "";
-            break :blk qs.get("q") orelse "";
-        };
-        const hits = try s.query(ctx, COLLECTION, q);
-        defer ctx.allocator.free(hits);
-        ctx.response.content_type = .JSON;
-        try ctx.response.writer().writeAll(hits);
-    } else {
+    if (ctx.Search == null) {
         notConfigured(ctx);
+        return;
     }
+
+    const q: []const u8 = blk: {
+        if (ctx.request.method == .POST) break :blk ctx.request.body() orelse "";
+        const qs = ctx.request.query() catch break :blk "";
+        break :blk qs.get("q") orelse "";
+    };
+
+    const hits = try ctx.Search.?.query(ctx, COLLECTION, q);
+    defer ctx.allocator.free(hits);
+
+    ctx.response.content_type = .JSON;
+    try ctx.response.writer().writeAll(hits);
 }
 
 fn badRequest(ctx: *Context, msg: []const u8) void {
@@ -113,5 +123,10 @@ fn badRequest(ctx: *Context, msg: []const u8) void {
 
 fn notConfigured(ctx: *Context) void {
     ctx.response.setStatus(.not_implemented);
-    ctx.response.json(.{ .message = "SOLR_URL / SOLR_DEFAULT_COLLECTION not configured" }, .{}) catch {};
+    ctx.response.json(
+        .{
+            .message = "SOLR_URL / SOLR_DEFAULT_COLLECTION not configured",
+        },
+        .{},
+    ) catch {};
 }

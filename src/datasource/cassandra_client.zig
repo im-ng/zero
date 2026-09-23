@@ -63,10 +63,16 @@ pub const QueryResult = struct {
     rows: []Row,
 
     pub fn deinit(self: *QueryResult) void {
-        for (self.columns) |c| self.allocator.free(c.name);
+        for (self.columns) |c| {
+            self.allocator.free(c.name);
+        }
         self.allocator.free(self.columns);
         for (self.rows) |r| {
-            for (r.cells) |c| if (c.data) |d| self.allocator.free(d);
+            for (r.cells) |c| {
+                if (c.data) |d| {
+                    self.allocator.free(d);
+                }
+            }
             self.allocator.free(r.cells);
         }
         self.allocator.free(self.rows);
@@ -77,10 +83,14 @@ pub const QueryResult = struct {
         var buf = List.init(alloc);
         try buf.append('[');
         for (self.rows, 0..) |row, ri| {
-            if (ri > 0) try buf.append(',');
+            if (ri > 0) {
+                try buf.append(',');
+            }
             try buf.append('{');
             for (row.cells, self.columns, 0..) |cell, col, ci| {
-                if (ci > 0) try buf.append(',');
+                if (ci > 0) {
+                    try buf.append(',');
+                }
                 try writeJsonString(&buf, col.name);
                 try buf.append(':');
                 try writeValue(&buf, alloc, cell);
@@ -98,10 +108,15 @@ pub const Connection = struct {
     contact_points: []const u8,
     user: []const u8,
     pass: []const u8,
+    /// When set, a `USE` statement is issued right after the auth handshake so
+    /// every later statement runs in this keyspace without re-qualifying it.
+    keyspace: ?[]const u8 = null,
     mutex: std.atomic.Mutex = .unlocked,
 
     fn lock(self: *Connection) void {
         while (!self.mutex.tryLock()) {
+            // Best-effort: yielding is an optimization while spinning for the lock;
+            // if it fails there is nothing to do but retry.
             std.Thread.yield() catch {};
         }
     }
@@ -110,17 +125,20 @@ pub const Connection = struct {
         self.mutex.unlock();
     }
 
-    pub fn init(allocator: std.mem.Allocator, contact_points: []const u8, user: []const u8, pass: []const u8) Connection {
+    pub fn init(allocator: std.mem.Allocator, contact_points: []const u8, user: []const u8, pass: []const u8, keyspace: ?[]const u8) Connection {
         return .{
             .allocator = allocator,
             .contact_points = contact_points,
             .user = user,
             .pass = pass,
+            .keyspace = keyspace,
         };
     }
 
     pub fn deinit(self: *Connection) void {
-        if (self.fd) |fd| _ = linux.close(fd);
+        if (self.fd) |fd| {
+            _ = linux.close(fd);
+        }
         self.fd = null;
     }
 
@@ -213,6 +231,27 @@ pub const Connection = struct {
             },
             Opcode.error_code => return error.CassandraStartupError,
             else => return error.CassandraProtocolError,
+        }
+
+        // Pin the session to the configured keyspace so callers need not
+        // qualify every table reference. This runs inside the connect lock,
+        // so it writes/reads frames directly rather than via `query`.
+        if (self.keyspace) |ks| {
+            const use_cql = try std.fmt.allocPrint(self.allocator, "USE {s}", .{ks});
+            defer self.allocator.free(use_cql);
+            var use_body = std.array_list.AlignedManaged(u8, null).init(self.allocator);
+            defer use_body.deinit();
+            try writeLongString(&use_body, use_cql);
+            var cf: [3]u8 = undefined;
+            std.mem.writeInt(u16, cf[0..2], @intFromEnum(Consistency.one), .big);
+            cf[2] = 0x00; // flags: no values
+            try use_body.appendSlice(&cf);
+            try self.writeFrame(Opcode.query, use_body.items);
+
+            const use_resp = try self.readFrame();
+            defer self.allocator.free(use_resp.body);
+            if (use_resp.opcode == Opcode.error_code) return error.CassandraQueryError;
+            if (use_resp.opcode != Opcode.result) return error.CassandraProtocolError;
         }
     }
 
@@ -517,7 +556,7 @@ fn writeValue(list: *List, alloc: std.mem.Allocator, cell: Cell) !void {
 
 test "cassandra live round-trip (set CASSANDRA_TEST=1 to run)" {
     if (std.testing.environ.getPosix("CASSANDRA_TEST")) |_| {} else return;
-    var conn = Connection.init(std.testing.allocator, "127.0.0.1:9042", "cassandra", "cassandra");
+    var conn = Connection.init(std.testing.allocator, "127.0.0.1:9042", "cassandra", "cassandra", "zero_test");
     defer conn.deinit();
 
     var rv = try conn.query("SELECT release_version FROM system.local");

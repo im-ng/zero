@@ -268,6 +268,11 @@ pub fn destroy(self: *Self) void {
         allocator.destroy(sql);
     }
 
+    // Time-series backend (InfluxDB/Couchbase/mock): frees the client and handle.
+    if (self.Timeseries) |ts| {
+        ts.deinit(allocator);
+    }
+
     allocator.destroy(self);
 }
 
@@ -946,8 +951,8 @@ fn loadClickhouse(self: *Self) !void {
     try self.healthChecks.append(.{ .name = "sql", .check = clickhouseHealthCheck });
 }
 
-// Auto-wire the time-series datasource when INFLUXDB_URL is set. The org/bucket
-// are required; token is optional (auth disabled / 1.x auth).
+// Auto-wire the time-series datasource when INFLUXDB_URL is set. The database
+// (`bucket`) is required; token is optional (auth disabled).
 fn loadTimeseries(self: *Self) !void {
     const url = self.config.get("INFLUXDB_URL");
     if (std.mem.eql(u8, url, "")) {
@@ -955,21 +960,27 @@ fn loadTimeseries(self: *Self) !void {
         return;
     }
 
-    const org = self.config.get("INFLUXDB_ORG");
     const bucket = self.config.get("INFLUXDB_BUCKET");
-    if (std.mem.eql(u8, org, "") or std.mem.eql(u8, bucket, "")) {
-        self.log.err("time-series connection failed: INFLUXDB_ORG and INFLUXDB_BUCKET must be set.");
+    if (std.mem.eql(u8, bucket, "")) {
+        self.log.err("time-series connection failed: INFLUXDB_BUCKET must be set.");
+        return;
+    }
+
+    const token = self.config.get("INFLUXDB_TOKEN");
+    if (std.mem.eql(u8, token, "")) {
+        self.log.err("time-series connection failed: INFLUXDB_TOKEN must be set.");
         return;
     }
 
     const handle = try root.Timeseries.build(self, .influxdb, .{
         .url = url,
-        .org = org,
         .bucket = bucket,
-        .token = if (std.mem.eql(u8, self.config.get("INFLUXDB_TOKEN"), "")) null else self.config.get("INFLUXDB_TOKEN"),
+        .token = token,
     });
+
     self.Timeseries = handle;
-    self.log.info(try std.fmt.allocPrint(self.bootstrap, "connected to influxdb at '{s}' (org '{s}', bucket '{s}')", .{ url, org, bucket }));
+
+    self.log.info(try std.fmt.allocPrint(self.bootstrap, "connected to influxdb at '{s}' (db '{s}')", .{ url, bucket }));
 }
 
 // Auto-wire the search datasource when SOLR_URL is set.

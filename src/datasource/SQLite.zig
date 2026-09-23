@@ -86,7 +86,9 @@ pub fn queryRowsContext(self: *SQLite, ctx: *root.Context, comptime Type: type, 
 /// `queryRows` when you need fully-owned results.
 pub fn selectSlice(self: *SQLite, ctx: *root.Context, comptime Type: type, list: *std.array_list.Managed(Type), comptime query: []const u8, args: anytype) !i64 {
     const rows = try self.queryRowsContext(ctx, Type, query, args);
-    for (rows) |r| try list.append(r);
+    for (rows) |r| {
+        try list.append(r);
+    }
     return @intCast(list.items.len);
 }
 
@@ -118,5 +120,7 @@ pub fn commit(self: *SQLite) !void {
 
 /// Roll back the active transaction (best-effort).
 pub fn rollback(self: *SQLite) void {
+    // A failed rollback cannot be recovered here; the transaction is abandoned
+    // either way, so the error is intentionally ignored.
     self.db.exec("ROLLBACK", .{}, .{}) catch {};
 }

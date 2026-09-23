@@ -97,6 +97,7 @@ pub fn recordMetrics(self: *Self, duration: f32, query: []const u8, queryType: [
             .operation = "",
         },
         duration,
+        // Metrics emission must never fail a request; a dropped sample is acceptable.
     ) catch {};
 }
 
@@ -127,6 +128,8 @@ pub fn queryRow(self: *Self, ctx: *context, comptime Type: type, comptime query:
     self.recordMetrics(duration, query, "select");
 
     if (maybe) |*row| {
+        // Best-effort: a row deinit error after a successful parse is harmless
+        // and must not shadow the already-decoded value.
         defer row.deinit() catch {};
         return try row.to(Type, .{ .allocator = ctx.allocator });
     }
@@ -304,6 +307,8 @@ pub fn commit(self: *Self) !void {
 /// Roll back the active transaction (best-effort) and release the connection.
 pub fn rollback(self: *Self) void {
     if (self.transaction_conn) |conn| {
+        // A failed rollback cannot be recovered here; the connection is released
+        // regardless, so the error is intentionally ignored.
         _ = conn.exec("ROLLBACK", .{}) catch {};
         self.sql.release(conn);
         self.transaction_conn = null;

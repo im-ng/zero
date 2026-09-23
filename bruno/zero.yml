@@ -1,0 +1,584 @@
+opencollection: 1.0.0
+info:
+  name: zero
+config:
+  proxy:
+    inherit: true
+    config:
+      protocol: http
+      hostname: ''
+      port: ''
+      auth:
+        username: ''
+        password: ''
+      bypassProxy: ''
+items:
+  - info:
+      name: API Auth
+      type: http
+      seq: 3
+    http:
+      method: GET
+      url: http://localhost:8081/apikey
+      headers:
+        - name: X-Api-key
+          value: caf208fb-e407-497a-8f03-d636fb689b2e
+          disabled: true
+    settings:
+      encodeUrl: true
+      timeout: 0
+      followRedirects: true
+      maxRedirects: 5
+      forwardAuthorizationHeader: true
+  - info:
+      name: Basic Auth
+      type: http
+      seq: 1
+    http:
+      method: GET
+      url: http://localhost:8081/apikey
+      headers:
+        - name: X-Api-key
+          value: caf208fb-e407-497a-8f03-d636fb689b2e
+        - name: Authorization
+          value: Basic bmFtZTpwYXNzd29yZA==
+          disabled: true
+    settings:
+      encodeUrl: true
+      timeout: 0
+      followRedirects: true
+      maxRedirects: 5
+      forwardAuthorizationHeader: true
+  - info:
+      name: JWT Auth - Invalid Token
+      type: http
+      seq: 5
+    http:
+      method: GET
+      url: http://localhost:8081/oauth
+      auth:
+        type: bearer
+        token: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCIsImtpZCI6Inplcm8tZnJhbWV3b3JrLWFwcC0xIn0.eyJpc3MiOiJpc3MiLCJpYXQiOjE3NjI1OTY4MDcsImV4cCI6MjA1MTI1OTEzNywiYXVkIjoiemVyby1hcHAiLCJzdWIiOiJ0ZXN0LWtleSIsImp0aSI6Imp0aSIsIm5iZiI6MTc2MjU5NjgwN30.o5mmBhlLr6zu-OcLNesNNrNH58mBFceyyDeKYRArOhU
+    settings:
+      encodeUrl: true
+      timeout: 0
+      followRedirects: true
+      maxRedirects: 5
+      forwardAuthorizationHeader: true
+  - info:
+      name: JWT Auth - Valid Token
+      type: http
+      seq: 4
+    http:
+      method: GET
+      url: http://localhost:8081/oauth
+      auth:
+        type: bearer
+        token: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCIsImtpZCI6Inplcm8tZnJhbWV3b3JrLWFwcCJ9.eyJpc3MiOiJpc3MiLCJpYXQiOjE3NjI1OTY4MDcsImV4cCI6MjA1MTI1OTEzNywiYXVkIjoiemVyby1hcHAiLCJzdWIiOiJ0ZXN0LWtleSIsImp0aSI6Imp0aSIsIm5iZiI6MTc2MjU5NjgwN30.ww0_A-vNXnl7_tsCChPrbh12vj5zGA3UAZPjyN6A0wI
+    settings:
+      encodeUrl: true
+      timeout: 0
+      followRedirects: true
+      maxRedirects: 5
+      forwardAuthorizationHeader: true
+  - info:
+      name: graphQL
+      type: folder
+      seq: 1
+    request:
+      auth: inherit
+    items:
+      - info:
+          name: Create
+          type: graphql
+          seq: 1
+        graphql:
+          url: http://localhost:8080/graphql
+          method: POST
+          headers:
+            - name: Content-Type
+              value: application/json
+          body:
+            query: |
+              mutation {
+                createUser(name: "Bob", email: "bob@x.com") {
+                  id
+                  name
+                  email
+                }
+              }
+            variables: ''
+          auth: inherit
+        settings:
+          encodeUrl: true
+          timeout: 0
+          followRedirects: true
+          maxRedirects: 5
+          forwardAuthorizationHeader: false
+      - info:
+          name: Delete
+          type: graphql
+          seq: 1
+        graphql:
+          url: http://localhost:8080/graphql
+          method: POST
+          headers:
+            - name: Content-Type
+              value: application/json
+          body:
+            query: |
+              mutation {
+                deleteUser(id: 2)
+              }
+            variables: ''
+          auth: inherit
+        settings:
+          encodeUrl: true
+          timeout: 0
+          followRedirects: true
+          maxRedirects: 5
+          forwardAuthorizationHeader: false
+      - info:
+          name: Get All
+          type: graphql
+          seq: 1
+        graphql:
+          url: http://localhost:8080/graphql
+          method: POST
+          headers:
+            - name: Content-Type
+              value: application/json
+          body:
+            query: |
+              query {
+                users {
+                  id
+                  name
+                  email
+                }
+              }
+            variables: ''
+          auth: inherit
+        settings:
+          encodeUrl: true
+          timeout: 0
+          followRedirects: true
+          maxRedirects: 5
+          forwardAuthorizationHeader: false
+      - info:
+          name: Get by ID
+          type: graphql
+          seq: 1
+        graphql:
+          url: http://localhost:8080/graphql
+          method: POST
+          headers:
+            - name: Content-Type
+              value: application/json
+          body:
+            query: |
+              query {
+                user(id: 1) {
+                  id
+                  name
+                  email
+                }
+              }
+            variables: ''
+          auth: inherit
+        settings:
+          encodeUrl: true
+          timeout: 0
+          followRedirects: true
+          maxRedirects: 5
+          forwardAuthorizationHeader: false
+      - info:
+          name: Hello
+          type: graphql
+          seq: 1
+        graphql:
+          url: http://localhost:8080/graphql
+          method: POST
+          body:
+            query: query { hello }
+            variables: ''
+          auth: inherit
+        settings:
+          encodeUrl: true
+          timeout: 0
+          followRedirects: true
+          maxRedirects: 5
+          forwardAuthorizationHeader: false
+      - info:
+          name: Update
+          type: graphql
+          seq: 1
+        graphql:
+          url: http://localhost:8080/graphql
+          method: POST
+          headers:
+            - name: Content-Type
+              value: application/json
+          body:
+            query: |
+              mutation {
+                updateUser(id: 1, name: "Bobby") {
+                  id
+                  name
+                  email
+                }
+              }
+            variables: ''
+          auth: inherit
+        settings:
+          encodeUrl: true
+          timeout: 0
+          followRedirects: true
+          maxRedirects: 5
+          forwardAuthorizationHeader: false
+  - info:
+      name: fileStore
+      type: folder
+      seq: 6
+    request:
+      auth: inherit
+    items:
+      - info:
+          name: Get File
+          type: http
+          seq: 1
+        http:
+          method: GET
+          url: http://localhost:8080/filestore?key=text.txt
+          params:
+            - name: key
+              value: text.txt
+              type: query
+          auth: inherit
+        settings:
+          encodeUrl: true
+          timeout: 0
+          followRedirects: true
+          maxRedirects: 5
+          forwardAuthorizationHeader: false
+      - info:
+          name: Post File
+          type: http
+          seq: 2
+        http:
+          method: POST
+          url: http://localhost:8080/filestore?key=text1.txt
+          params:
+            - name: key
+              value: text1.txt
+              type: query
+          body:
+            type: text
+            data: Post this content to the file
+          auth: inherit
+        settings:
+          encodeUrl: true
+          timeout: 0
+          followRedirects: true
+          maxRedirects: 5
+          forwardAuthorizationHeader: false
+  - info:
+      name: nosql
+      type: folder
+      seq: 8
+    request:
+      auth: inherit
+    items:
+      - info:
+          name: Add User
+          type: http
+          seq: 1
+        http:
+          method: POST
+          url: http://localhost:8080/users/1
+          body:
+            type: text
+            data: test data
+          auth: inherit
+        settings:
+          encodeUrl: true
+          timeout: 0
+          followRedirects: true
+          maxRedirects: 5
+          forwardAuthorizationHeader: false
+      - info:
+          name: Delete User Data
+          type: http
+          seq: 5
+        http:
+          method: DELETE
+          url: http://localhost:8080/users/1
+          body:
+            type: text
+            data: ''
+          auth: inherit
+        settings:
+          encodeUrl: true
+          timeout: 0
+          followRedirects: true
+          maxRedirects: 5
+          forwardAuthorizationHeader: false
+      - info:
+          name: Get Data
+          type: http
+          seq: 2
+        http:
+          method: GET
+          url: http://localhost:8080/users/1
+          body:
+            type: text
+            data: test data
+          auth: inherit
+        settings:
+          encodeUrl: true
+          timeout: 0
+          followRedirects: true
+          maxRedirects: 5
+          forwardAuthorizationHeader: false
+      - info:
+          name: Get Users
+          type: http
+          seq: 4
+        http:
+          method: GET
+          url: http://localhost:8080/users
+          body:
+            type: text
+            data: ''
+          auth: inherit
+        settings:
+          encodeUrl: true
+          timeout: 0
+          followRedirects: true
+          maxRedirects: 5
+          forwardAuthorizationHeader: false
+      - info:
+          name: Update User
+          type: http
+          seq: 3
+        http:
+          method: PUT
+          url: http://localhost:8080/users/1
+          body:
+            type: text
+            data: update test data
+          auth: inherit
+        settings:
+          encodeUrl: true
+          timeout: 0
+          followRedirects: true
+          maxRedirects: 5
+          forwardAuthorizationHeader: false
+  - info:
+      name: proto
+      type: folder
+      seq: 5
+    request:
+      auth: inherit
+    items:
+      - info:
+          name: Get Hello
+          type: http
+          seq: 1
+        http:
+          method: GET
+          url: http://localhost:8080/proto
+          headers:
+            - name: Content-Type
+              value: application/x-protobuf
+          auth: inherit
+        settings:
+          encodeUrl: true
+          timeout: 0
+          followRedirects: true
+          maxRedirects: 5
+          forwardAuthorizationHeader: false
+      - info:
+          name: Post Hello
+          type: http
+          seq: 2
+        http:
+          method: POST
+          url: http://localhost:8080/proto
+          headers:
+            - name: Content-Type
+              value: application/x-protobuf
+          body:
+            type: text
+            data: Hi there!
+          auth: inherit
+        settings:
+          encodeUrl: true
+          timeout: 0
+          followRedirects: true
+          maxRedirects: 5
+          forwardAuthorizationHeader: false
+  - info:
+      name: search
+      type: folder
+      seq: 9
+    request:
+      auth: inherit
+    items:
+      - info:
+          name: Add Doc
+          type: http
+          seq: 1
+        http:
+          method: POST
+          url: http://localhost:8080/docs
+          body:
+            type: json
+            data: |-
+              {
+                "id": 1,
+                "name": "ng"
+              }
+          auth: inherit
+        settings:
+          encodeUrl: true
+          timeout: 0
+          followRedirects: true
+          maxRedirects: 5
+          forwardAuthorizationHeader: false
+      - info:
+          name: Delete Docs
+          type: http
+          seq: 3
+        http:
+          method: DELETE
+          url: http://localhost:8080/docs/1
+          auth: inherit
+        settings:
+          encodeUrl: true
+          timeout: 0
+          followRedirects: true
+          maxRedirects: 5
+          forwardAuthorizationHeader: false
+      - info:
+          name: Get Docs
+          type: http
+          seq: 2
+        http:
+          method: GET
+          url: http://localhost:8080/docs/1
+          auth: inherit
+        settings:
+          encodeUrl: true
+          timeout: 0
+          followRedirects: true
+          maxRedirects: 5
+          forwardAuthorizationHeader: false
+  - info:
+      name: timeseries
+      type: folder
+      seq: 10
+    request:
+      auth: inherit
+    items:
+      - info:
+          name: Create Database
+          type: http
+          seq: 1
+        http:
+          method: post
+          url: http://127.0.0.1:8181/api/v3/configure/database
+          headers:
+            - name: Content-Type
+              value: application/json
+            - name: Authorization
+              value: Bearer apiv3_Kbu48sK9Zi4TZ83vzjQnT_oSr3yXty_sDk41IIffqe8lOrieT7YBxU9Vk1vhX6XxRfqa72-1GqvEiiX8eo1AlQ
+          body:
+            type: json
+            data: |-
+              {
+                "db": "demo"
+              }
+          auth: inherit
+        settings:
+          encodeUrl: false
+          timeout: 0
+          followRedirects: true
+          maxRedirects: 5
+          forwardAuthorizationHeader: false
+      - info:
+          name: Save Data
+          type: http
+          seq: 2
+        http:
+          method: POST
+          url: http://127.0.0.1:8080/points
+          body:
+            type: json
+            data: |-
+              {
+                "measurement": "cpu",
+                "tags": "host=server1",
+                "fields": "usage=42.1",
+                "ts": 1789977600
+              }
+          auth: inherit
+        settings:
+          encodeUrl: true
+          timeout: 0
+          followRedirects: true
+          maxRedirects: 5
+          forwardAuthorizationHeader: false
+      - info:
+          name: Get Data 2
+          type: http
+          seq: 4
+        http:
+          method: get
+          url: http://127.0.0.1:8181/api/v3/query_sql?db=demo&q=select * from "cpuhost=server1"
+          headers:
+            - name: Authorization
+              value: '  Bearer apiv3_Kbu48sK9Zi4TZ83vzjQnT_oSr3yXty_sDk41IIffqe8lOrieT7YBxU9Vk1vhX6XxRfqa72-1GqvEiiX8eo1AlQ'
+          params:
+            - name: db
+              value: demo
+              type: query
+            - name: q
+              value: select * from "cpuhost=server1"
+              type: query
+          auth: inherit
+        settings:
+          encodeUrl: false
+          timeout: 0
+          followRedirects: true
+          maxRedirects: 5
+          forwardAuthorizationHeader: false
+      - info:
+          name: Get Data
+          type: http
+          seq: 3
+        http:
+          method: get
+          url: http://localhost:8080/query?q=select * from "cpuhost=server1"
+          headers:
+            - name: Authorization
+              value: '  Bearer apiv3_Kbu48sK9Zi4TZ83vzjQnT_oSr3yXty_sDk41IIffqe8lOrieT7YBxU9Vk1vhX6XxRfqa72-1GqvEiiX8eo1AlQ'
+          params:
+            - name: q
+              value: select * from "cpuhost=server1"
+              type: query
+          auth: inherit
+        settings:
+          encodeUrl: false
+          timeout: 0
+          followRedirects: true
+          maxRedirects: 5
+          forwardAuthorizationHeader: false
+bundled: true
+extensions:
+  bruno:
+    ignore:
+      - node_modules
+      - .git
+    exportedAt: '2026-09-23T03:35:17.636Z'
+    exportedUsing: Bruno

@@ -258,7 +258,9 @@ test "datasource postgres concurrent transactions isolation" {
             return;
         };
     }
-    for (&threads) |t| t.join();
+    for (&threads) |t| {
+        t.join();
+    }
 
     const Row = struct { n: i64 };
     const got = try sql.select(Row, "SELECT n FROM bench_counter WHERE id = 1", .{});
@@ -357,7 +359,11 @@ test "redis kvstore concurrent set/get (mutex serialization)" {
             return;
         };
     }
-    for (&threads) |t| t.join();
+    for (&threads) |t| {
+        t.join();
+    }
 
-    for (results) |ok| try std.testing.expect(ok);
+    for (results) |ok| {
+        try std.testing.expect(ok);
+    }
 }
