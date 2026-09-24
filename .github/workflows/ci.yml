@@ -100,7 +100,7 @@ jobs:
           echo "Updating coverage to ${NEW_COVERAGE}%"
           if [ "$NEW_COVERAGE" -lt 85 ]; then
             COLOR="red"
-          elif [ "$NEW_COVERAGE" -ge 95 ]; then
+          elif [ "$NEW_COVERAGE" -ge 90 ]; then
             COLOR="green"
           else
             COLOR="yellow"

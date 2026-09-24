@@ -76,7 +76,10 @@ pub fn run(self: *Self) anyerror!void {
             ctx.any(err);
             return error.MigrationLockFailed;
         };
-        defer _ = ctx.SQL.exec(ctx, "SELECT pg_advisory_unlock(9112025)", .{}) catch {};
+
+        defer {
+            _ = ctx.SQL.exec(ctx, "SELECT pg_advisory_unlock(9112025)", .{}) catch {};
+        }
     }
 
     for (self.keys.items) |key| {
@@ -85,8 +88,6 @@ pub fn run(self: *Self) anyerror!void {
             "{d}",
             .{key},
         );
-        // `keyAsString` is only used to look up the migration; free it now so it
-        // doesn't leak. `allocPrint` returns a correctly-sized, freeable buffer.
         defer ctx.allocator.free(keyAsString);
 
         const value = self.map.get(keyAsString);
@@ -141,8 +142,7 @@ pub fn migrationKey(_: *Self, ctx: *Context, m: *const migrate) ![]const u8 {
 
 pub fn migrationCompleted(self: *Self, ctx: *Context, m: *const migrate) void {
     _ = self;
-    // `allocPrint` returns a correctly-sized, freeable buffer (unlike the
-    // util's `toStringFromInt` which hands back an unfreeable subslice).
+
     const msg = std.fmt.allocPrint(ctx.allocator, "{d}: migration completed  ", .{m.migrationNumber}) catch return;
     ctx.info(msg);
     ctx.allocator.free(msg);
@@ -150,6 +150,7 @@ pub fn migrationCompleted(self: *Self, ctx: *Context, m: *const migrate) void {
 
 pub fn migrationSkipped(self: *Self, ctx: *Context, m: *const migrate) void {
     _ = self;
+
     const msg = std.fmt.allocPrint(ctx.allocator, "{d}: migration is skipped  ", .{m.migrationNumber}) catch return;
     ctx.debug(msg);
     ctx.allocator.free(msg);
@@ -157,6 +158,7 @@ pub fn migrationSkipped(self: *Self, ctx: *Context, m: *const migrate) void {
 
 pub fn executionError(self: *Self, ctx: *Context, m: *const migrate) void {
     _ = self;
+
     const msg = std.fmt.allocPrint(ctx.allocator, "{d}: migration has execution error  ", .{m.migrationNumber}) catch return;
     ctx.err(msg);
     ctx.allocator.free(msg);
