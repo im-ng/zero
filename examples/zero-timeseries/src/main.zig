@@ -78,7 +78,10 @@ pub fn writePoint(ctx: *Context) !void {
         if (p.ts != null) ctx.allocator.free(base);
         defer ctx.allocator.free(line);
 
-        try ts.write(ctx, line);
+        ts.write(ctx, line) catch |e| {
+            if (timeseriesUpstreamError(ctx, e)) return;
+            return e;
+        };
         try ctx.response.json(.{ .status = "written" }, .{});
     } else {
         notConfigured(ctx);
@@ -92,7 +95,10 @@ pub fn writeLine(ctx: *Context) !void {
             badRequest(ctx, "empty line protocol");
             return;
         }
-        try ts.write(ctx, line);
+        ts.write(ctx, line) catch |e| {
+            if (timeseriesUpstreamError(ctx, e)) return;
+            return e;
+        };
         try ctx.response.json(.{ .status = "written" }, .{});
     } else {
         notConfigured(ctx);
@@ -106,7 +112,10 @@ pub fn queryFlux(ctx: *Context) !void {
             const qs = ctx.request.query() catch break :blk "";
             break :blk qs.get("q") orelse "";
         };
-        const csv = try ts.query(ctx, q);
+        const csv = ts.query(ctx, q) catch |e| {
+            if (timeseriesUpstreamError(ctx, e)) return;
+            return e;
+        };
         defer ctx.allocator.free(csv);
         ctx.response.content_type = .TEXT;
         try ctx.response.writer().writeAll(csv);
@@ -118,6 +127,23 @@ pub fn queryFlux(ctx: *Context) !void {
 fn badRequest(ctx: *Context, msg: []const u8) void {
     ctx.response.setStatus(.bad_request);
     ctx.response.json(.{ .message = msg }, .{}) catch {};
+}
+
+/// Map an InfluxDB upstream failure to an explicit error response. The datasource
+/// no longer logs; status + message live on `ts.lastError()` and are surfaced
+/// here. Returns `true` when handled (response already written).
+fn timeseriesUpstreamError(ctx: *Context, err: anyerror) bool {
+    const is_influx = err == error.InfluxDBWriteFailed or
+        err == error.InfluxDBQueryFailed;
+    if (!is_influx) return false;
+    const detail = ctx.Timeseries.?.lastError() orelse return false;
+    ctx.response.setStatus(switch (detail.status) {
+        401, 403 => .unauthorized,
+        404 => .not_found,
+        else => .bad_gateway,
+    });
+    ctx.response.json(.{ .err = "influxdb_upstream_failed", .status = detail.status, .message = detail.message }, .{}) catch {};
+    return true;
 }
 
 /// Startup hook: ensure the configured v3 database exists before serving

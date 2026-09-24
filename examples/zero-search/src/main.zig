@@ -54,7 +54,10 @@ pub fn indexDoc(ctx: *Context) !void {
     }
 
     const doc = ctx.request.body() orelse "";
-    try ctx.Search.?.index(ctx, COLLECTION, doc);
+    ctx.Search.?.index(ctx, COLLECTION, doc) catch |e| {
+        if (searchUpstreamError(ctx, e)) return;
+        return e;
+    };
 
     try ctx.response.json(.{ .status = "indexed" }, .{});
 }
@@ -69,7 +72,10 @@ pub fn getDoc(ctx: *Context) !void {
         badRequest(ctx, "missing :id");
         return;
     };
-    const doc = try ctx.Search.?.get(ctx, COLLECTION, id);
+    const doc = ctx.Search.?.get(ctx, COLLECTION, id) catch |e| {
+        if (searchUpstreamError(ctx, e)) return;
+        return e;
+    };
 
     if (doc) |d| {
         defer ctx.allocator.free(d);
@@ -93,7 +99,10 @@ pub fn deleteDoc(ctx: *Context) !void {
         return;
     };
 
-    try ctx.Search.?.delete(ctx, COLLECTION, id);
+    ctx.Search.?.delete(ctx, COLLECTION, id) catch |e| {
+        if (searchUpstreamError(ctx, e)) return;
+        return e;
+    };
     try ctx.response.json(.{ .status = "deleted", .id = id }, .{});
 }
 
@@ -109,7 +118,10 @@ pub fn search(ctx: *Context) !void {
         break :blk qs.get("q") orelse "";
     };
 
-    const hits = try ctx.Search.?.query(ctx, COLLECTION, q);
+    const hits = ctx.Search.?.query(ctx, COLLECTION, q) catch |e| {
+        if (searchUpstreamError(ctx, e)) return;
+        return e;
+    };
     defer ctx.allocator.free(hits);
 
     ctx.response.content_type = .JSON;
@@ -119,6 +131,24 @@ pub fn search(ctx: *Context) !void {
 fn badRequest(ctx: *Context, msg: []const u8) void {
     ctx.response.setStatus(.bad_request);
     ctx.response.json(.{ .message = msg }, .{}) catch {};
+}
+
+/// Map a Solr upstream failure to an explicit error response. The datasource no
+/// longer logs; the status + message live on `ctx.Search.lastError()` and are
+/// surfaced here. Returns `true` when handled (response already written).
+fn searchUpstreamError(ctx: *Context, err: anyerror) bool {
+    const is_solr = err == error.SolrIndexFailed or
+        err == error.SolrQueryFailed or
+        err == error.SolrDeleteFailed;
+    if (!is_solr) return false;
+    const detail = ctx.Search.?.lastError() orelse return false;
+    ctx.response.setStatus(switch (detail.status) {
+        401, 403 => .unauthorized,
+        404 => .not_found,
+        else => .bad_gateway,
+    });
+    ctx.response.json(.{ .err = "solr_upstream_failed", .status = detail.status, .message = detail.message }, .{}) catch {};
+    return true;
 }
 
 fn notConfigured(ctx: *Context) void {

@@ -134,6 +134,17 @@ pub const Search = struct {
         if (self.breaker) |*b| b.recordSuccess();
         return r;
     }
+
+    /// Return the last upstream failure recorded by the backend, if any. Call
+    /// right after catching a `Solr*Failed` error to read status/message. The
+    /// backend owns the `message` buffer (freed on the next call / `deinit`);
+    /// the caller must read it, not free it.
+    pub fn lastError(self: *Search) ?root.Error.DataSourceError {
+        return switch (self.backend) {
+            .solr => @as(*root.Solr, @ptrCast(@alignCast(self.ptr))).last_error,
+            .mock => null,
+        };
+    }
 };
 
 /// Native-free backend used by tests to verify `Search` dispatch without a

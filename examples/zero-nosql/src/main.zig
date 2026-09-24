@@ -75,7 +75,10 @@ fn cqlLiteral(alloc: std.mem.Allocator, s: []const u8) ![]u8 {
 
 pub fn listUsers(ctx: *Context) !void {
     if (ctx.NoSQL) |n| {
-        const raw = try n.query(ctx, "SELECT data FROM users LIMIT 50");
+        const raw = n.query(ctx, "SELECT data FROM users LIMIT 50") catch |e| {
+            if (nosqlUpstreamError(ctx, e)) return;
+            return e;
+        };
         defer ctx.allocator.free(raw);
         ctx.response.content_type = .JSON;
         try ctx.response.writer().writeAll(raw);
@@ -92,7 +95,10 @@ pub fn getUser(ctx: *Context) !void {
         };
         const cql = try std.fmt.allocPrint(ctx.allocator, "SELECT data FROM users WHERE id = '{s}'", .{key});
         defer ctx.allocator.free(cql);
-        const doc = try n.get(ctx, cql);
+        const doc = n.get(ctx, cql) catch |e| {
+            if (nosqlUpstreamError(ctx, e)) return;
+            return e;
+        };
         if (doc) |d| {
             defer ctx.allocator.free(d);
             try ctx.response.json(.{ .key = key, .doc = d }, .{});
@@ -120,7 +126,10 @@ pub fn putUser(ctx: *Context) !void {
             .{ key, esc },
         );
         defer ctx.allocator.free(cql);
-        try n.put(ctx, cql);
+        n.put(ctx, cql) catch |e| {
+            if (nosqlUpstreamError(ctx, e)) return;
+            return e;
+        };
         try ctx.response.json(.{ .status = "stored", .key = key }, .{});
     } else {
         notConfigured(ctx);
@@ -135,7 +144,10 @@ pub fn deleteUser(ctx: *Context) !void {
         };
         const cql = try std.fmt.allocPrint(ctx.allocator, "DELETE FROM users WHERE id = '{s}'", .{key});
         defer ctx.allocator.free(cql);
-        try n.delete(ctx, cql);
+        n.delete(ctx, cql) catch |e| {
+            if (nosqlUpstreamError(ctx, e)) return;
+            return e;
+        };
         try ctx.response.json(.{ .status = "deleted", .key = key }, .{});
     } else {
         notConfigured(ctx);
@@ -145,7 +157,10 @@ pub fn deleteUser(ctx: *Context) !void {
 pub fn runQuery(ctx: *Context) !void {
     if (ctx.NoSQL) |n| {
         const cql = ctx.request.body() orelse "";
-        const raw = try n.query(ctx, cql);
+        const raw = n.query(ctx, cql) catch |e| {
+            if (nosqlUpstreamError(ctx, e)) return;
+            return e;
+        };
         defer ctx.allocator.free(raw);
         ctx.response.content_type = .JSON;
         try ctx.response.writer().writeAll(raw);
@@ -162,4 +177,19 @@ fn badRequest(ctx: *Context, msg: []const u8) void {
 fn notConfigured(ctx: *Context) void {
     ctx.response.setStatus(.not_implemented);
     ctx.response.json(.{ .message = "CASSANDRA_CONTACT_POINTS / CASSANDRA_KEYSPACE not configured" }, .{}) catch {};
+}
+
+/// Map a Couchbase upstream failure to an explicit error response. The datasource
+/// no longer logs; status + message live on `ctx.NoSQL.lastError()` and are
+/// surfaced here. Returns `true` when handled (response already written).
+fn nosqlUpstreamError(ctx: *Context, err: anyerror) bool {
+    if (err != error.CouchbaseQueryFailed) return false;
+    const detail = ctx.NoSQL.?.lastError() orelse return false;
+    ctx.response.setStatus(switch (detail.status) {
+        401, 403 => .unauthorized,
+        404 => .not_found,
+        else => .bad_gateway,
+    });
+    ctx.response.json(.{ .err = "nosql_upstream_failed", .status = detail.status, .message = detail.message }, .{}) catch {};
+    return true;
 }

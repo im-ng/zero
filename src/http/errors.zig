@@ -19,6 +19,18 @@ pub const ErrData = struct {
     data: Err,
 };
 
+/// Failure detail for an upstream datasource call (HTTP/SQL backends). Mirrors how
+/// `pg.zig` carries `proto.Error` on the connection: the backend stores the last
+/// failure on its own instance and the caller reads it right after catching the
+/// bare error. `message` is owned by the backend (freed on the next call or at
+/// `deinit`); the caller must read it, not free it. `code` is a SQLSTATE-style
+/// code (empty for HTTP; reserved for future Postgres parity).
+pub const DataSourceError = struct {
+    status: u16 = 0,
+    code: []const u8 = "",
+    message: []const u8 = "",
+};
+
 pub const ClientError = error{
     ServiceNotReachable,
     CircuitOpen,

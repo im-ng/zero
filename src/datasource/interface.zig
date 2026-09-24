@@ -469,6 +469,19 @@ pub const Interface = struct {
     pub fn select(self: *Interface, ctx: *root.Context, comptime Type: type, comptime stmt: []const u8, args: anytype) !?Type {
         return self.queryRow(ctx, Type, stmt, args);
     }
+
+    /// Return the last upstream failure recorded by the backend, if any. Call
+    /// right after catching a `ClickHouseQueryFailed` error to read status/message
+    /// (ClickHouse is the zul-http relational backend). All other backends
+    /// (Postgres, SQLite, DuckDB, mock) return `null` — their error handling is
+    /// untouched. The backend owns the `message` buffer (freed on the next call /
+    /// `deinit`); the caller must read it, not free it.
+    pub fn lastError(self: Interface) ?root.Error.DataSourceError {
+        return switch (self.dialect) {
+            .clickhouse => @as(*root.ClickHouse, @ptrCast(@alignCast(self.ptr))).last_error,
+            else => null,
+        };
+    }
 };
 
 // test "datasource interface dispatches through the type-erased handle" {

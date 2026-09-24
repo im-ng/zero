@@ -182,6 +182,18 @@ pub const NoSQL = struct {
         }
         return r;
     }
+
+    /// Return the last upstream failure recorded by the backend, if any. Call
+    /// right after catching a `CouchbaseQueryFailed` error to read status/message
+    /// (Couchbase is the zul-http NoSQL backend). The backend owns the `message`
+    /// buffer (freed on the next call / `deinit`); the caller must read it, not
+    /// free it. Other backends return `null`.
+    pub fn lastError(self: *NoSQL) ?root.Error.DataSourceError {
+        return switch (self.backend) {
+            .couchbase => @as(*root.Couchbase, @ptrCast(@alignCast(self.ptr))).last_error,
+            else => null,
+        };
+    }
 };
 
 /// Native-free backend used by tests to verify `NoSQL` dispatch.

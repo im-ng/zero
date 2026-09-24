@@ -14,6 +14,9 @@ pub const ClickHouse = struct {
     database: []const u8,
     user: ?[]const u8,
     password: ?[]const u8,
+    // Last upstream failure, read by the caller right after catching the bare
+    // error (mirrors pg.zig's `conn.err`). `message` is owned by `allocator`.
+    last_error: ?root.Error.DataSourceError = null,
 
     pub fn create(allocator: std.mem.Allocator, opts: struct {
         url: []const u8,
@@ -36,6 +39,10 @@ pub const ClickHouse = struct {
     /// Run `sql` over HTTP and return the raw response body, owned by `alloc`.
     /// Caller frees.
     pub fn runRaw(self: *ClickHouse, alloc: std.mem.Allocator, sql: []const u8) ![]u8 {
+        if (self.last_error) |e| {
+            self.allocator.free(e.message);
+            self.last_error = null;
+        }
         const req_url = try std.fmt.allocPrint(alloc, "{s}", .{self.url});
         var req = try self.client.allocRequest(alloc, req_url);
         defer {
@@ -58,7 +65,7 @@ pub const ClickHouse = struct {
         if (res.status < 200 or res.status > 299) {
             const sb = try res.allocBody(alloc, .{});
             defer sb.deinit();
-            std.log.warn("clickhouse query failed: status={d} body={s}", .{ res.status, sb.buf[0..sb.pos] });
+            self.last_error = .{ .status = res.status, .message = try self.allocator.dupe(u8, sb.buf[0..sb.pos]) };
             return error.ClickHouseQueryFailed;
         }
         const sb = try res.allocBody(alloc, .{});
@@ -222,6 +229,9 @@ pub const ClickHouse = struct {
     /// Free the handle and its allocated strings. Call once the backend is no
     /// longer referenced (the persistent `zul` client is closed too).
     pub fn deinit(self: *ClickHouse, allocator: std.mem.Allocator) void {
+        if (self.last_error) |e| {
+            allocator.free(e.message);
+        }
         self.client.deinit();
         allocator.free(self.url);
         allocator.free(self.database);

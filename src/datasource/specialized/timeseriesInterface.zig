@@ -109,6 +109,17 @@ pub const Timeseries = struct {
         return r;
     }
 
+    /// Return the last upstream failure recorded by the backend, if any. Call
+    /// right after catching an `InfluxDB*Failed` error to read status/message.
+    /// The backend owns the `message` buffer (freed on the next call /
+    /// `deinit`); the caller must read it, not free it.
+    pub fn lastError(self: *Timeseries) ?root.Error.DataSourceError {
+        return switch (self.backend) {
+            .influxdb => @as(*root.InfluxDB, @ptrCast(@alignCast(self.ptr))).last_error,
+            .mock => null,
+        };
+    }
+
     /// Free the backend impl (and its client/pooled connections) and the
     /// type-erased handle. Must be called during teardown after any request
     /// threads have stopped touching `ctx.Timeseries`.

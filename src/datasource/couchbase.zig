@@ -14,6 +14,9 @@ pub const Couchbase = struct {
     bucket: []const u8,
     user: ?[]const u8,
     password: ?[]const u8,
+    // Last upstream failure, read by the caller right after catching the bare
+    // error (mirrors pg.zig's `conn.err`). `message` is owned by `allocator`.
+    last_error: ?root.Error.DataSourceError = null,
 
     pub fn create(allocator: std.mem.Allocator, opts: struct {
         contact_points: []const u8,
@@ -40,6 +43,10 @@ pub const Couchbase = struct {
     /// (owned by `ctx.allocator`). Surfaces query-service errors as
     /// `error.CouchbaseQueryFailed`.
     fn runN1ql(self: *Couchbase, ctx: *root.Context, statement: []const u8) !std.json.Value {
+        if (self.last_error) |e| {
+            self.allocator.free(e.message);
+            self.last_error = null;
+        }
         const url = try std.fmt.allocPrint(ctx.allocator, "http://{s}/query", .{self.contact_point});
         var req = try self.client.allocRequest(ctx.allocator, url);
         defer {
@@ -69,7 +76,7 @@ pub const Couchbase = struct {
         if (res.status < 200 or res.status > 299) {
             const sb = try res.allocBody(ctx.allocator, .{});
             defer sb.deinit();
-            std.log.warn("couchbase query failed: status={d} body={s}", .{ res.status, sb.buf[0..sb.pos] });
+            self.last_error = .{ .status = res.status, .message = try self.allocator.dupe(u8, sb.buf[0..sb.pos]) };
             return error.CouchbaseQueryFailed;
         }
         const sb = try res.allocBody(ctx.allocator, .{});
@@ -78,7 +85,7 @@ pub const Couchbase = struct {
         if (parsed == .object) {
             if (parsed.object.get("errors")) |errs| {
                 if (errs == .array and errs.array.items.len > 0) {
-                    std.log.warn("couchbase query service error: {s}", .{sb.buf[0..sb.pos]});
+                    self.last_error = .{ .status = res.status, .message = try self.allocator.dupe(u8, sb.buf[0..sb.pos]) };
                     return error.CouchbaseQueryFailed;
                 }
             }
@@ -134,6 +141,9 @@ pub const Couchbase = struct {
 
     /// Free the handle and its allocated strings.
     pub fn deinit(self: *Couchbase, allocator: std.mem.Allocator) void {
+        if (self.last_error) |e| {
+            allocator.free(e.message);
+        }
         self.client.deinit();
         allocator.free(self.contact_point);
         allocator.free(self.bucket);

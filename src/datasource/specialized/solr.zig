@@ -12,6 +12,9 @@ pub const Solr = struct {
     base_url: []const u8,
     default_collection: []const u8,
     basic_auth: ?[]const u8,
+    // Last upstream failure, read by the caller right after catching the bare
+    // error (mirrors pg.zig's `conn.err`). `message` is owned by `allocator`.
+    last_error: ?root.Error.DataSourceError = null,
 
     pub fn create(allocator: std.mem.Allocator, opts: struct {
         url: []const u8,
@@ -32,6 +35,10 @@ pub const Solr = struct {
     }
 
     pub fn index(self: *Solr, ctx: *root.Context, collection: []const u8, doc_json: []const u8) !void {
+        if (self.last_error) |e| {
+            self.allocator.free(e.message);
+            self.last_error = null;
+        }
         const coll_name = if (collection.len == 0) self.default_collection else collection;
 
         const url = try std.fmt.allocPrint(ctx.allocator, "{s}/solr/{s}/update?commit=true", .{ self.base_url, coll_name });
@@ -54,12 +61,16 @@ pub const Solr = struct {
         if (res.status < 200 or res.status > 299) {
             const sb = try res.allocBody(ctx.allocator, .{});
             defer sb.deinit();
-            std.log.warn("solr index failed: status={d} body={s}", .{ res.status, sb.buf[0..sb.pos] });
+            self.last_error = .{ .status = res.status, .message = try self.allocator.dupe(u8, sb.buf[0..sb.pos]) };
             return error.SolrIndexFailed;
         }
     }
 
     pub fn query(self: *Solr, ctx: *root.Context, collection: []const u8, q: []const u8) ![]const u8 {
+        if (self.last_error) |e| {
+            self.allocator.free(e.message);
+            self.last_error = null;
+        }
         const coll_name = if (collection.len == 0) self.default_collection else collection;
 
         const url = try std.fmt.allocPrint(ctx.allocator, "{s}/solr/{s}/select", .{ self.base_url, coll_name });
@@ -80,7 +91,7 @@ pub const Solr = struct {
         if (res.status < 200 or res.status > 299) {
             const sb = try res.allocBody(ctx.allocator, .{});
             defer sb.deinit();
-            std.log.warn("solr query failed: status={d} body={s}", .{ res.status, sb.buf[0..sb.pos] });
+            self.last_error = .{ .status = res.status, .message = try self.allocator.dupe(u8, sb.buf[0..sb.pos]) };
             return error.SolrQueryFailed;
         }
 
@@ -104,6 +115,10 @@ pub const Solr = struct {
     }
 
     pub fn delete(self: *Solr, ctx: *root.Context, collection: []const u8, id: []const u8) !void {
+        if (self.last_error) |e| {
+            self.allocator.free(e.message);
+            self.last_error = null;
+        }
         const coll_name = if (collection.len == 0) self.default_collection else collection;
 
         const url = try std.fmt.allocPrint(ctx.allocator, "{s}/solr/{s}/update?commit=true", .{ self.base_url, coll_name });
@@ -124,12 +139,15 @@ pub const Solr = struct {
         if (res.status < 200 or res.status > 299) {
             const sb = try res.allocBody(ctx.allocator, .{});
             defer sb.deinit();
-            std.log.warn("solr delete failed: status={d} body={s}", .{ res.status, sb.buf[0..sb.pos] });
+            self.last_error = .{ .status = res.status, .message = try self.allocator.dupe(u8, sb.buf[0..sb.pos]) };
             return error.SolrDeleteFailed;
         }
     }
 
     pub fn deinit(self: *Solr, allocator: std.mem.Allocator) void {
+        if (self.last_error) |e| {
+            allocator.free(e.message);
+        }
         self.client.deinit();
         allocator.free(self.base_url);
         allocator.free(self.default_collection);

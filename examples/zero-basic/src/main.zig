@@ -279,8 +279,14 @@ pub fn nosqlGet(ctx: *Context) !void {
 pub fn clickhouseWrite(ctx: *Context) !void {
     if (ctx.container.ClickHouse) |_| {
         const name: []const u8 = "alice";
-        _ = try ctx.SQL.exec(ctx, "CREATE TABLE IF NOT EXISTS events (id Int64, name String)", .{});
-        _ = try ctx.SQL.exec(ctx, "INSERT INTO events (id, name) VALUES (?, ?)", .{ @as(i64, 1), name });
+        _ = ctx.SQL.exec(ctx, "CREATE TABLE IF NOT EXISTS events (id Int64, name String)", .{}) catch |e| {
+            if (e == error.ClickHouseQueryFailed and respondUpstreamError(ctx, ctx.SQL.lastError())) return;
+            return e;
+        };
+        _ = ctx.SQL.exec(ctx, "INSERT INTO events (id, name) VALUES (?, ?)", .{ @as(i64, 1), name }) catch |e| {
+            if (e == error.ClickHouseQueryFailed and respondUpstreamError(ctx, ctx.SQL.lastError())) return;
+            return e;
+        };
         try ctx.response.json(.{ .status = "stored" }, .{});
     } else {
         ctx.response.setStatus(.not_implemented);
@@ -291,7 +297,10 @@ pub fn clickhouseWrite(ctx: *Context) !void {
 pub fn clickhouseQuery(ctx: *Context) !void {
     if (ctx.container.ClickHouse) |_| {
         const Event = struct { id: i64, name: []const u8 };
-        const row = try ctx.SQL.queryRow(ctx, Event, "SELECT id, name FROM events LIMIT 1", .{});
+        const row = ctx.SQL.queryRow(ctx, Event, "SELECT id, name FROM events LIMIT 1", .{}) catch |e| {
+            if (e == error.ClickHouseQueryFailed and respondUpstreamError(ctx, ctx.SQL.lastError())) return;
+            return e;
+        };
         if (row) |r| {
             try ctx.response.json(.{ .event = r }, .{});
         } else {
@@ -305,7 +314,10 @@ pub fn clickhouseQuery(ctx: *Context) !void {
 
 pub fn couchbasePut(ctx: *Context) !void {
     if (ctx.NoSQL) |n| {
-        try n.put(ctx, "INSERT INTO users (id, data) VALUES ('alice', '{\"age\":30}')");
+        n.put(ctx, "INSERT INTO users (id, data) VALUES ('alice', '{\"age\":30}')") catch |e| {
+            if (e == error.CouchbaseQueryFailed and respondUpstreamError(ctx, ctx.NoSQL.?.lastError())) return;
+            return e;
+        };
         try ctx.response.json(.{ .status = "stored" }, .{});
     } else {
         ctx.response.setStatus(.not_implemented);
@@ -315,7 +327,10 @@ pub fn couchbasePut(ctx: *Context) !void {
 
 pub fn couchbaseGet(ctx: *Context) !void {
     if (ctx.NoSQL) |n| {
-        const doc = try n.get(ctx, "SELECT data FROM users WHERE id = 'alice'");
+        const doc = n.get(ctx, "SELECT data FROM users WHERE id = 'alice'") catch |e| {
+            if (e == error.CouchbaseQueryFailed and respondUpstreamError(ctx, ctx.NoSQL.?.lastError())) return;
+            return e;
+        };
         if (doc) |d| {
             defer ctx.allocator.free(d);
             try ctx.response.json(.{ .doc = d }, .{});
@@ -326,4 +341,18 @@ pub fn couchbaseGet(ctx: *Context) !void {
         ctx.response.setStatus(.not_implemented);
         try ctx.response.json(.{ .message = "COUCHBASE_CONTACT_POINTS not configured" }, .{});
     }
+}
+
+/// Surface an upstream datasource failure as an explicit error response. The
+/// datasource no longer logs; status + message come from `detail` (read via the
+/// backend/interface `lastError()` accessor). Returns `true` when handled.
+fn respondUpstreamError(ctx: *Context, detail: ?zero.Error.DataSourceError) bool {
+    const d = detail orelse return false;
+    ctx.response.setStatus(switch (d.status) {
+        401, 403 => .unauthorized,
+        404 => .not_found,
+        else => .bad_gateway,
+    });
+    ctx.response.json(.{ .err = "upstream_failed", .status = d.status, .message = d.message }, .{}) catch {};
+    return true;
 }
