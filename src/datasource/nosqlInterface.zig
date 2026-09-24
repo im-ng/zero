@@ -1,6 +1,7 @@
 const std = @import("std");
 const root = @import("../zero.zig");
 const service = root.circuit_breaker;
+const utils = root.utils;
 
 /// NoSQL backends (document / wide-column). Resolved at runtime from config so the
 /// same type-erased `NoSQL` handle works for any configured backend. Add new
@@ -34,13 +35,37 @@ pub const NoSQL = struct {
     ptr: *anyopaque,
     backend: Backend,
     breaker: ?service.CircuitBreaker = null,
+    metricz: ?*root.metricz = null,
 
-    pub fn init(ptr: anytype, backend: Backend, breaker: ?service.CircuitBreaker) NoSQL {
+    pub fn init(ptr: anytype, backend: Backend, breaker: ?service.CircuitBreaker, metricz: ?*root.metricz) NoSQL {
         return .{
             .ptr = @ptrCast(@alignCast(ptr)),
             .backend = backend,
             .breaker = breaker,
+            .metricz = metricz,
         };
+    }
+
+    fn backendName(b: Backend) []const u8 {
+        return switch (b) {
+            .cassandra => "cassandra",
+            .couchbase => "couchbase",
+            .mock => "mock",
+        };
+    }
+
+    fn dsError(self: *NoSQL, op: []const u8) void {
+        var status: u16 = 0;
+        if (self.lastError()) |d| status = d.status;
+        if (self.metricz) |mz| {
+            mz.datasourceError(.{ .backend = backendName(self.backend), .name = "", .operation = op, .status = status }) catch {};
+        }
+    }
+
+    fn dsOk(self: *NoSQL, op: []const u8, start: std.Io.Timestamp) void {
+        if (self.metricz) |mz| {
+            mz.datasourceResponse(.{ .backend = backendName(self.backend), .name = "", .operation = op, .status = 200 }, utils.elapsedMs(start)) catch {};
+        }
     }
 
     pub fn build(container: *root.container, backend: Backend, opts: Options) !*NoSQL {
@@ -70,7 +95,7 @@ pub const NoSQL = struct {
             },
         };
         const handle = try container.allocator.create(NoSQL);
-        handle.* = NoSQL.init(impl, backend, null);
+        handle.* = NoSQL.init(impl, backend, null, container.metricz);
         return handle;
     }
 
@@ -103,6 +128,7 @@ pub const NoSQL = struct {
         if (self.breaker) |*b| {
             b.before() catch return error.CircuitOpen;
         }
+        const start = utils.nowMonotonic();
         const r = switch (self.backend) {
             .cassandra => @as(*root.NoSQLBackend, @ptrCast(@alignCast(self.ptr))).get(ctx, statement),
             .couchbase => @as(*root.Couchbase, @ptrCast(@alignCast(self.ptr))).get(ctx, statement),
@@ -111,11 +137,13 @@ pub const NoSQL = struct {
             if (self.breaker) |*b| {
                 b.recordFailure();
             }
+            self.dsError("get");
             return e;
         };
         if (self.breaker) |*b| {
             b.recordSuccess();
         }
+        self.dsOk("get", start);
         return r;
     }
 
@@ -124,6 +152,7 @@ pub const NoSQL = struct {
         if (self.breaker) |*b| {
             b.before() catch return error.CircuitOpen;
         }
+        const start = utils.nowMonotonic();
         const r = switch (self.backend) {
             .cassandra => @as(*root.NoSQLBackend, @ptrCast(@alignCast(self.ptr))).put(ctx, statement),
             .couchbase => @as(*root.Couchbase, @ptrCast(@alignCast(self.ptr))).put(ctx, statement),
@@ -132,11 +161,13 @@ pub const NoSQL = struct {
             if (self.breaker) |*b| {
                 b.recordFailure();
             }
+            self.dsError("put");
             return e;
         };
         if (self.breaker) |*b| {
             b.recordSuccess();
         }
+        self.dsOk("put", start);
         return r;
     }
 
@@ -145,6 +176,7 @@ pub const NoSQL = struct {
         if (self.breaker) |*b| {
             b.before() catch return error.CircuitOpen;
         }
+        const start = utils.nowMonotonic();
         const r = switch (self.backend) {
             .cassandra => @as(*root.NoSQLBackend, @ptrCast(@alignCast(self.ptr))).delete(ctx, statement),
             .couchbase => @as(*root.Couchbase, @ptrCast(@alignCast(self.ptr))).delete(ctx, statement),
@@ -153,11 +185,13 @@ pub const NoSQL = struct {
             if (self.breaker) |*b| {
                 b.recordFailure();
             }
+            self.dsError("delete");
             return e;
         };
         if (self.breaker) |*b| {
             b.recordSuccess();
         }
+        self.dsOk("delete", start);
         return r;
     }
 
@@ -167,6 +201,7 @@ pub const NoSQL = struct {
         if (self.breaker) |*b| {
             b.before() catch return error.CircuitOpen;
         }
+        const start = utils.nowMonotonic();
         const r = switch (self.backend) {
             .cassandra => @as(*root.NoSQLBackend, @ptrCast(@alignCast(self.ptr))).query(ctx, statement),
             .couchbase => @as(*root.Couchbase, @ptrCast(@alignCast(self.ptr))).query(ctx, statement),
@@ -175,11 +210,13 @@ pub const NoSQL = struct {
             if (self.breaker) |*b| {
                 b.recordFailure();
             }
+            self.dsError("query");
             return e;
         };
         if (self.breaker) |*b| {
             b.recordSuccess();
         }
+        self.dsOk("query", start);
         return r;
     }
 
@@ -228,7 +265,7 @@ pub const MockBackend = struct {
 
 // test "NoSQL dispatches through the type-erased handle" {
 //     var mock: MockBackend = .{ .last_value = "" };
-//     var n = NoSQL.init(&mock, .mock, null);
+//     var n = NoSQL.init(&mock, .mock, null, null);
 //     var ctx_storage: root.Context = undefined;
 //     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
 //     defer arena.deinit();

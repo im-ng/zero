@@ -44,7 +44,7 @@ test "datasource sqlite backend integration" {
 
     // Unified handle; the caller never names the concrete backend.
     // `var` (not `const`): `exec` takes a mutable `*Interface` receiver.
-    var ds = root.Datasource.init(sqlite, .sqlite, null);
+    var ds = root.Datasource.init(sqlite, .sqlite, null, null);
 
     var ctx_storage: root.Context = undefined;
     ctx_storage.allocator = allocator;
@@ -137,7 +137,7 @@ test "datasource postgres backend integration" {
     sql.metricz = m;
     sql.allocator = allocator;
 
-    var ds = root.Datasource.init(sql, .postgres, null);
+    var ds = root.Datasource.init(sql, .postgres, null, null);
 
     var ctx_storage: root.Context = undefined;
     ctx_storage.allocator = allocator;

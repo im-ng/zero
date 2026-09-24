@@ -12,6 +12,7 @@ const zdt = root.zdt;
 const utils = root.utils;
 
 const sqlMigrator = @import("./SQL.zig");
+const nosqlMigrator = @import("./NoSQL.zig");
 
 request: *httpz.Request = undefined,
 response: *httpz.Response = undefined,
@@ -63,23 +64,34 @@ pub fn run(self: *Self) anyerror!void {
         }
     }
 
-    // check and create migration table
-    try sqlMigrator.checkAndCreateMigrationTable(ctx);
+    const relational_configured = self.container.SQL != null or self.container.SQLite != null or self.container.DuckDB != null or self.container.ClickHouse != null;
+    const nosql_configured = self.container.NoSQL != null;
 
-    const lastMigration = try sqlMigrator.lastMigration(ctx);
+    var rel_last: i64 = 0;
+    var nosql_last: i64 = 0;
 
-    // Serialize migration runs across replicas: a session-level advisory lock so
-    // two app instances starting up at once can't apply the same migration
-    // concurrently (Postgres only — SQLite has no advisory locks).
-    if (self.container.datasource.dialect == .postgres) {
-        _ = ctx.SQL.exec(ctx, "SELECT pg_advisory_lock(9112025)", .{}) catch |err| {
-            ctx.any(err);
-            return error.MigrationLockFailed;
-        };
+    if (relational_configured) {
+        try sqlMigrator.checkAndCreateMigrationTable(ctx);
+        rel_last = try sqlMigrator.lastMigration(ctx);
 
-        defer {
-            _ = ctx.SQL.exec(ctx, "SELECT pg_advisory_unlock(9112025)", .{}) catch {};
+        // Serialize migration runs across replicas: a session-level advisory lock so
+        // two app instances starting up at once can't apply the same migration
+        // concurrently (Postgres only — SQLite/DuckDB/ClickHouse have no advisory locks).
+        if (self.container.datasource.dialect == .postgres) {
+            _ = ctx.SQL.exec(ctx, "SELECT pg_advisory_lock(9112025)", .{}) catch |err| {
+                ctx.any(err);
+                return error.MigrationLockFailed;
+            };
+
+            defer {
+                _ = ctx.SQL.exec(ctx, "SELECT pg_advisory_unlock(9112025)", .{}) catch {};
+            }
         }
+    }
+
+    if (nosql_configured) {
+        try nosqlMigrator.checkAndCreateMigrationTable(ctx);
+        nosql_last = try nosqlMigrator.lastMigration(ctx);
     }
 
     for (self.keys.items) |key| {
@@ -93,44 +105,74 @@ pub fn run(self: *Self) anyerror!void {
         const value = self.map.get(keyAsString);
 
         if (value) |m| {
-            if (m.migrationNumber <= lastMigration) {
+            const last = if (m.target == .relational) rel_last else nosql_last;
+            if (m.migrationNumber <= last) {
                 self.migrationSkipped(ctx, m);
                 continue;
             }
 
             const start = util.nowReal();
 
-            ctx.SQL.begin() catch |err| {
-                ctx.any(err);
-                continue;
-            };
+            if (m.target == .relational) {
+                if (!relational_configured) {
+                    ctx.err("relational migration skipped: no relational datasource configured");
+                    continue;
+                }
 
-            m.run(ctx) catch |err| {
-                self.executionError(ctx, m);
-                ctx.any(err);
-                // Do NOT record a failed migration as applied. Roll back whatever the
-                // migration did so a partial apply isn't left behind, and leave it
-                // *unrecorded* so it is retried on the next run instead of being
-                // masked as UP and permanently skipped.
-                ctx.SQL.rollback();
-                continue;
-            };
+                ctx.SQL.begin() catch |err| {
+                    ctx.any(err);
+                    continue;
+                };
 
-            const duration: u64 = @as(u64, @intCast(@divFloor(start.nanoseconds, 1_000_000)));
+                m.run(ctx) catch |err| {
+                    self.executionError(ctx, m);
+                    ctx.any(err);
+                    // Do NOT record a failed migration as applied. Roll back whatever the
+                    // migration did so a partial apply isn't left behind, and leave it
+                    // *unrecorded* so it is retried on the next run instead of being
+                    // masked as UP and permanently skipped.
+                    ctx.SQL.rollback();
+                    continue;
+                };
 
-            _ = sqlMigrator.insertMigration(ctx, m, duration) catch |err| {
-                ctx.any(err);
-                ctx.SQL.rollback();
-                continue;
-            };
+                const duration: u64 = @as(u64, @intCast(@divFloor(start.nanoseconds, 1_000_000)));
 
-            ctx.SQL.commit() catch |err| {
-                ctx.any(err);
-                ctx.SQL.rollback();
-                continue;
-            };
+                _ = sqlMigrator.insertMigration(ctx, m, duration) catch |err| {
+                    ctx.any(err);
+                    ctx.SQL.rollback();
+                    continue;
+                };
 
-            self.migrationCompleted(ctx, m);
+                ctx.SQL.commit() catch |err| {
+                    ctx.any(err);
+                    ctx.SQL.rollback();
+                    continue;
+                };
+
+                self.migrationCompleted(ctx, m);
+            } else {
+                if (!nosql_configured) {
+                    ctx.err("nosql migration skipped: no NoSQL datasource configured");
+                    continue;
+                }
+
+                m.run(ctx) catch |err| {
+                    self.executionError(ctx, m);
+                    ctx.any(err);
+                    // NoSQL/CQL has no transactions, so a failed migration is simply
+                    // left unrecorded (retried next run) rather than rolled back.
+                    continue;
+                };
+
+                const duration: u64 = @as(u64, @intCast(@divFloor(start.nanoseconds, 1_000_000)));
+
+                nosqlMigrator.insertMigration(ctx, m, duration) catch |err| {
+                    ctx.any(err);
+                    continue;
+                };
+
+                self.migrationCompleted(ctx, m);
+            }
         }
     }
 }

@@ -67,7 +67,7 @@ pub const Context = struct {
             // /lastId/rows so concurrent requests can't share a transaction or
             // clobber each other's last-insert-id.
             const session = try root.SQL.createSession(allocator, container.SQL.?);
-            c.SQL = root.Datasource.init(session, .postgres, container.datasource.breaker);
+            c.SQL = root.Datasource.init(session, .postgres, container.datasource.breaker, container.metricz);
         } else if (container.SQLite != null or container.DuckDB != null or container.ClickHouse != null) {
             // SQLite/DuckDB backends reuse a single shared connection; the
             // per-request session does not apply (see ZIG_LEARNINGS.md — their

@@ -472,6 +472,7 @@ fn wireDatasource(self: *Self, ptr: anytype, dialect: anytype) void {
             root.circuit_breaker.CircuitBreaker.init(.{})
         else
             null,
+        self.metricz,
     );
 }
 

@@ -21,6 +21,19 @@ pub const AppHttpResponseHitLabel = struct { method: []const u8, path: []const u
 
 pub const AppSQLStatsLabel = struct { hostname: []const u8, database: []const u8, query: []const u8, operation: []const u8 };
 
+/// Unified label for every datasource backend (SQL-family, Cassandra, ClickHouse,
+/// Solr, InfluxDB, Couchbase). `backend` is the dialect/backend name; `name` is
+/// reserved for named-datasource support (empty today); `operation` is the
+/// interface method (queryRow/write/index/...); `status` is the HTTP status for
+/// HTTP-based backends, 0 for SQL/NoSQL where no status exists.
+pub const DatasourceLabel = struct { backend: []const u8, name: []const u8, operation: []const u8, status: u16 };
+
+const datasourceBuckets = &.{
+    0.001, 0.003, 0.005, 0.01, 0.02, 0.03, 0.05, 0.1,
+    0.2,   0.3,   0.5,   0.75, 1,    2,    3,    5,
+    10,    30,
+};
+
 // external service response metric labels
 pub const ServiceResponseLabel = struct { method: []const u8, path: []const u8, status: u16 };
 
@@ -172,6 +185,11 @@ SQLBucket: metrics.HistogramVec(
     },
 ).Impl,
 
+/// Unified datasource latency (seconds) across all backends.
+DatasourceResponse: metrics.HistogramVec(f64, DatasourceLabel, datasourceBuckets).Impl,
+/// Unified datasource error counter across all backends.
+DatasourceErrorTotal: metrics.CounterVec(u64, DatasourceLabel).Impl,
+
 PubSubPublisherTotal: metrics.CounterVec(
     u64,
     PubSubPublisherTotalLabel,
@@ -233,6 +251,14 @@ pub fn clientResponse(self: *Self, labels: ServiceResponseLabel, value: f32) !vo
 
 pub fn sqlResponse(self: *Self, labels: AppSQLStatsLabel, value: f32) !void {
     return self.SQLBucket.observe(labels, value);
+}
+
+pub fn datasourceResponse(self: *Self, labels: DatasourceLabel, value: f32) !void {
+    return self.DatasourceResponse.observe(labels, value);
+}
+
+pub fn datasourceError(self: *Self, labels: DatasourceLabel) !void {
+    return self.DatasourceErrorTotal.incr(labels);
 }
 
 pub fn publisherTotal(self: *Self, labels: PubSubPublisherTotalLabel) !void {
@@ -332,6 +358,10 @@ pub fn initialize(allocator: Allocator, comptime _: metrics.RegistryOpts) !*metr
 
     m.SQLBucket = try metrics.HistogramVec(f64, AppSQLStatsLabel, &.{ 0.001, 0.003, 0.005, 0.01, 0.02, 0.03, 0.05, 0.1, 0.2, 0.3, 0.5, 0.75, 1, 2, 3, 5, 10, 30 }).Impl
         .init(allocator, utils.io, "app_sql_response", .{ .help = "Response time of sql query execution in seconds." });
+    m.DatasourceResponse = try metrics.HistogramVec(f64, DatasourceLabel, datasourceBuckets).Impl
+        .init(allocator, utils.io, "app_datasource_response", .{ .help = "Datasource operation latency in seconds, by backend/operation/status." });
+    m.DatasourceErrorTotal = try metrics.CounterVec(u64, DatasourceLabel).Impl
+        .init(allocator, utils.io, "app_datasource_error_total", .{ .help = "Total datasource operation errors, by backend/operation/status." });
 
     m.PubSubPublisherTotal = try metrics.CounterVec(u64, PubSubPublisherTotalLabel).Impl
         .init(allocator, utils.io, "app_pubsub_publish_total_count", .{ .help = "Total pubsub publisher counter per topic" });
@@ -371,6 +401,8 @@ pub fn deinit(self: *Self, allocator: Allocator) void {
     self.ResponseBucketHits.deinit();
     self.ServiceResponseBucket.deinit();
     self.SQLBucket.deinit();
+    self.DatasourceResponse.deinit();
+    self.DatasourceErrorTotal.deinit();
     self.PubSubPublisherTotal.deinit();
     self.PubSubPublisherSuccess.deinit();
     self.PubSubSubscriberTotal.deinit();
@@ -412,6 +444,8 @@ pub fn writeRaw(self: *Self, allocator: Allocator, writer: *std.Io.Writer) !void
     try self.ServiceResponseBucket.write(writer);
 
     try self.SQLBucket.write(writer);
+    try self.DatasourceResponse.write(writer);
+    try self.DatasourceErrorTotal.write(writer);
     //rewrite pg metrics labelling to match with default
     try pgz.writeMetrics(writer);
 

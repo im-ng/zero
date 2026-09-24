@@ -1,6 +1,7 @@
 const std = @import("std");
 const root = @import("../../zero.zig");
 const service = root.circuit_breaker;
+const utils = root.utils;
 
 /// Time-series backends. Resolved at runtime from config so the same type-erased
 /// `Timeseries` handle works for any configured backend without the caller knowing
@@ -32,14 +33,37 @@ pub const Timeseries = struct {
     /// Optional circuit breaker guarding all backend calls. When `null`, calls
     /// pass straight through (no trip/fail-fast).
     breaker: ?service.CircuitBreaker = null,
+    metricz: ?*root.metricz = null,
 
     /// Build an interface handle from a concrete backend pointer.
-    pub fn init(ptr: anytype, backend: Backend, breaker: ?service.CircuitBreaker) Timeseries {
+    pub fn init(ptr: anytype, backend: Backend, breaker: ?service.CircuitBreaker, metricz: ?*root.metricz) Timeseries {
         return .{
             .ptr = @ptrCast(@alignCast(ptr)),
             .backend = backend,
             .breaker = breaker,
+            .metricz = metricz,
         };
+    }
+
+    fn backendName(b: Backend) []const u8 {
+        return switch (b) {
+            .influxdb => "influxdb",
+            .mock => "mock",
+        };
+    }
+
+    fn dsError(self: *Timeseries, op: []const u8) void {
+        var status: u16 = 0;
+        if (self.lastError()) |d| status = d.status;
+        if (self.metricz) |mz| {
+            mz.datasourceError(.{ .backend = backendName(self.backend), .name = "", .operation = op, .status = status }) catch {};
+        }
+    }
+
+    fn dsOk(self: *Timeseries, op: []const u8, start: std.Io.Timestamp) void {
+        if (self.metricz) |mz| {
+            mz.datasourceResponse(.{ .backend = backendName(self.backend), .name = "", .operation = op, .status = 200 }, utils.elapsedMs(start)) catch {};
+        }
     }
 
     /// Construct a fully wired handle from backend + options.
@@ -60,7 +84,7 @@ pub const Timeseries = struct {
             },
         };
         const handle = try container.allocator.create(Timeseries);
-        handle.* = Timeseries.init(impl, backend, null);
+        handle.* = Timeseries.init(impl, backend, null, container.metricz);
         return handle;
     }
 
@@ -68,14 +92,17 @@ pub const Timeseries = struct {
     /// line (`measurement,tag=val field=val [ts]`). Mirrors `query`.
     pub fn write(self: *Timeseries, ctx: *root.Context, statement: []const u8) !void {
         if (self.breaker) |*b| b.before() catch return error.CircuitOpen;
+        const start = utils.nowMonotonic();
         const r = switch (self.backend) {
             .influxdb => @as(*root.InfluxDB, @ptrCast(@alignCast(self.ptr))).write(ctx, statement),
             .mock => @as(*MockBackend, @ptrCast(@alignCast(self.ptr))).write(ctx, statement),
         } catch |e| {
             if (self.breaker) |*b| b.recordFailure();
+            self.dsError("write");
             return e;
         };
         if (self.breaker) |*b| b.recordSuccess();
+        self.dsOk("write", start);
         return r;
     }
 
@@ -83,14 +110,17 @@ pub const Timeseries = struct {
     /// body, owned by `ctx.allocator`. Caller frees.
     pub fn query(self: *Timeseries, ctx: *root.Context, q: []const u8) ![]const u8 {
         if (self.breaker) |*b| b.before() catch return error.CircuitOpen;
+        const start = utils.nowMonotonic();
         const r = switch (self.backend) {
             .influxdb => @as(*root.InfluxDB, @ptrCast(@alignCast(self.ptr))).query(ctx, q),
             .mock => @as(*MockBackend, @ptrCast(@alignCast(self.ptr))).query(ctx, q),
         } catch |e| {
             if (self.breaker) |*b| b.recordFailure();
+            self.dsError("query");
             return e;
         };
         if (self.breaker) |*b| b.recordSuccess();
+        self.dsOk("query", start);
         return r;
     }
 
@@ -98,14 +128,17 @@ pub const Timeseries = struct {
     /// backend; safe to call at startup before any writes.
     pub fn createDatabase(self: *Timeseries, ctx: *root.Context, name: []const u8) !void {
         if (self.breaker) |*b| b.before() catch return error.CircuitOpen;
+        const start = utils.nowMonotonic();
         const r = switch (self.backend) {
             .influxdb => @as(*root.InfluxDB, @ptrCast(@alignCast(self.ptr))).createDatabase(ctx, name),
             .mock => {},
         } catch |e| {
             if (self.breaker) |*b| b.recordFailure();
+            self.dsError("createDatabase");
             return e;
         };
         if (self.breaker) |*b| b.recordSuccess();
+        self.dsOk("createDatabase", start);
         return r;
     }
 
@@ -152,7 +185,7 @@ pub const MockBackend = struct {
 
 // test "Timeseries dispatches through the type-erased handle" {
 //     var mock: MockBackend = .{};
-//     var ts = Timeseries.init(&mock, .mock, null);
+//     var ts = Timeseries.init(&mock, .mock, null, null);
 //     var ctx_storage: root.Context = undefined;
 //     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
 //     defer arena.deinit();

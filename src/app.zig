@@ -1112,6 +1112,7 @@ pub fn addClickhouse(self: *Self, url: []const u8, database: []const u8, opts: s
             root.circuit_breaker.CircuitBreaker.init(.{})
         else
             null,
+        self.container.metricz,
     );
 }
 
@@ -1125,6 +1126,7 @@ pub fn addDuckDB(self: *Self, path: []const u8) !void {
             root.circuit_breaker.CircuitBreaker.init(.{})
         else
             null,
+        self.container.metricz,
     );
 
     const msg = try std.fmt.allocPrint(

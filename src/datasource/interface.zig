@@ -4,6 +4,7 @@ const root = @import("../zero.zig");
 const SQLite = root.SQLite;
 const SQL = root.SQL;
 const service = root.circuit_breaker;
+const utils = root.utils;
 
 /// Supported database dialects. Resolved at runtime from `DB_DIALECT` so the
 /// same `Interface` handle works for any configured backend without the caller
@@ -107,14 +108,40 @@ pub const Interface = struct {
     /// Optional circuit breaker guarding all backend calls. When `null`, calls
     /// pass straight through (no trip/fail-fast). Enable via `SQL_CIRCUIT_BREAKER_ENABLE`.
     breaker: ?service.CircuitBreaker = null,
+    /// Optional metrics registry. When `null`, no datasource metrics are emitted.
+    /// Wired from `container.metricz` via `wireDatasource` / `Context.init`.
+    metricz: ?*root.metricz = null,
 
     /// Build an interface handle from a concrete backend pointer.
-    pub fn init(ptr: anytype, dialect: Dialect, breaker: ?service.CircuitBreaker) Interface {
+    pub fn init(ptr: anytype, dialect: Dialect, breaker: ?service.CircuitBreaker, metricz: ?*root.metricz) Interface {
         return .{
             .ptr = @ptrCast(@alignCast(ptr)),
             .dialect = dialect,
             .breaker = breaker,
+            .metricz = metricz,
         };
+    }
+
+    fn backendName(d: Dialect) []const u8 {
+        return switch (d) {
+            .sqlite => "sqlite",
+            .postgres => "postgres",
+            .duckdb => "duckdb",
+            .clickhouse => "clickhouse",
+            .mock => "mock",
+        };
+    }
+
+    fn dsError(self: *Interface, op: []const u8) void {
+        if (self.metricz) |mz| {
+            mz.datasourceError(.{ .backend = backendName(self.dialect), .name = "", .operation = op, .status = 0 }) catch {};
+        }
+    }
+
+    fn dsOk(self: *Interface, op: []const u8, start: std.Io.Timestamp) void {
+        if (self.metricz) |mz| {
+            mz.datasourceResponse(.{ .backend = backendName(self.dialect), .name = "", .operation = op, .status = 200 }, utils.elapsedMs(start)) catch {};
+        }
     }
 
     /// Single typed row. `null` when the query matches no rows.
@@ -122,6 +149,7 @@ pub const Interface = struct {
         if (self.breaker) |*b| {
             b.before() catch return error.CircuitOpen;
         }
+        const start = utils.nowMonotonic();
         const r = switch (self.dialect) {
             .sqlite => @as(*SQLite, @ptrCast(@alignCast(self.ptr))).queryRow(
                 ctx,
@@ -157,11 +185,13 @@ pub const Interface = struct {
             if (self.breaker) |*b| {
                 b.recordFailure();
             }
+            self.dsError("queryRow");
             return e;
         };
         if (self.breaker) |*b| {
             b.recordSuccess();
         }
+        self.dsOk("queryRow", start);
         return r;
     }
 
@@ -170,6 +200,7 @@ pub const Interface = struct {
         if (self.breaker) |*b| {
             b.before() catch return error.CircuitOpen;
         }
+        const start = utils.nowMonotonic();
         const r = switch (self.dialect) {
             .sqlite => @as(*SQLite, @ptrCast(@alignCast(self.ptr))).queryRows(
                 ctx,
@@ -205,11 +236,13 @@ pub const Interface = struct {
             if (self.breaker) |*b| {
                 b.recordFailure();
             }
+            self.dsError("queryRows");
             return e;
         };
         if (self.breaker) |*b| {
             b.recordSuccess();
         }
+        self.dsOk("queryRows", start);
         return r;
     }
 
@@ -218,6 +251,7 @@ pub const Interface = struct {
         if (self.breaker) |*b| {
             b.before() catch return error.CircuitOpen;
         }
+        const start = utils.nowMonotonic();
         const r = switch (self.dialect) {
             .sqlite => @as(*SQLite, @ptrCast(@alignCast(self.ptr))).queryRowContext(
                 ctx,
@@ -253,11 +287,13 @@ pub const Interface = struct {
             if (self.breaker) |*b| {
                 b.recordFailure();
             }
+            self.dsError("queryRowContext");
             return e;
         };
         if (self.breaker) |*b| {
             b.recordSuccess();
         }
+        self.dsOk("queryRowContext", start);
         return r;
     }
 
@@ -266,6 +302,7 @@ pub const Interface = struct {
         if (self.breaker) |*b| {
             b.before() catch return error.CircuitOpen;
         }
+        const start = utils.nowMonotonic();
         const r = switch (self.dialect) {
             .sqlite => @as(*SQLite, @ptrCast(@alignCast(self.ptr))).queryRowsContext(
                 ctx,
@@ -301,11 +338,13 @@ pub const Interface = struct {
             if (self.breaker) |*b| {
                 b.recordFailure();
             }
+            self.dsError("queryRowsContext");
             return e;
         };
         if (self.breaker) |*b| {
             b.recordSuccess();
         }
+        self.dsOk("queryRowsContext", start);
         return r;
     }
 
@@ -314,6 +353,7 @@ pub const Interface = struct {
         if (self.breaker) |*b| {
             b.before() catch return error.CircuitOpen;
         }
+        const start = utils.nowMonotonic();
         const r = switch (self.dialect) {
             .sqlite => @as(*SQLite, @ptrCast(@alignCast(self.ptr))).selectSlice(
                 ctx,
@@ -354,11 +394,13 @@ pub const Interface = struct {
             if (self.breaker) |*b| {
                 b.recordFailure();
             }
+            self.dsError("selectSlice");
             return e;
         };
         if (self.breaker) |*b| {
             b.recordSuccess();
         }
+        self.dsOk("selectSlice", start);
         return r;
     }
 
@@ -367,6 +409,7 @@ pub const Interface = struct {
         if (self.breaker) |*b| {
             b.before() catch return error.CircuitOpen;
         }
+        const start = utils.nowMonotonic();
         const r = switch (self.dialect) {
             .sqlite => @as(*SQLite, @ptrCast(@alignCast(self.ptr))).execWithContext(
                 ctx,
@@ -397,11 +440,13 @@ pub const Interface = struct {
             if (self.breaker) |*b| {
                 b.recordFailure();
             }
+            self.dsError("exec");
             return e;
         };
         if (self.breaker) |*b| {
             b.recordSuccess();
         }
+        self.dsOk("exec", start);
         return r;
     }
 
