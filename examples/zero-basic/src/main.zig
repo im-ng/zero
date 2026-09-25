@@ -91,7 +91,7 @@ pub fn main(init: std.process.Init) !void {
 
 pub fn prepareDatasources(ctx: *Context) !void {
     _ = try ctx.SQL.exec(ctx, "CREATE TABLE IF NOT EXISTS users (id INTEGER, name VARCHAR)", .{});
-    _ = try ctx.SQL.exec(ctx, "INSERT INTO users SELECT 1, 'alice' WHERE NOT EXISTS (SELECT 1 FROM users)", .{});
+    _ = try ctx.SQL.exec(ctx, "INSERT INTO users SELECT 1, 'sashti' WHERE NOT EXISTS (SELECT 1 FROM users)", .{});
 }
 
 pub fn memoryUsage(ctx: *Context) !void {

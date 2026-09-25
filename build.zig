@@ -17,6 +17,11 @@ pub fn build(b: *std.Build) void {
     const opentelemetry = b.dependency("opentelemetry", .{});
     module.addImport("opentelemetry-sdk", opentelemetry.module("sdk"));
 
+    // Cross-platform system-info (zf) powers the zsutil cpu/host/memory wrappers
+    // so examples like zero-stream work on macOS without reading /proc.
+    const zf = b.dependency("zf", .{});
+    module.addImport("zf", zf.module("zf"));
+
     // // `protobuf` is re-exported by `zero` (the generated `*.pb.zig` structs do
     // // `@import("zero").protobuf`). It must be wired into the module so the
     // // `zero-proto` (and any protobuf) example compiles.
@@ -101,6 +106,7 @@ pub fn build(b: *std.Build) void {
     test_module.addImport("protobuf", protobuf.module("protobuf"));
     test_module.addImport("graphql", graphql.module("graphql"));
     test_module.addImport("opentelemetry-sdk", opentelemetry.module("sdk"));
+    test_module.addImport("zf", zf.module("zf"));
     test_module.addImport("zero", module);
 
     if (builtin.os.tag == .macos) {
@@ -140,6 +146,7 @@ pub fn build(b: *std.Build) void {
     integration_module.addImport("protobuf", protobuf.module("protobuf"));
     integration_module.addImport("graphql", graphql.module("graphql"));
     integration_module.addImport("opentelemetry-sdk", opentelemetry.module("sdk"));
+    integration_module.addImport("zf", zf.module("zf"));
     integration_module.addImport("zero", module);
 
     if (builtin.os.tag == .macos) {
@@ -183,6 +190,7 @@ pub fn build(b: *std.Build) void {
     validation_module.addImport("protobuf", protobuf.module("protobuf"));
     validation_module.addImport("graphql", graphql.module("graphql"));
     validation_module.addImport("opentelemetry-sdk", opentelemetry.module("sdk"));
+    validation_module.addImport("zf", zf.module("zf"));
     validation_module.addImport("zero", module);
 
     if (builtin.os.tag == .macos) {
@@ -228,6 +236,7 @@ pub fn build(b: *std.Build) void {
     bench_module.addImport("nats", nats.module("nats"));
     bench_module.addImport("graphql", graphql.module("graphql"));
     bench_module.addImport("opentelemetry-sdk", opentelemetry.module("sdk"));
+    bench_module.addImport("zf", zf.module("zf"));
     bench_module.addImport("zero", module);
 
     if (builtin.os.tag == .macos) {

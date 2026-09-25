@@ -23,6 +23,10 @@ pub const sqlitez = @import("sqlite");
 
 pub const protobuf = @import("protobuf");
 
+// Cross-platform system-info (zf). Powers the zsutil cpu/host/memory wrappers
+// so examples like zero-stream run on macOS without reading /proc.
+pub const sysinfo = @import("zf");
+
 // zero internals
 pub const logger = @import("logger.zig");
 pub const config = @import("config.zig");
@@ -80,6 +84,7 @@ pub const nosqlInterface = @import("datasource/nosqlInterface.zig");
 pub const NoSQL = nosqlInterface.NoSQL;
 pub const Couchbase = @import("datasource/couchbase.zig").Couchbase;
 pub const NoSQLBackend = @import("datasource/nosql.zig").NoSQL;
+pub const MongoDB = @import("datasource/mongodb.zig").MongoDB;
 
 pub const client = @import("service/client.zig");
 pub const circuit_breaker = @import("service/circuit_breaker.zig");

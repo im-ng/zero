@@ -993,12 +993,14 @@ fn makeGraphQLHandler(comptime Query: type, comptime Mutation: ?type) *const fn 
 }
 
 pub fn addMigration(self: *Self, key: []const u8, m: *const migrate) !void {
-    // add to migration map
-    try self.migrations.map.put(key, m);
-
-    // add migration key
+    // The migration registry owns its key copy: `map.put` stores the slice by
+    // pointer, so dup it into the container allocator. Otherwise the caller's
+    // buffer (e.g. the 256-byte slice from `utils.toStringFromInt`) would be both
+    // leaked and pointed at by a live map entry.
     const epoch = try std.fmt.parseInt(i64, key, 10);
     try self.migrations.keys.append(epoch);
+    const owned = try self.container.allocator.dupe(u8, key);
+    try self.migrations.map.put(owned, m);
 }
 
 pub fn runMigrations(self: *Self) !void {

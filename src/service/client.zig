@@ -46,7 +46,6 @@ pub const ServiceOptions = struct {
 
 container: *root.container = undefined,
 client: zul.http.Client,
-arena: *std.heap.ArenaAllocator,
 url: ?[]const u8 = undefined,
 name: []const u8 = undefined,
 
@@ -93,24 +92,24 @@ pub fn createWithConfig(
 ) !*Client {
     const c = try ct.allocator.create(Client);
 
-    c.client = zul.http.Client.init(ct.io, ct.allocator);
-    c.name = service_name;
-    c.container = ct;
-    c.url = _url;
-    c.auth = opts.auth;
-    c.timeout_ms = opts.timeout_ms;
-    c.max_retries = opts.max_retries;
-    c.retry_base_ms = opts.retry_base_ms;
-
-    if (opts.circuitBreaker) |cb| {
-        c.breaker = CircuitBreaker.init(cb);
-    }
-
-    if (opts.rateLimiter) |rl| {
-        c.limiter = RateLimiter.init(rl);
-    }
-
-    c.oauth_breaker = CircuitBreaker.init(CircuitBreakerConfig{});
+    // `allocator.create` returns uninitialized memory, so assign the full
+    // struct literal. This applies every field default (notably
+    // `oauth_token = null`, `oauth_client = null`, `oauth_mutex = .init`) —
+    // without this, those fields are garbage and `deinit`'s `free(token)`
+    // frees a dangling pointer and crashes at shutdown.
+    c.* = .{
+        .container = ct,
+        .client = zul.http.Client.init(ct.io, ct.allocator),
+        .name = service_name,
+        .url = _url,
+        .auth = opts.auth,
+        .timeout_ms = opts.timeout_ms,
+        .max_retries = opts.max_retries,
+        .retry_base_ms = opts.retry_base_ms,
+        .breaker = if (opts.circuitBreaker) |cb| CircuitBreaker.init(cb) else null,
+        .limiter = if (opts.rateLimiter) |rl| RateLimiter.init(rl) else null,
+        .oauth_breaker = CircuitBreaker.init(CircuitBreakerConfig{}),
+    };
 
     return c;
 }
@@ -118,6 +117,7 @@ pub fn createWithConfig(
 pub fn deinit(self: *Self) void {
     if (self.oauth_token) |token| {
         self.container.allocator.free(token);
+        self.oauth_token = null;
     }
 
     if (self.oauth_client) |*c| {
@@ -512,6 +512,9 @@ fn createAndSendRequest(
         // OAuth token may have expired mid-flight: force a refresh and replay once.
         if (res.status == 401 and self.auth != null and self.auth.?.mode == .oauth and !replayed) {
             replayed = true;
+            if (self.oauth_token) |old| {
+                self.container.allocator.free(old);
+            }
             self.oauth_token = null;
             if (self.breaker) |*b| b.recordFailure();
             const backoff = self.retryBackoffMs(attempt + 1);

@@ -1,33 +1,23 @@
 const std = @import("std");
 const testing = std.testing;
 const utils = @import("../utils.zig");
+const root = @import("../zero.zig");
 
 /// Retrieves the current memory usage statistics.
 ///
-/// This function reads the memory usage statistics from the `/proc/meminfo` file and returns a `MemUsage` struct containing the values.
+/// Cross-platform: delegates to `zf.gather` so this works on macOS (sysctl) as
+/// well as Linux (/proc/meminfo), instead of reading /proc directly. Reports
+/// system-wide memory, not per-process.
 ///
 /// Returns a `MemUsage` struct with the current memory usage statistics.
 pub fn usage() !MemUsage {
-    const file = try std.Io.Dir.openFileAbsolute(utils.io, "/proc/meminfo", .{});
-    defer file.close(utils.io);
+    var sys = root.sysinfo.gather.gather(std.heap.page_allocator, utils.io);
+    defer sys.deinit();
 
-    var buffer: [1024]u8 = undefined;
-    const bytes_read = try file.readPositionalAll(utils.io, &buffer, 0);
-
-    const contents = buffer[0..bytes_read];
-
-    var lines = std.mem.splitSequence(u8, contents, "\n");
     var meminfo = MemUsage{};
-    while (lines.next()) |line| {
-        try setValue(&meminfo.total, line, "MemTotal:");
-        try setValue(&meminfo.free, line, "MemFree:");
-        try setValue(&meminfo.available, line, "MemAvailable:");
-        try setValue(&meminfo.cached, line, "Cached:");
-        try setValue(&meminfo.buffers, line, "Buffers:");
-        try setValue(&meminfo.total_swap, line, "SwapTotal:");
-        try setValue(&meminfo.free_swap, line, "SwapFree:");
-    }
-
+    meminfo.total = sys.total_memory orelse 0;
+    meminfo.free = sys.free_memory orelse 0;
+    meminfo.available = sys.free_memory orelse 0;
     return meminfo;
 }
 
@@ -76,13 +66,11 @@ const MemUsage = struct {
 
 test "memory" {
     const mem_usage = try usage();
+    // Cross-platform: zf.gather reports total and free (available) system memory.
+    // Per-process cached/buffers/swap detail is Linux-only and not provided here.
     try testing.expect(mem_usage.total != 0);
     try testing.expect(mem_usage.free != 0);
     try testing.expect(mem_usage.available != 0);
-    try testing.expect(mem_usage.cached != 0);
-    try testing.expect(mem_usage.buffers != 0);
-    try testing.expect(mem_usage.total_swap != 0);
-    try testing.expect(mem_usage.free_swap != 0);
     try testing.expect(try mem_usage.percentageUsed() <= 100.0);
 
     const mem_usage2 = MemUsage{};

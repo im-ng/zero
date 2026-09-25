@@ -10,7 +10,6 @@ pub const std_options: std.Options = .{
 };
 
 pub fn main(init: std.process.Init) !void {
-
     var gpa: std.heap.DebugAllocator(.{}) = .init;
     const allocator = gpa.allocator();
     _ = gpa.detectLeaks();
@@ -20,6 +19,8 @@ pub fn main(init: std.process.Init) !void {
     app.onStartup(prepareCache);
 
     try app.get("/redis", cacheResponse);
+
+    try app.post("/redis", save);
 
     try app.run();
 }
@@ -46,4 +47,13 @@ fn cacheResponse(ctx: *Context) !void {
     defer if (reply) |r| ctx.allocator.free(r);
 
     try ctx.json(reply orelse "");
+}
+
+fn save(ctx: *Context) !void {
+    const body = ctx.request.body() orelse "";
+
+    try ctx.KV.?.set(ctx, "msg", body);
+
+    ctx.response.setStatus(.ok);
+    try ctx.json("entry saved!");
 }

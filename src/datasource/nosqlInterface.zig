@@ -11,6 +11,9 @@ pub const Backend = enum {
     /// Document backend over N1QL/HTTP (no `libcouchbase` C link). Backed by
     /// `src/datasource/couchbase.zig` (HTTP via `zul`).
     couchbase,
+    /// Document backend over the pure-Zig OP_MSG wire protocol (no `mongo-c-driver`
+    /// C link). Backed by `src/datasource/mongodb.zig`.
+    mongodb,
     /// Test-only backend backed by `MockBackend`. Lets the `NoSQL` dispatch be
     /// exercised without a running database.
     mock,
@@ -50,6 +53,7 @@ pub const NoSQL = struct {
         return switch (b) {
             .cassandra => "cassandra",
             .couchbase => "couchbase",
+            .mongodb => "mongodb",
             .mock => "mock",
         };
     }
@@ -93,6 +97,16 @@ pub const NoSQL = struct {
                 mb.* = MockBackend{ .last_value = "" };
                 break :blk @as(*anyopaque, mb);
             },
+            .mongodb => blk: {
+                const m = try root.MongoDB.create(container.allocator, .{
+                    .contact_points = opts.contact_points,
+                    .user = opts.user orelse "",
+                    .pass = opts.password orelse "",
+                    .auth_source = "admin",
+                    .db = opts.keyspace,
+                });
+                break :blk @as(*anyopaque, m);
+            },
         };
         const handle = try container.allocator.create(NoSQL);
         handle.* = NoSQL.init(impl, backend, null, container.metricz);
@@ -113,6 +127,10 @@ pub const NoSQL = struct {
                 const cb = @as(*root.Couchbase, @ptrCast(@alignCast(self.ptr)));
                 cb.deinit(allocator);
             },
+            .mongodb => {
+                const m = @as(*root.MongoDB, @ptrCast(@alignCast(self.ptr)));
+                m.deinit(allocator);
+            },
             .mock => {
                 const mb = @as(*MockBackend, @ptrCast(@alignCast(self.ptr)));
                 allocator.destroy(mb);
@@ -132,6 +150,7 @@ pub const NoSQL = struct {
         const r = switch (self.backend) {
             .cassandra => @as(*root.NoSQLBackend, @ptrCast(@alignCast(self.ptr))).get(ctx, statement),
             .couchbase => @as(*root.Couchbase, @ptrCast(@alignCast(self.ptr))).get(ctx, statement),
+            .mongodb => @as(*root.MongoDB, @ptrCast(@alignCast(self.ptr))).get(ctx, statement),
             .mock => @as(*MockBackend, @ptrCast(@alignCast(self.ptr))).get(ctx, statement),
         } catch |e| {
             if (self.breaker) |*b| {
@@ -156,6 +175,7 @@ pub const NoSQL = struct {
         const r = switch (self.backend) {
             .cassandra => @as(*root.NoSQLBackend, @ptrCast(@alignCast(self.ptr))).put(ctx, statement),
             .couchbase => @as(*root.Couchbase, @ptrCast(@alignCast(self.ptr))).put(ctx, statement),
+            .mongodb => @as(*root.MongoDB, @ptrCast(@alignCast(self.ptr))).put(ctx, statement),
             .mock => @as(*MockBackend, @ptrCast(@alignCast(self.ptr))).put(ctx, statement),
         } catch |e| {
             if (self.breaker) |*b| {
@@ -180,6 +200,7 @@ pub const NoSQL = struct {
         const r = switch (self.backend) {
             .cassandra => @as(*root.NoSQLBackend, @ptrCast(@alignCast(self.ptr))).delete(ctx, statement),
             .couchbase => @as(*root.Couchbase, @ptrCast(@alignCast(self.ptr))).delete(ctx, statement),
+            .mongodb => @as(*root.MongoDB, @ptrCast(@alignCast(self.ptr))).delete(ctx, statement),
             .mock => @as(*MockBackend, @ptrCast(@alignCast(self.ptr))).delete(ctx, statement),
         } catch |e| {
             if (self.breaker) |*b| {
@@ -205,6 +226,7 @@ pub const NoSQL = struct {
         const r = switch (self.backend) {
             .cassandra => @as(*root.NoSQLBackend, @ptrCast(@alignCast(self.ptr))).query(ctx, statement),
             .couchbase => @as(*root.Couchbase, @ptrCast(@alignCast(self.ptr))).query(ctx, statement),
+            .mongodb => @as(*root.MongoDB, @ptrCast(@alignCast(self.ptr))).query(ctx, statement),
             .mock => @as(*MockBackend, @ptrCast(@alignCast(self.ptr))).query(ctx, statement),
         } catch |e| {
             if (self.breaker) |*b| {
@@ -228,6 +250,7 @@ pub const NoSQL = struct {
     pub fn lastError(self: *NoSQL) ?root.Error.DataSourceError {
         return switch (self.backend) {
             .couchbase => @as(*root.Couchbase, @ptrCast(@alignCast(self.ptr))).last_error,
+            .mongodb => @as(*root.MongoDB, @ptrCast(@alignCast(self.ptr))).last_error,
             else => null,
         };
     }

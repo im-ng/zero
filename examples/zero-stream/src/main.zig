@@ -5,7 +5,6 @@ const App = zero.App;
 const Context = zero.Context;
 const Memory = zero.memory;
 const CPU = zero.cpu;
-const Process = zero.process;
 const Host = zero.host;
 const utils = zero.utils;
 const Builder = zero.zul.StringBuilder;
@@ -17,7 +16,6 @@ pub const std_options: std.Options = .{
 };
 
 pub fn main(init: std.process.Init) !void {
-
     var gpa: std.heap.DebugAllocator(.{}) = .init;
     const allocator = gpa.allocator();
     _ = gpa.detectLeaks();
@@ -109,8 +107,7 @@ fn getCPUInfo(ctx: *Context, sb: *Builder) !void {
 fn getHostInfo(ctx: *Context, sb: *Builder) !void {
     const h = try Host.usage(ctx);
 
-    const path = try utils.combine(ctx.allocator, "/proc/{d}/status", .{std.c.getpid()});
-    const p = try Process.usage(ctx.allocator, path);
+    const m = try Memory.usage();
 
     try sb.write("<div class='system-data'>");
     try sb.write("<table class='table table-striped table-hover table-sm'><tbody>");
@@ -128,12 +125,12 @@ fn getHostInfo(ctx: *Context, sb: *Builder) !void {
     try sb.write("</td></tr>");
 
     try sb.write("<tr><td>Total Memory:</td><td> <i class='fa fa-brands fa-fedora'></i> ");
-    const vmhwm = try utils.combine(ctx.allocator, "{d}", .{p.vmHWM});
+    const vmhwm = try utils.combine(ctx.allocator, "{d}", .{m.total});
     try sb.write(vmhwm);
     try sb.write("</td></tr>");
 
     try sb.write("<tr><td>Free Memory:</td><td> <i class='fa fa-brands fa-fedora'></i> ");
-    const rssanon = try utils.combine(ctx.allocator, "{d}", .{p.rssAnon});
+    const rssanon = try utils.combine(ctx.allocator, "{d}", .{m.free});
     try sb.write(rssanon);
     try sb.write("</td></tr>");
 
@@ -151,13 +148,11 @@ pub fn cpu(ctx: *Context) !void {
 }
 
 pub fn status(ctx: *Context) !void {
-    const path = try utils.combine(ctx.allocator, "/proc/{d}/status", .{std.c.getpid()});
-    const s = try Process.usage(ctx.allocator, path);
+    const s = try Memory.usage();
     try ctx.json(s);
 }
 
 pub fn memoryUsage(ctx: *Context) !void {
-    const path = try utils.combine(ctx.allocator, "/proc/{d}/status", .{std.c.getpid()});
-    const s = try Process.usage(ctx.allocator, path);
+    const s = try Memory.usage();
     try ctx.json(s);
 }

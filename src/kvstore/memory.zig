@@ -32,7 +32,7 @@ pub const KVMemory = struct {
             // accumulate forever — a cache that never reclaims is a leak.
             if (self.map.fetchRemove(key)) |removed| {
                 self.allocator.free(removed.key);
-                self.allocator.free(removed.value_ptr.*);
+                self.allocator.free(removed.value);
             }
             if (self.exp.fetchRemove(key)) |removed| {
                 self.allocator.free(removed.key);
@@ -80,7 +80,7 @@ pub const KVMemory = struct {
             // Mirror `get`: reclaim expired entries on read so they cannot leak.
             if (self.map.fetchRemove(key)) |removed| {
                 self.allocator.free(removed.key);
-                self.allocator.free(removed.value_ptr.*);
+                self.allocator.free(removed.value);
             }
             if (self.exp.fetchRemove(key)) |removed| {
                 self.allocator.free(removed.key);

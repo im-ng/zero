@@ -36,6 +36,12 @@ pub fn create(c: *root.container) !*migration {
 
 /// Frees the migration registry maps and the `migration` struct.
 pub fn deinit(self: *Self) void {
+    // `map` keys are duped copies owned by the registry; `map.deinit()` frees the
+    // buckets but not the key slices, so free them first.
+    var it = self.map.iterator();
+    while (it.next()) |e| {
+        self.container.allocator.free(e.key_ptr.*);
+    }
     self.map.deinit();
     self.keys.deinit();
     self.container.allocator.destroy(self);

@@ -296,6 +296,12 @@ pub fn destroy(self: *Self) void {
         s.deinit(allocator);
     }
 
+    // Redis datasource: closes the connection and frees the wrapper struct.
+    if (self.rdz) |rdz| {
+        rdz.close();
+        allocator.destroy(rdz);
+    }
+
     allocator.destroy(self);
 }
 
@@ -708,13 +714,17 @@ fn loadRedis(self: *Self) !void {
     const addr = try std.Io.net.IpAddress.parseIp4(hostname, portInt);
 
     const connection = try addr.connect(utils.io, .{ .mode = .stream });
-    defer connection.close(utils.io);
 
     self.rdz = try rdzDatasource.create(self.allocator);
-    var reader = connection.reader(utils.io, &self.rdz.?.rbuf);
-    var writer = connection.writer(utils.io, &self.rdz.?.wbuf);
+    // Keep the connection and its reader/writer inside the heap-allocated `rdz` for
+    // the app's lifetime. `rdzClient.init` borrows `&rdz.reader.interface` /
+    // `&rdz.writer.interface`; stack-local copies would be freed before first use
+    // and the client would write through a dangling vtable (general-protection fault).
+    self.rdz.?.conn = connection;
+    self.rdz.?.reader = connection.reader(utils.io, &self.rdz.?.rbuf);
+    self.rdz.?.writer = connection.writer(utils.io, &self.rdz.?.wbuf);
 
-    self.redis = rdzClient.init(utils.io, &reader.interface, &writer.interface, .{
+    self.redis = rdzClient.init(utils.io, &self.rdz.?.reader.interface, &self.rdz.?.writer.interface, .{
         .user = null,
         .pass = password,
     }) catch |err| {
@@ -1074,7 +1084,41 @@ fn loadNoSQL(self: *Self) !void {
         return;
     }
 
-    self.log.debug("nosql is disabled, as CASSANDRA_CONTACT_POINTS / COUCHBASE_CONTACT_POINTS are not provided.");
+    const mongo_cp = self.config.get("MONGODB_CONTACT_POINTS");
+    if (!std.mem.eql(u8, mongo_cp, "")) {
+        const mongo_db = self.config.get("MONGODB_DB");
+        if (std.mem.eql(u8, mongo_db, "")) {
+            self.log.err("nosql connection failed: MONGODB_DB must be set.");
+            return;
+        }
+        const mongo_user = self.config.get("MONGODB_USER");
+        const mongo_pass = self.config.get("MONGODB_PASSWORD");
+        const mongo_tls = std.mem.eql(u8, self.config.get("MONGODB_TLS"), "true");
+        const mongo_verify = std.mem.eql(u8, self.config.get("MONGODB_TLS_VERIFY"), "true");
+        const mongo_ca = self.config.get("MONGODB_TLS_CA");
+        const mongo_auth = self.config.get("MONGODB_AUTH_SOURCE");
+        const m = root.MongoDB.create(self.allocator, .{
+            .contact_points = mongo_cp,
+            .user = if (std.mem.eql(u8, mongo_user, "")) "" else mongo_user,
+            .pass = if (std.mem.eql(u8, mongo_pass, "")) "" else mongo_pass,
+            .auth_source = if (std.mem.eql(u8, mongo_auth, "")) "admin" else mongo_auth,
+            .db = mongo_db,
+            .tls_enabled = mongo_tls,
+            .tls_verify = mongo_verify,
+            .tls_ca_path = if (std.mem.eql(u8, mongo_ca, "")) null else mongo_ca,
+        }) catch |err| {
+            self.log.err("could not initialize mongodb backend");
+            self.log.any(err);
+            return;
+        };
+        const handle = try self.allocator.create(root.NoSQL);
+        handle.* = root.NoSQL.init(m, .mongodb, null, self.metricz);
+        self.NoSQL = handle;
+        self.log.info(try std.fmt.allocPrint(self.bootstrap, "connected to mongodb at '{s}' (db '{s}'){s}", .{ mongo_cp, mongo_db, if (mongo_tls) " (tls)" else "" }));
+        return;
+    }
+
+    self.log.debug("nosql is disabled, as CASSANDRA_CONTACT_POINTS / COUCHBASE_CONTACT_POINTS / MONGODB_CONTACT_POINTS are not provided.");
 }
 
 pub fn registerZeroClient(self: *Self, service: *zeroClient) !void {
