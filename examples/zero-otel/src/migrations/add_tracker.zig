@@ -9,7 +9,7 @@ pub fn add_tracker_run(c: *Context) anyerror!void {
     const query =
         \\ -- TODO: write your migration SQL
     ;
-    _ = try c.SQL.exec(c, query, .{{}});
+    _ = try c.SQL.exec(c, query, .{});
 }}
 
 pub const _migrate = &migrate{

@@ -10,7 +10,8 @@ top:
 clean:
 	rm -rf .zig-cache zig-out zig-pkg
 	@for ex in examples/*/; do \
-		rm -rf "$$ex.zig-cache" "$$ex.zig-out" "$$ex.zig-pkg"; \
+		exdir="$${ex%/}"; \
+		rm -rf "$$exdir/.zig-cache" "$$exdir/zig-out" "$$exdir/zig-pkg"; \
 	done
 
 fast:

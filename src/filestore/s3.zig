@@ -9,9 +9,8 @@ const constants = root.constants;
 /// Requests are signed with AWS Signature Version 4 over the existing `zul`
 /// HTTP client. Object keys map directly to S3 keys under `bucket`:
 /// `create(ctx, "avatars/1.png", ...)` -> `PUT /<bucket>/avatars/1.png`.
-pub const FileStoreS3 = struct {
+    pub const FileStoreS3 = struct {
     allocator: std.mem.Allocator,
-    client: zul.http.Client,
     endpoint: []const u8,
     host: []const u8,
     region: []const u8,
@@ -48,7 +47,6 @@ pub const FileStoreS3 = struct {
         const self = try allocator.create(FileStoreS3);
         self.* = .{
             .allocator = allocator,
-            .client = zul.http.Client.init(container.io, allocator),
             .endpoint = endpoint,
             .host = try hostOf(allocator, endpoint),
             .region = try allocator.dupe(u8, region),
@@ -62,7 +60,6 @@ pub const FileStoreS3 = struct {
     /// Frees the S3 client and all owned config strings allocated in `open`.
     pub fn deinit(self: *FileStoreS3) void {
         const allocator = self.allocator;
-        self.client.deinit();
         allocator.free(self.endpoint);
         allocator.free(self.host);
         allocator.free(self.region);
@@ -129,7 +126,9 @@ pub const FileStoreS3 = struct {
             ctx.allocator.free(h.content_sha256);
         }
 
-        var req = try self.client.allocRequest(ctx.allocator, url);
+        var client = zul.http.Client.init(ctx.io, ctx.allocator);
+        defer client.deinit();
+        var req = try client.allocRequest(ctx.allocator, url);
         defer req.deinit();
         req.method = .PUT;
         try req.header("x-amz-date", h.amz_date);
@@ -157,7 +156,9 @@ pub const FileStoreS3 = struct {
             ctx.allocator.free(h.content_sha256);
         }
 
-        var req = try self.client.allocRequest(ctx.allocator, url);
+        var client = zul.http.Client.init(ctx.io, ctx.allocator);
+        defer client.deinit();
+        var req = try client.allocRequest(ctx.allocator, url);
         defer req.deinit();
         req.method = .GET;
         try req.header("x-amz-date", h.amz_date);
@@ -190,7 +191,9 @@ pub const FileStoreS3 = struct {
             ctx.allocator.free(h.content_sha256);
         }
 
-        var req = try self.client.allocRequest(ctx.allocator, url);
+        var client = zul.http.Client.init(ctx.io, ctx.allocator);
+        defer client.deinit();
+        var req = try client.allocRequest(ctx.allocator, url);
         defer req.deinit();
         req.method = .DELETE;
         try req.header("x-amz-date", h.amz_date);
@@ -219,7 +222,9 @@ pub const FileStoreS3 = struct {
             ctx.allocator.free(h.content_sha256);
         }
 
-        var req = try self.client.allocRequest(ctx.allocator, url);
+        var client = zul.http.Client.init(ctx.io, ctx.allocator);
+        defer client.deinit();
+        var req = try client.allocRequest(ctx.allocator, url);
         defer req.deinit();
         req.method = .GET;
         try req.header("x-amz-date", h.amz_date);
