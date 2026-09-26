@@ -569,7 +569,7 @@ pub const Interface = struct {
     /// `deinit`); the caller must read it, not free it.
     pub fn lastError(self: Interface) ?root.Error.DataSourceError {
         return switch (self.dialect) {
-            .clickhouse => @as(*root.ClickHouse, @ptrCast(@alignCast(self.ptr))).last_error,
+            .clickhouse => @as(*root.ClickHouse, @ptrCast(@alignCast(self.ptr))).lastError(),
             else => null,
         };
     }

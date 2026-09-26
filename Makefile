@@ -20,6 +20,9 @@ small:
 	zig build --release=small --summary all
 	zig build bench --release=small --summary all
 
+safe: #target for sqlite based examples
+	zig build --release=safe --summary all
+
 base:
 	zig build -Dcpu=baseline --release=safe --summary all
 	

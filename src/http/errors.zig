@@ -19,12 +19,51 @@ pub const ErrData = struct {
     data: Err,
 };
 
-/// Failure detail for an upstream datasource call (HTTP/SQL backends). Mirrors how
-/// `pg.zig` carries `proto.Error` on the connection: the backend stores the last
-/// failure on its own instance and the caller reads it right after catching the
-/// bare error. `message` is owned by the backend (freed on the next call or at
-/// `deinit`); the caller must read it, not free it. `code` is a SQLSTATE-style
-/// code (empty for HTTP; reserved for future Postgres parity).
+/// Classifies the underlying failure of a datasource operation so the
+/// thread-safe `lastError()` accessor can report *what kind* of error occurred
+/// without sharing a heap-allocated message across threads. This is the
+/// faithful, lock-free reduction of `pg.zig`'s per-connection `conn.err` (which
+/// is safe only because each request owns its connection); the HTTP backends are
+/// process-wide singletons, so they store only this enum plus an atomic HTTP
+/// status.
+pub const ErrorKind = enum(u8) {
+    none,
+    upstream,
+    auth,
+    rate_limited,
+    bad_query,
+    connection,
+    unknown,
+};
+
+/// Map an HTTP response status to an `ErrorKind`. Used by the HTTP-based
+/// backends (ClickHouse/InfluxDB/Solr/Couchbase) so the health probe can tell
+/// auth/rate-limit/query/upstream failures apart from a bare status code.
+pub fn classifyHttpStatus(status: u16) ErrorKind {
+    return switch (status) {
+        401, 403 => .auth,
+        429 => .rate_limited,
+        400, 404, 405, 422 => .bad_query,
+        500...599 => .upstream,
+        else => .unknown,
+    };
+}
+
+/// Map a non-HTTP Zig error (e.g. the MongoDB driver) to an `ErrorKind`. There
+/// is no HTTP status to classify, so connection-level failures win.
+pub fn classifyAnyError(err: anyerror) ErrorKind {
+    _ = err;
+    return .connection;
+}
+
+/// Failure detail for an upstream datasource call. `lastError()` returns this
+/// *by value* (a copy), so it is fully thread-safe: `status` is the last HTTP
+/// status (0 for non-HTTP backends), `code` is the `ErrorKind` tag name, and
+/// `message` is intentionally empty — no heap buffer is shared across threads,
+/// so there is nothing to free and no use-after-free risk. The precise
+/// underlying error is still returned to the operation's caller via the error
+/// union (e.g. `error.ClickHouseQueryFailed`); `lastError()` only feeds the
+/// health probe, which needs the failure class, not the raw body.
 pub const DataSourceError = struct {
     status: u16 = 0,
     code: []const u8 = "",
@@ -99,4 +138,22 @@ test "ErrData struct construction" {
     try std.testing.expectEqualStrings("wrapped error", data.data.message);
     const errResult: HttpError!void = data.data.err;
     try std.testing.expectError(error.EntityNotFound, errResult);
+}
+
+test "classifyHttpStatus maps status to ErrorKind" {
+    try std.testing.expectEqual(ErrorKind.auth, classifyHttpStatus(401));
+    try std.testing.expectEqual(ErrorKind.auth, classifyHttpStatus(403));
+    try std.testing.expectEqual(ErrorKind.rate_limited, classifyHttpStatus(429));
+    try std.testing.expectEqual(ErrorKind.bad_query, classifyHttpStatus(400));
+    try std.testing.expectEqual(ErrorKind.bad_query, classifyHttpStatus(404));
+    try std.testing.expectEqual(ErrorKind.upstream, classifyHttpStatus(500));
+    try std.testing.expectEqual(ErrorKind.upstream, classifyHttpStatus(503));
+    try std.testing.expectEqual(ErrorKind.unknown, classifyHttpStatus(200));
+}
+
+test "DataSourceError from lastError carries ErrorKind tag" {
+    const snapshot: ?DataSourceError = .{ .status = 503, .code = @tagName(ErrorKind.upstream), .message = "" };
+    try std.testing.expectEqual(ErrorKind.upstream, @as(ErrorKind, @enumFromInt(@intFromEnum(ErrorKind.upstream))));
+    try std.testing.expectEqual(@as(u16, 503), snapshot.?.status);
+    try std.testing.expectEqualStrings("upstream", snapshot.?.code);
 }

@@ -142,13 +142,13 @@ pub const Timeseries = struct {
         return r;
     }
 
-    /// Return the last upstream failure recorded by the backend, if any. Call
-    /// right after catching an `InfluxDB*Failed` error to read status/message.
-    /// The backend owns the `message` buffer (freed on the next call /
-    /// `deinit`); the caller must read it, not free it.
+    /// Right after catching an `InfluxDB*Failed` error, report the last
+    /// failure class to the health probe. `lastError()` returns a *copy* of
+    /// the status/`ErrorKind` (no shared heap buffer), so it is thread-safe to
+    /// call from the probe while requests run concurrently.
     pub fn lastError(self: *Timeseries) ?root.Error.DataSourceError {
         return switch (self.backend) {
-            .influxdb => @as(*root.InfluxDB, @ptrCast(@alignCast(self.ptr))).last_error,
+            .influxdb => @as(*root.InfluxDB, @ptrCast(@alignCast(self.ptr))).lastError(),
             .mock => null,
         };
     }

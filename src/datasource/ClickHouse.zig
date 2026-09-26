@@ -14,9 +14,13 @@ pub const ClickHouse = struct {
     database: []const u8,
     user: ?[]const u8,
     password: ?[]const u8,
-    // Last upstream failure, read by the caller right after catching the bare
-    // error (mirrors pg.zig's `conn.err`). `message` is owned by `allocator`.
-    last_error: ?root.Error.DataSourceError = null,
+    // Last upstream failure, surfaced thread-safely via `lastError()`. The
+    // HTTP status and an `ErrorKind` are stored atomically (no shared heap
+    // buffer), so concurrent requests and the health probe can read them
+    // without a lock or a use-after-free. Both are reset at the start of each
+    // call, so `lastError()` reflects only the most recent attempt.
+    last_status: std.atomic.Value(u16) = std.atomic.Value(u16).init(0),
+    last_kind: std.atomic.Value(u8) = std.atomic.Value(u8).init(0),
 
     pub fn create(allocator: std.mem.Allocator, opts: struct {
         url: []const u8,
@@ -39,10 +43,8 @@ pub const ClickHouse = struct {
     /// Run `sql` over HTTP and return the raw response body, owned by `alloc`.
     /// Caller frees.
     pub fn runRaw(self: *ClickHouse, alloc: std.mem.Allocator, sql: []const u8) ![]u8 {
-        if (self.last_error) |e| {
-            self.allocator.free(e.message);
-            self.last_error = null;
-        }
+        self.last_status.store(0, .monotonic);
+        self.last_kind.store(@intFromEnum(root.Error.ErrorKind.none), .monotonic);
         const req_url = try std.fmt.allocPrint(alloc, "{s}", .{self.url});
         var req = try self.client.allocRequest(alloc, req_url);
         defer {
@@ -65,7 +67,8 @@ pub const ClickHouse = struct {
         if (res.status < 200 or res.status > 299) {
             const sb = try res.allocBody(alloc, .{});
             defer sb.deinit();
-            self.last_error = .{ .status = res.status, .message = try self.allocator.dupe(u8, sb.buf[0..sb.pos]) };
+            self.last_status.store(res.status, .monotonic);
+            self.last_kind.store(@intFromEnum(root.Error.classifyHttpStatus(res.status)), .monotonic);
             return error.ClickHouseQueryFailed;
         }
         const sb = try res.allocBody(alloc, .{});
@@ -226,12 +229,23 @@ pub const ClickHouse = struct {
         _ = self;
     }
 
+    /// Thread-safe last-failure accessor. Returns `null` when the most recent
+    /// attempt succeeded (or none has been made). `code` names the `ErrorKind`
+    /// and `status` is the last HTTP status (0 for non-HTTP). The returned
+    /// struct is a copy with no shared heap buffer, so it is safe to read.
+    pub fn lastError(self: *ClickHouse) ?root.Error.DataSourceError {
+        const kind = @as(root.Error.ErrorKind, @enumFromInt(self.last_kind.load(.monotonic)));
+        if (kind == .none) return null;
+        return .{
+            .status = self.last_status.load(.monotonic),
+            .code = @tagName(kind),
+            .message = "",
+        };
+    }
+
     /// Free the handle and its allocated strings. Call once the backend is no
     /// longer referenced (the persistent `zul` client is closed too).
     pub fn deinit(self: *ClickHouse, allocator: std.mem.Allocator) void {
-        if (self.last_error) |e| {
-            allocator.free(e.message);
-        }
         self.client.deinit();
         allocator.free(self.url);
         allocator.free(self.database);

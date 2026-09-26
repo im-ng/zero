@@ -172,12 +172,13 @@ pub const Search = struct {
     }
 
     /// Return the last upstream failure recorded by the backend, if any. Call
-    /// right after catching a `Solr*Failed` error to read status/message. The
-    /// backend owns the `message` buffer (freed on the next call / `deinit`);
-    /// the caller must read it, not free it.
+    /// Right after catching a `Solr*Failed` error, report the last failure
+    /// class to the health probe. `lastError()` returns a *copy* of the
+    /// status/`ErrorKind` (no shared heap buffer), so it is thread-safe to call
+    /// from the probe while requests run concurrently.
     pub fn lastError(self: *Search) ?root.Error.DataSourceError {
         return switch (self.backend) {
-            .solr => @as(*root.Solr, @ptrCast(@alignCast(self.ptr))).last_error,
+            .solr => @as(*root.Solr, @ptrCast(@alignCast(self.ptr))).lastError(),
             .mock => null,
         };
     }
