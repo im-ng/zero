@@ -420,7 +420,6 @@ pub fn Fatal(self: *Self, _: std.mem.Allocator, message: []const u8) void {
     std.log.err(errFormat, .{ ts, message });
 }
 
-
 // ===================== Tests =====================
 
 test "redactInto masks credential tokens and secret key=value pairs" {
@@ -442,7 +441,6 @@ test "redactInto masks credential tokens and secret key=value pairs" {
         redactInto("x-api-key: secret-key done", &buf),
     );
 }
-
 
 test "create returns logger with default logLevel 1" {
     const allocator = std.testing.allocator;

@@ -35,9 +35,9 @@ fn readRss() u64 {
 }
 
 const BucketUpperNs = [_]u64{
-    100, 250, 500, 1_000, 2_500, 5_000, 10_000, 25_000, 50_000, 100_000,
-    250_000, 500_000, 1_000_000, 2_500_000, 5_000_000, 10_000_000, 25_000_000,
-    50_000_000, 100_000_000, 250_000_000, 500_000_000, 1_000_000_000,
+    100,         250,           500,       1_000,     2_500,     5_000,      10_000,     25_000,     50_000,      100_000,
+    250_000,     500_000,       1_000_000, 2_500_000, 5_000_000, 10_000_000, 25_000_000, 50_000_000, 100_000_000, 250_000_000,
+    500_000_000, 1_000_000_000,
 };
 
 const Histogram = struct {
@@ -350,7 +350,7 @@ fn duckdbQueryHandler(ctx: *Context) !void {
 
 fn tsWriteHandler(ctx: *Context) !void {
     if (ctx.Timeseries) |ts| {
-        try ts.write(ctx, "demo", "host=example", "value=1.0", null);
+        try ts.write(ctx, "demo,host=example value=1.0");
         try ctx.response.json(.{ .status = "written" }, .{});
     } else {
         ctx.response.setStatus(.not_implemented);
@@ -392,7 +392,7 @@ fn solrQueryHandler(ctx: *Context) !void {
 
 fn nosqlPutHandler(ctx: *Context) !void {
     if (ctx.NoSQL) |n| {
-        try n.put(ctx, "users", "alice", "{\"age\":30}");
+        try n.put(ctx, "INSERT INTO users (id, data) VALUES ('alice', '{\"age\":30}')");
         try ctx.response.json(.{ .status = "stored" }, .{});
     } else {
         ctx.response.setStatus(.not_implemented);
@@ -402,7 +402,7 @@ fn nosqlPutHandler(ctx: *Context) !void {
 
 fn nosqlGetHandler(ctx: *Context) !void {
     if (ctx.NoSQL) |n| {
-        const doc = try n.get(ctx, "users", "alice");
+        const doc = try n.get(ctx, "SELECT data FROM users WHERE id = 'alice'");
         if (doc) |d| {
             defer ctx.allocator.free(d);
             try ctx.response.json(.{ .doc = d }, .{});
@@ -412,6 +412,62 @@ fn nosqlGetHandler(ctx: *Context) !void {
     } else {
         ctx.response.setStatus(.not_implemented);
         try ctx.response.json(.{ .message = "CASSANDRA_CONTACT_POINTS not configured" }, .{});
+    }
+}
+
+// --- Round 2: ClickHouse (columnar OLAP SQL over HTTP) ---
+
+fn clickhouseWriteHandler(ctx: *Context) !void {
+    if (ctx.container.ClickHouse) |_| {
+        const name: []const u8 = "alice";
+        _ = try ctx.SQL.exec(ctx, "CREATE TABLE IF NOT EXISTS events (id Int64, name String)", .{});
+        _ = try ctx.SQL.exec(ctx, "INSERT INTO events (id, name) VALUES (?, ?)", .{ @as(i64, 1), name });
+        try ctx.response.json(.{ .status = "stored" }, .{});
+    } else {
+        ctx.response.setStatus(.not_implemented);
+        try ctx.response.json(.{ .message = "CLICKHOUSE_URL not configured" }, .{});
+    }
+}
+
+fn clickhouseQueryHandler(ctx: *Context) !void {
+    if (ctx.container.ClickHouse) |_| {
+        const Event = struct { id: i64, name: []const u8 };
+        const row = try ctx.SQL.queryRow(ctx, Event, "SELECT id, name FROM events LIMIT 1", .{});
+        if (row) |r| {
+            try ctx.response.json(.{ .event = r }, .{});
+        } else {
+            try ctx.response.json(.{ .event = null }, .{});
+        }
+    } else {
+        ctx.response.setStatus(.not_implemented);
+        try ctx.response.json(.{ .message = "CLICKHOUSE_URL not configured" }, .{});
+    }
+}
+
+// --- Round 2: Couchbase (document over N1QL/HTTP) ---
+
+fn couchbasePutHandler(ctx: *Context) !void {
+    if (ctx.NoSQL) |n| {
+        try n.put(ctx, "UPSERT INTO users (KEY, VALUE) VALUES ('alice', {\"age\":30})");
+        try ctx.response.json(.{ .status = "stored" }, .{});
+    } else {
+        ctx.response.setStatus(.not_implemented);
+        try ctx.response.json(.{ .message = "COUCHBASE_CONTACT_POINTS not configured" }, .{});
+    }
+}
+
+fn couchbaseGetHandler(ctx: *Context) !void {
+    if (ctx.NoSQL) |n| {
+        const doc = try n.get(ctx, "SELECT RAW b FROM users b WHERE meta(b).id = 'alice'");
+        if (doc) |d| {
+            defer ctx.allocator.free(d);
+            try ctx.response.json(.{ .doc = d }, .{});
+        } else {
+            try ctx.response.json(.{ .doc = null }, .{});
+        }
+    } else {
+        ctx.response.setStatus(.not_implemented);
+        try ctx.response.json(.{ .message = "COUCHBASE_CONTACT_POINTS not configured" }, .{});
     }
 }
 
@@ -580,6 +636,7 @@ fn runExtraScenario(
 }
 
 pub fn main(init: std.process.Init) !void {
+    utils.setIo(init.io);
     bumpNoFileLimit();
 
     var duration_s: f64 = 3;
@@ -754,6 +811,12 @@ pub fn main(init: std.process.Init) !void {
         try app.get("/nosql/put", nosqlPutHandler);
         try app.get("/nosql/get", nosqlGetHandler);
 
+        // Round-2 datasource routes (501 when the backend isn't configured).
+        try app.get("/clickhouse/write", clickhouseWriteHandler);
+        try app.get("/clickhouse/query", clickhouseQueryHandler);
+        try app.get("/couchbase/put", couchbasePutHandler);
+        try app.get("/couchbase/get", couchbaseGetHandler);
+
         const srv_thread = try std.Thread.spawn(.{}, appRun, .{app});
 
         const port = app.httpServer.port;
@@ -831,6 +894,12 @@ pub fn main(init: std.process.Init) !void {
         .{ .name = "solr-query", .category = "search", .method = .GET, .path = "/solr/query", .expect_ct = "application/json", .gated_env = "SOLR_URL" },
         .{ .name = "nosql-put", .category = "nosql", .method = .GET, .path = "/nosql/put", .expect_ct = "application/json", .gated_env = "CASSANDRA_CONTACT_POINTS" },
         .{ .name = "nosql-get", .category = "nosql", .method = .GET, .path = "/nosql/get", .expect_ct = "application/json", .gated_env = "CASSANDRA_CONTACT_POINTS" },
+        // Round 2: ClickHouse (columnar OLAP SQL over HTTP).
+        .{ .name = "clickhouse-write", .category = "clickhouse", .method = .GET, .path = "/clickhouse/write", .expect_ct = "application/json", .gated_env = "CLICKHOUSE_URL" },
+        .{ .name = "clickhouse-query", .category = "clickhouse", .method = .GET, .path = "/clickhouse/query", .expect_ct = "application/json", .gated_env = "CLICKHOUSE_URL" },
+        // Round 2: Couchbase (document over N1QL/HTTP).
+        .{ .name = "couchbase-put", .category = "couchbase", .method = .GET, .path = "/couchbase/put", .expect_ct = "application/json", .gated_env = "COUCHBASE_CONTACT_POINTS" },
+        .{ .name = "couchbase-get", .category = "couchbase", .method = .GET, .path = "/couchbase/get", .expect_ct = "application/json", .gated_env = "COUCHBASE_CONTACT_POINTS" },
     };
 
     // Resolve the requested categories. --suite or --target=all => every category.
@@ -851,7 +920,7 @@ pub fn main(init: std.process.Init) !void {
         while (it.next()) |tok| {
             const c = std.mem.trim(u8, tok, " ");
             if (std.mem.eql(u8, c, "all")) {
-                const all = [_][]const u8{ "health", "http", "sql", "nosql", "timeseries", "search", "proto", "graphql", "filestore" };
+                const all = [_][]const u8{ "health", "http", "sql", "nosql", "clickhouse", "couchbase", "timeseries", "search", "proto", "graphql", "filestore" };
                 for (all) |a| {
                     if (selected_count < selected_buf.len) {
                         selected_buf[selected_count] = a;

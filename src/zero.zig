@@ -23,6 +23,10 @@ pub const sqlitez = @import("sqlite");
 
 pub const protobuf = @import("protobuf");
 
+// Cross-platform system-info (zf). Powers the zsutil cpu/host/memory wrappers
+// so examples like zero-stream run on macOS without reading /proc.
+pub const sysinfo = @import("zf");
+
 // zero internals
 pub const logger = @import("logger.zig");
 pub const config = @import("config.zig");
@@ -59,6 +63,8 @@ pub const SQL = @import("datasource/SQL.zig");
 pub const SQLite = @import("datasource/SQLite.zig");
 
 pub const DuckDB = @import("datasource/DuckDB.zig").DuckDB;
+pub const DuckGres = @import("datasource/duckgres.zig").DuckGres;
+pub const ClickHouse = @import("datasource/ClickHouse.zig").ClickHouse;
 pub const datasourceInterface = @import("datasource/interface.zig");
 pub const Datasource = datasourceInterface.Interface;
 
@@ -77,7 +83,9 @@ pub const Solr = @import("datasource/specialized/solr.zig").Solr;
 // NoSQL datasource (document / wide-column)
 pub const nosqlInterface = @import("datasource/nosqlInterface.zig");
 pub const NoSQL = nosqlInterface.NoSQL;
-pub const Cassandra = @import("datasource/cassandra.zig").Cassandra;
+pub const Couchbase = @import("datasource/couchbase.zig").Couchbase;
+pub const NoSQLBackend = @import("datasource/nosql.zig").NoSQL;
+pub const MongoDB = @import("datasource/mongodb.zig").MongoDB;
 
 pub const client = @import("service/client.zig");
 pub const circuit_breaker = @import("service/circuit_breaker.zig");

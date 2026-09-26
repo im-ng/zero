@@ -1,6 +1,7 @@
 const std = @import("std");
 const root = @import("../../zero.zig");
 const service = root.circuit_breaker;
+const utils = root.utils;
 
 /// Search backends. Resolved at runtime from config so the same type-erased
 /// `Search` handle works for any configured backend. Add new backends
@@ -30,13 +31,36 @@ pub const Search = struct {
     ptr: *anyopaque,
     backend: Backend,
     breaker: ?service.CircuitBreaker = null,
+    metricz: ?*root.metricz = null,
 
-    pub fn init(ptr: anytype, backend: Backend, breaker: ?service.CircuitBreaker) Search {
+    pub fn init(ptr: anytype, backend: Backend, breaker: ?service.CircuitBreaker, metricz: ?*root.metricz) Search {
         return .{
             .ptr = @ptrCast(@alignCast(ptr)),
             .backend = backend,
             .breaker = breaker,
+            .metricz = metricz,
         };
+    }
+
+    fn backendName(b: Backend) []const u8 {
+        return switch (b) {
+            .solr => "solr",
+            .mock => "mock",
+        };
+    }
+
+    fn dsError(self: *Search, op: []const u8) void {
+        var status: u16 = 0;
+        if (self.lastError()) |d| status = d.status;
+        if (self.metricz) |mz| {
+            mz.datasourceError(.{ .backend = backendName(self.backend), .name = "", .operation = op, .status = status }) catch {};
+        }
+    }
+
+    fn dsOk(self: *Search, op: []const u8, start: std.Io.Timestamp) void {
+        if (self.metricz) |mz| {
+            mz.datasourceResponse(.{ .backend = backendName(self.backend), .name = "", .operation = op, .status = 200 }, utils.elapsedMs(start)) catch {};
+        }
     }
 
     pub fn build(container: *root.container, backend: Backend, opts: Options) !*Search {
@@ -56,21 +80,41 @@ pub const Search = struct {
             },
         };
         const handle = try container.allocator.create(Search);
-        handle.* = Search.init(impl, backend, null);
+        handle.* = Search.init(impl, backend, null, container.metricz);
         return handle;
+    }
+
+    /// Free the type-erased handle and the backend implementation it wraps. The
+    /// backend owns any connections / duplicated config strings it allocated, so
+    /// each branch tears down the impl before the handle struct is destroyed.
+    pub fn deinit(self: *Search, allocator: std.mem.Allocator) void {
+        switch (self.backend) {
+            .solr => {
+                const c = @as(*root.Solr, @ptrCast(@alignCast(self.ptr)));
+                c.deinit(allocator);
+            },
+            .mock => {
+                const mb = @as(*MockBackend, @ptrCast(@alignCast(self.ptr)));
+                allocator.destroy(mb);
+            },
+        }
+        allocator.destroy(self);
     }
 
     /// Index (upsert) a JSON document into `collection`.
     pub fn index(self: *Search, ctx: *root.Context, collection: []const u8, doc_json: []const u8) !void {
         if (self.breaker) |*b| b.before() catch return error.CircuitOpen;
+        const start = utils.nowMonotonic();
         const r = switch (self.backend) {
             .solr => @as(*root.Solr, @ptrCast(@alignCast(self.ptr))).index(ctx, collection, doc_json),
             .mock => @as(*MockBackend, @ptrCast(@alignCast(self.ptr))).index(ctx, collection, doc_json),
         } catch |e| {
             if (self.breaker) |*b| b.recordFailure();
+            self.dsError("index");
             return e;
         };
         if (self.breaker) |*b| b.recordSuccess();
+        self.dsOk("index", start);
         return r;
     }
 
@@ -78,14 +122,17 @@ pub const Search = struct {
     /// by `ctx.allocator`. Caller frees.
     pub fn query(self: *Search, ctx: *root.Context, collection: []const u8, q: []const u8) ![]const u8 {
         if (self.breaker) |*b| b.before() catch return error.CircuitOpen;
+        const start = utils.nowMonotonic();
         const r = switch (self.backend) {
             .solr => @as(*root.Solr, @ptrCast(@alignCast(self.ptr))).query(ctx, collection, q),
             .mock => @as(*MockBackend, @ptrCast(@alignCast(self.ptr))).query(ctx, collection, q),
         } catch |e| {
             if (self.breaker) |*b| b.recordFailure();
+            self.dsError("query");
             return e;
         };
         if (self.breaker) |*b| b.recordSuccess();
+        self.dsOk("query", start);
         return r;
     }
 
@@ -93,29 +140,47 @@ pub const Search = struct {
     /// `ctx.allocator` (or `null` on 404). Caller frees.
     pub fn get(self: *Search, ctx: *root.Context, collection: []const u8, id: []const u8) !?[]const u8 {
         if (self.breaker) |*b| b.before() catch return error.CircuitOpen;
+        const start = utils.nowMonotonic();
         const r = switch (self.backend) {
             .solr => @as(*root.Solr, @ptrCast(@alignCast(self.ptr))).get(ctx, collection, id),
             .mock => @as(*MockBackend, @ptrCast(@alignCast(self.ptr))).get(ctx, collection, id),
         } catch |e| {
             if (self.breaker) |*b| b.recordFailure();
+            self.dsError("get");
             return e;
         };
         if (self.breaker) |*b| b.recordSuccess();
+        self.dsOk("get", start);
         return r;
     }
 
     /// Delete a document by id from `collection`.
     pub fn delete(self: *Search, ctx: *root.Context, collection: []const u8, id: []const u8) !void {
         if (self.breaker) |*b| b.before() catch return error.CircuitOpen;
+        const start = utils.nowMonotonic();
         const r = switch (self.backend) {
             .solr => @as(*root.Solr, @ptrCast(@alignCast(self.ptr))).delete(ctx, collection, id),
             .mock => @as(*MockBackend, @ptrCast(@alignCast(self.ptr))).delete(ctx, collection, id),
         } catch |e| {
             if (self.breaker) |*b| b.recordFailure();
+            self.dsError("delete");
             return e;
         };
         if (self.breaker) |*b| b.recordSuccess();
+        self.dsOk("delete", start);
         return r;
+    }
+
+    /// Return the last upstream failure recorded by the backend, if any. Call
+    /// Right after catching a `Solr*Failed` error, report the last failure
+    /// class to the health probe. `lastError()` returns a *copy* of the
+    /// status/`ErrorKind` (no shared heap buffer), so it is thread-safe to call
+    /// from the probe while requests run concurrently.
+    pub fn lastError(self: *Search) ?root.Error.DataSourceError {
+        return switch (self.backend) {
+            .solr => @as(*root.Solr, @ptrCast(@alignCast(self.ptr))).lastError(),
+            .mock => null,
+        };
     }
 };
 
@@ -146,13 +211,11 @@ pub const MockBackend = struct {
     }
 };
 
-
 // ===================== Tests =====================
-
 
 test "Search dispatches through the type-erased handle" {
     var mock: MockBackend = .{ .last_doc = "" };
-    var s = Search.init(&mock, .mock, null);
+    var s = Search.init(&mock, .mock, null, null);
     var ctx_storage: root.Context = undefined;
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();

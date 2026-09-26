@@ -80,6 +80,18 @@ fn constTimeEql(a: []const u8, b: []const u8) bool {
     return diff == 0;
 }
 
+/// Extract the credential token from an auth header.
+fn authToken(header: []const u8) ?[]const u8 {
+    var token: ?[]const u8 = null;
+    var parts = std.mem.splitAny(u8, header, " \t");
+    while (parts.next()) |value| {
+        if (value.len > 0) {
+            token = value;
+        }
+    }
+    return token;
+}
+
 mode: AuthMode,
 container: *root.container,
 keys: std.StringHashMap([]const u8) = undefined,
@@ -87,15 +99,15 @@ pubKeys: std.StringHashMap(publiKey) = undefined,
 refreshThread: std.Thread = undefined,
 mutex: std.Io.Mutex = undefined,
 
-    refreshInterval: i16 = 60, // seconds
-    pathUrl: []const u8 = undefined,
+refreshInterval: i16 = 60, // seconds
+pathUrl: []const u8 = undefined,
 
-    /// When set, OAuth tokens must carry this `aud` (audience) claim. Optional so
-    /// existing deployments without it are unaffected. Wired from `OAUTH_AUDIENCE`.
-    expected_audience: ?[]const u8 = null,
-    /// When set, OAuth tokens must be issued by this `iss` (issuer). Optional.
-    /// Wired from `OAUTH_ISSUER`.
-    expected_issuer: ?[]const u8 = null,
+/// When set, OAuth tokens must carry this `aud` (audience) claim. Optional so
+/// existing deployments without it are unaffected. Wired from `OAUTH_AUDIENCE`.
+expected_audience: ?[]const u8 = null,
+/// When set, OAuth tokens must be issued by this `iss` (issuer). Optional.
+/// Wired from `OAUTH_ISSUER`.
+expected_issuer: ?[]const u8 = null,
 
 pub fn create(c: *root.container, m: AuthMode) anyerror!*AuthProvider {
     const auth = try c.allocator.create(AuthProvider);
@@ -105,24 +117,7 @@ pub fn create(c: *root.container, m: AuthMode) anyerror!*AuthProvider {
 }
 
 pub fn validateBasicAuth(self: *Self, allocator: std.mem.Allocator, authHeader: []const u8) AuthError!void {
-    var values = std.mem.splitAny(u8, authHeader, " ");
-
-    var header: []const u8 = undefined;
-    var token: []const u8 = undefined;
-
-    var index: i8 = 0;
-    while (values.next()) |value| {
-        if (index == 1) {
-            token = value;
-            break;
-        }
-        header = value;
-        index += 1;
-    }
-
-    if (index != 1) {
-        return AuthError.InvalidAuthToken;
-    }
+    const token = authToken(authHeader) orelse return AuthError.InvalidAuthToken;
 
     const size = try Decoder.calcSizeForSlice(token);
 
@@ -131,11 +126,11 @@ pub fn validateBasicAuth(self: *Self, allocator: std.mem.Allocator, authHeader: 
     defer allocator.free(decoded);
     try Decoder.decode(decoded, token);
 
-    values = std.mem.splitAny(u8, decoded, ":");
+    var values = std.mem.splitAny(u8, decoded, ":");
     var headerKey: []const u8 = undefined;
     var headerPassword: []const u8 = undefined;
 
-    index = 0;
+    var index: i8 = 0;
     while (values.next()) |value| {
         if (index == 1) {
             headerPassword = value;
@@ -161,24 +156,7 @@ pub fn validateBasicAuth(self: *Self, allocator: std.mem.Allocator, authHeader: 
 }
 
 pub fn validateAPIKeyAuth(self: *Self, _: std.mem.Allocator, authHeader: []const u8) AuthError!void {
-    var values = std.mem.splitAny(u8, authHeader, " ");
-
-    var header: []const u8 = undefined;
-    var token: []const u8 = undefined;
-
-    var index: i8 = 0;
-    while (values.next()) |value| {
-        if (index == 1) {
-            token = value;
-            break;
-        }
-        header = value;
-        index += 1;
-    }
-
-    if (index != 1) {
-        return AuthError.InvalidAuthToken;
-    }
+    const token = authToken(authHeader) orelse return AuthError.InvalidAuthToken;
 
     if (self.keys.contains(token) == false) {
         return AuthError.InvalidAuthAPIHeader;
@@ -189,20 +167,7 @@ pub fn validateAPIKeyAuth(self: *Self, _: std.mem.Allocator, authHeader: []const
 }
 
 pub fn validateOAuthToken(self: *Self, allocator: std.mem.Allocator, authHeader: []const u8) AuthError!void {
-    var values = std.mem.splitAny(u8, authHeader, " ");
-
-    var header: []const u8 = undefined;
-    var token: []const u8 = undefined;
-
-    var index: i8 = 0;
-    while (values.next()) |value| {
-        if (index == 1) {
-            token = value;
-            break;
-        }
-        header = value;
-        index += 1;
-    }
+    const token = authToken(authHeader) orelse return AuthError.InvalidAuthToken;
 
     // split and identify the token key id
     var jwtTokenizer = jwt.Token.init(allocator);
@@ -250,7 +215,7 @@ pub fn validateOAuthToken(self: *Self, allocator: std.mem.Allocator, authHeader:
     };
     defer validator.deinit();
 
-    const now = @as(i64, @intCast(@divTrunc(utils.nowReal().nanoseconds, 1_000_000_000)));
+    const now = @as(i64, @intCast(@divFloor(utils.nowReal().nanoseconds, 1_000_000_000)));
     // validator.hasBeenIssuedBy(publicKey.) // iss
     // validator.isRelatedTo("sub") // sub
     // validator.isIdentifiedBy("jti rrr") // jti
@@ -283,39 +248,28 @@ pub fn validateOAuthToken(self: *Self, allocator: std.mem.Allocator, authHeader:
     return;
 }
 
-pub fn retrieveUserName(self: *Self, allocator: std.mem.Allocator, authHeader: []const u8) AuthError!?[]const u8 {
-    _ = allocator;
-    var decoded: []u8 = undefined;
-    decoded = try self.container.allocator.alloc(u8, authHeader.len);
-    defer self.container.allocator.free(decoded);
+pub fn retrieveUserName(_: *Self, allocator: std.mem.Allocator, authHeader: []const u8) AuthError!?[]const u8 {
+    const token = authToken(authHeader) orelse return AuthError.InvalidAuthToken;
 
-    try Decoder.decode(decoded, authHeader);
+    const size = Decoder.calcSizeForSlice(token) catch return AuthError.InvalidPadding;
+    const decoded = try allocator.alloc(u8, size);
+    defer allocator.free(decoded);
+    Decoder.decode(decoded, token) catch return AuthError.InvalidPadding;
+
     var values = std.mem.splitAny(u8, decoded, ":");
-
     var headerKey: []const u8 = undefined;
-
     while (values.next()) |value| {
         headerKey = value;
         break;
     }
 
-    return headerKey;
+    // Return an owned copy: `decoded` is freed on return, so the username must
+    // outlive this call for the caller to serialize it (use-after-free otherwise).
+    return try allocator.dupe(u8, headerKey);
 }
 
 pub fn retrieveClaims(_: *Self, allocator: std.mem.Allocator, authHeader: []const u8) AuthError!jwtClaims {
-    var values = std.mem.splitAny(u8, authHeader, " ");
-
-    var header: []const u8 = undefined;
-    var token: []const u8 = undefined;
-    var index: i8 = 0;
-    while (values.next()) |value| {
-        if (index == 1) {
-            token = value;
-            break;
-        }
-        header = value;
-        index += 1;
-    }
+    const token = authToken(authHeader) orelse return AuthError.InvalidAuthToken;
 
     // split and identify the token key id
     var jwtTokenizer = jwt.Token.init(allocator);
@@ -371,9 +325,7 @@ pub fn refreshKeys(ctx: *Context) !void {
     ctx.info("oatuh keys refreshed");
 }
 
-
 // ===================== Tests =====================
-
 
 test "AuthMode.str returns correct strings" {
     try std.testing.expectEqualStrings("Basic", AuthMode.Basic.str());
@@ -451,4 +403,72 @@ test "validateBasicAuth accepts correct password" {
     defer allocator.free(header);
 
     try auth.validateBasicAuth(allocator, header);
+}
+
+test "retrieveUserName strips Basic prefix and decodes user" {
+    const allocator = std.testing.allocator;
+
+    var auth = AuthProvider{
+        .mode = AuthMode.Basic,
+        .container = undefined,
+        .keys = undefined,
+    };
+
+    var buf: [64]u8 = undefined;
+    const enc = std.base64.standard.Encoder.encode(&buf, "alice:secret");
+    const header = try std.fmt.allocPrint(allocator, "Basic {s}", .{enc});
+    defer allocator.free(header);
+
+    // Decoding the whole "Basic ..." header used to fail with InvalidPadding.
+    const user = try auth.retrieveUserName(allocator, header);
+    defer if (user) |u| allocator.free(u);
+    try std.testing.expectEqualStrings("alice", user.?);
+}
+
+test "validateAPIKeyAuth accepts bare key without scheme prefix" {
+    const allocator = std.testing.allocator;
+    var keys = std.StringHashMap([]const u8).init(allocator);
+    defer keys.deinit();
+    try keys.put("known-key", "valid");
+
+    var auth = AuthProvider{
+        .mode = AuthMode.APIKey,
+        .container = undefined,
+        .keys = keys,
+    };
+
+    // A bare key (no "ApiKey " prefix) is the normal client case. The old
+    // `index == 1` logic left `token` unassigned and hashed a wild pointer
+    // (GPE). It must now match directly.
+    try auth.validateAPIKeyAuth(allocator, "known-key");
+}
+
+test "validateAPIKeyAuth accepts scheme-prefixed key" {
+    const allocator = std.testing.allocator;
+    var keys = std.StringHashMap([]const u8).init(allocator);
+    defer keys.deinit();
+    try keys.put("known-key", "valid");
+
+    var auth = AuthProvider{
+        .mode = AuthMode.APIKey,
+        .container = undefined,
+        .keys = keys,
+    };
+
+    try auth.validateAPIKeyAuth(allocator, "ApiKey known-key");
+}
+
+test "validateAPIKeyAuth rejects unknown bare key" {
+    const allocator = std.testing.allocator;
+    var keys = std.StringHashMap([]const u8).init(allocator);
+    defer keys.deinit();
+    try keys.put("known-key", "valid");
+
+    var auth = AuthProvider{
+        .mode = AuthMode.APIKey,
+        .container = undefined,
+        .keys = keys,
+    };
+
+    try std.testing.expectError(AuthError.InvalidAuthAPIHeader, auth.validateAPIKeyAuth(allocator, "wrong-key"));
 }

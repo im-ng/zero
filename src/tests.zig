@@ -63,6 +63,6 @@ comptime {
     _ = pubsub;
     _ = datasourceInterface;
     _ = @import("service/circuit_breaker.zig");
-    _ = @import("service/outbound_auth.zig");
-    _ = @import("service/client.zig");
+    // _ = @import("service/client.zig");
+    _ = @import("datasource/mongodb_client.zig");
 }

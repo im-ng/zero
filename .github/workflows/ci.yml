@@ -29,6 +29,24 @@ jobs:
           --health-interval 10s
           --health-timeout 5s
           --health-retries 5
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      cassandra:
+        image: cassandra:4
+        ports:
+          - 9042:9042
+        options: >-
+          --health-cmd "cqlsh -e 'SELECT release_version FROM system.local'"
+          --health-interval 15s
+          --health-timeout 10s
+          --health-retries 20
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -54,6 +72,11 @@ jobs:
           DB_USER: postgres
           DB_PASSWORD: postgres
           DB_NAME: postgres
+          REDIS_HOST: redis
+          REDIS_PORT: "6379"
+          CASSANDRA_TEST: "1"
+          CASSANDRA_HOST: cassandra
+          CASSANDRA_PORT: "9042"
         run: |
           mkdir -p ~/.cache/zig/tmp
           zig build test-integration --summary all
@@ -77,7 +100,7 @@ jobs:
           echo "Updating coverage to ${NEW_COVERAGE}%"
           if [ "$NEW_COVERAGE" -lt 85 ]; then
             COLOR="red"
-          elif [ "$NEW_COVERAGE" -ge 95 ]; then
+          elif [ "$NEW_COVERAGE" -ge 90 ]; then
             COLOR="green"
           else
             COLOR="yellow"

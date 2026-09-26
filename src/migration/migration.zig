@@ -12,6 +12,7 @@ const zdt = root.zdt;
 const utils = root.utils;
 
 const sqlMigrator = @import("./SQL.zig");
+const nosqlMigrator = @import("./NoSQL.zig");
 
 request: *httpz.Request = undefined,
 response: *httpz.Response = undefined,
@@ -33,6 +34,19 @@ pub fn create(c: *root.container) !*migration {
     return m;
 }
 
+/// Frees the migration registry maps and the `migration` struct.
+pub fn deinit(self: *Self) void {
+    // `map` keys are duped copies owned by the registry; `map.deinit()` frees the
+    // buckets but not the key slices, so free them first.
+    var it = self.map.iterator();
+    while (it.next()) |e| {
+        self.container.allocator.free(e.key_ptr.*);
+    }
+    self.map.deinit();
+    self.keys.deinit();
+    self.container.allocator.destroy(self);
+}
+
 pub fn run(self: *Self) anyerror!void {
     std.mem.sort(i64, self.keys.items, {}, std.sort.asc(i64));
 
@@ -44,70 +58,127 @@ pub fn run(self: *Self) anyerror!void {
     );
     const ctx = &context;
 
-    // check and create migration table
-    try sqlMigrator.checkAndCreateMigrationTable(ctx);
+    // The migration context is stack-allocated and torn down at the end of this
+    // function, so free the heap-allocated Postgres session it created. The
+    // SQLite/DuckDB/ClickHouse backends reuse a shared, borrowed connection and
+    // need no cleanup. (This mirrors what the per-request arena does for HTTP
+    // traffic — the arena just resets instead of an explicit free.)
+    defer {
+        if (self.container.SQL != null) {
+            const session = @as(*root.SQL, @ptrCast(@alignCast(ctx.SQL.ptr)));
+            ctx.allocator.destroy(session);
+        }
+    }
 
-    const lastMigration = try sqlMigrator.lastMigration(ctx);
+    const relational_configured = self.container.SQL != null or self.container.SQLite != null or self.container.DuckDB != null or self.container.ClickHouse != null or self.container.DuckGres != null;
+    const nosql_configured = self.container.NoSQL != null;
 
-    // Serialize migration runs across replicas: a session-level advisory lock so
-    // two app instances starting up at once can't apply the same migration
-    // concurrently (Postgres only — SQLite has no advisory locks).
-    if (self.container.datasource.dialect == .postgres) {
-        ctx.SQL.exec(ctx, "SELECT pg_advisory_lock(9112025)", .{}) catch |err| {
-            ctx.any(err);
-            return error.MigrationLockFailed;
-        };
-        defer ctx.SQL.exec(ctx, "SELECT pg_advisory_unlock(9112025)", .{}) catch {};
+    var rel_last: i64 = 0;
+    var nosql_last: i64 = 0;
+
+    if (relational_configured) {
+        try sqlMigrator.checkAndCreateMigrationTable(ctx);
+        rel_last = try sqlMigrator.lastMigration(ctx);
+
+        // Serialize migration runs across replicas: a session-level advisory lock so
+        // two app instances starting up at once can't apply the same migration
+        // concurrently (Postgres only — SQLite/DuckDB/ClickHouse have no advisory locks).
+        if (self.container.datasource.dialect == .postgres) {
+            _ = ctx.SQL.exec(ctx, "SELECT pg_advisory_lock(9112025)", .{}) catch |err| {
+                ctx.any(err);
+                return error.MigrationLockFailed;
+            };
+
+            defer {
+                _ = ctx.SQL.exec(ctx, "SELECT pg_advisory_unlock(9112025)", .{}) catch {};
+            }
+        }
+    }
+
+    if (nosql_configured) {
+        try nosqlMigrator.checkAndCreateMigrationTable(ctx);
+        nosql_last = try nosqlMigrator.lastMigration(ctx);
     }
 
     for (self.keys.items) |key| {
-        const keyAsString = try util.toStringFromInt(
+        const keyAsString = try std.fmt.allocPrint(
             ctx.allocator,
             "{d}",
-            key,
+            .{key},
         );
+        defer ctx.allocator.free(keyAsString);
 
         const value = self.map.get(keyAsString);
 
         if (value) |m| {
-            if (m.migrationNumber <= lastMigration) {
-                ctx.debug(try self.migrationSkipped(ctx, m));
+            const last = if (m.target == .relational) rel_last else nosql_last;
+            if (m.migrationNumber <= last) {
+                self.migrationSkipped(ctx, m);
                 continue;
             }
 
             const start = util.nowReal();
 
-            ctx.SQL.begin() catch |err| {
-                ctx.any(err);
-                continue;
-            };
+            if (m.target == .relational) {
+                if (!relational_configured) {
+                    ctx.err("relational migration skipped: no relational datasource configured");
+                    continue;
+                }
 
-            m.run(ctx) catch |err| {
-                ctx.err(try self.executionError(ctx, m));
-                ctx.any(err);
-                // Do NOT record a failed migration as applied. Roll back whatever the
-                // migration did so a partial apply isn't left behind, and leave it
-                // *unrecorded* so it is retried on the next run instead of being
-                // masked as UP and permanently skipped.
-                ctx.SQL.rollback();
-                continue;
-            };
+                ctx.SQL.begin() catch |err| {
+                    ctx.any(err);
+                    continue;
+                };
 
-            const duration: u64 = @as(u64, @intCast(@divTrunc(start.nanoseconds, 1_000_000)));
+                m.run(ctx) catch |err| {
+                    self.executionError(ctx, m);
+                    ctx.any(err);
+                    // Do NOT record a failed migration as applied. Roll back whatever the
+                    // migration did so a partial apply isn't left behind, and leave it
+                    // *unrecorded* so it is retried on the next run instead of being
+                    // masked as UP and permanently skipped.
+                    ctx.SQL.rollback();
+                    continue;
+                };
 
-            _ = sqlMigrator.insertMigration(ctx, m, duration) catch |err| {
-                ctx.any(err);
-                ctx.SQL.rollback();
-                continue;
-            };
+                const duration: u64 = @as(u64, @intCast(@divFloor(start.nanoseconds, 1_000_000)));
 
-            ctx.SQL.commit() catch |err| {
-                ctx.any(err);
-                ctx.SQL.rollback();
-                continue;
-            };
+                _ = sqlMigrator.insertMigration(ctx, m, duration) catch |err| {
+                    ctx.any(err);
+                    ctx.SQL.rollback();
+                    continue;
+                };
 
-            ctx.info(try self.migrationCompleted(ctx, m));
+                ctx.SQL.commit() catch |err| {
+                    ctx.any(err);
+                    ctx.SQL.rollback();
+                    continue;
+                };
+
+                self.migrationCompleted(ctx, m);
+            } else {
+                if (!nosql_configured) {
+                    ctx.err("nosql migration skipped: no NoSQL datasource configured");
+                    continue;
+                }
+
+                m.run(ctx) catch |err| {
+                    self.executionError(ctx, m);
+                    ctx.any(err);
+                    // NoSQL/CQL has no transactions, so a failed migration is simply
+                    // left unrecorded (retried next run) rather than rolled back.
+                    continue;
+                };
+
+                const duration: u64 = @as(u64, @intCast(@divFloor(start.nanoseconds, 1_000_000)));
+
+                nosqlMigrator.insertMigration(ctx, m, duration) catch |err| {
+                    ctx.any(err);
+                    continue;
+                };
+
+                self.migrationCompleted(ctx, m);
+            }
         }
     }
 }
@@ -117,17 +188,26 @@ pub fn migrationKey(_: *Self, ctx: *Context, m: *const migrate) ![]const u8 {
     return msg;
 }
 
-pub fn migrationCompleted(_: *Self, ctx: *Context, m: *const migrate) ![]const u8 {
-    const msg = try util.toStringFromInt(ctx.allocator, "{d}: migration completed  ", m.migrationNumber);
-    return msg;
+pub fn migrationCompleted(self: *Self, ctx: *Context, m: *const migrate) void {
+    _ = self;
+
+    const msg = std.fmt.allocPrint(ctx.allocator, "{d}: migration completed  ", .{m.migrationNumber}) catch return;
+    ctx.info(msg);
+    ctx.allocator.free(msg);
 }
 
-pub fn migrationSkipped(_: *Self, ctx: *Context, m: *const migrate) ![]const u8 {
-    const msg = try util.toStringFromInt(ctx.allocator, "{d}: migration is skipped  ", m.migrationNumber);
-    return msg;
+pub fn migrationSkipped(self: *Self, ctx: *Context, m: *const migrate) void {
+    _ = self;
+
+    const msg = std.fmt.allocPrint(ctx.allocator, "{d}: migration is skipped  ", .{m.migrationNumber}) catch return;
+    ctx.debug(msg);
+    ctx.allocator.free(msg);
 }
 
-pub fn executionError(_: *Self, ctx: *Context, m: *const migrate) ![]const u8 {
-    const msg = try util.toStringFromInt(ctx.allocator, "{d}: migration has execution error  ", m.migrationNumber);
-    return msg;
+pub fn executionError(self: *Self, ctx: *Context, m: *const migrate) void {
+    _ = self;
+
+    const msg = std.fmt.allocPrint(ctx.allocator, "{d}: migration has execution error  ", .{m.migrationNumber}) catch return;
+    ctx.err(msg);
+    ctx.allocator.free(msg);
 }

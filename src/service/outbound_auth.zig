@@ -67,9 +67,7 @@ pub const OutboundAuth = struct {
     }
 };
 
-
 // ===================== Tests =====================
-
 
 test "buildHeader basic encodes credentials" {
     const auth = OutboundAuth{ .mode = .basic, .basic = .{ .username = "user", .password = "pass" } };

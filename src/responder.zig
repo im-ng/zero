@@ -9,9 +9,7 @@ pub fn Do(comptime ActionContext: type) type {
     return *const fn (ActionContext) anyerror!void;
 }
 
-
 // ===================== Tests =====================
-
 
 test "Do void type returns no-arg function pointer" {
     const Fn = Do(void);

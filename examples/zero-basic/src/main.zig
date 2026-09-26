@@ -73,6 +73,14 @@ pub fn main(init: std.process.Init) !void {
 
     try app.get("/nosql/get", nosqlGet);
 
+    try app.get("/clickhouse/query", clickhouseQuery);
+
+    try app.get("/clickhouse/write", clickhouseWrite);
+
+    try app.get("/couchbase/put", couchbasePut);
+
+    try app.get("/couchbase/get", couchbaseGet);
+
     try app.run();
 
     // Bail out if leak detected on load test
@@ -83,7 +91,7 @@ pub fn main(init: std.process.Init) !void {
 
 pub fn prepareDatasources(ctx: *Context) !void {
     _ = try ctx.SQL.exec(ctx, "CREATE TABLE IF NOT EXISTS users (id INTEGER, name VARCHAR)", .{});
-    _ = try ctx.SQL.exec(ctx, "INSERT INTO users SELECT 1, 'alice' WHERE NOT EXISTS (SELECT 1 FROM users)", .{});
+    _ = try ctx.SQL.exec(ctx, "INSERT INTO users SELECT 1, 'sashti' WHERE NOT EXISTS (SELECT 1 FROM users)", .{});
 }
 
 pub fn memoryUsage(ctx: *Context) !void {
@@ -203,7 +211,7 @@ pub fn dbResponse(ctx: *Context) !void {
 
 pub fn tsWrite(ctx: *Context) !void {
     if (ctx.Timeseries) |ts| {
-        try ts.write(ctx, "demo", "host=example", "value=1.0", null);
+        try ts.write(ctx, "demo,host=example value=1.0");
         try ctx.response.json(.{ .status = "written" }, .{});
     } else {
         ctx.response.setStatus(.not_implemented);
@@ -221,8 +229,6 @@ pub fn tsQuery(ctx: *Context) !void {
         try ctx.response.json(.{ .message = "INFLUXDB_URL not configured" }, .{});
     }
 }
-
-// --- Round 1: search (Solr) ---
 
 pub fn solrIndex(ctx: *Context) !void {
     if (ctx.Search) |s| {
@@ -245,11 +251,9 @@ pub fn solrQuery(ctx: *Context) !void {
     }
 }
 
-// --- Round 1: NoSQL (Cassandra) ---
-
 pub fn nosqlPut(ctx: *Context) !void {
     if (ctx.NoSQL) |n| {
-        try n.put(ctx, "users", "alice", "{\"age\":30}");
+        try n.put(ctx, "INSERT INTO users (id, data) VALUES ('alice', '{\"age\":30}')");
         try ctx.response.json(.{ .status = "stored" }, .{});
     } else {
         ctx.response.setStatus(.not_implemented);
@@ -259,7 +263,7 @@ pub fn nosqlPut(ctx: *Context) !void {
 
 pub fn nosqlGet(ctx: *Context) !void {
     if (ctx.NoSQL) |n| {
-        const doc = try n.get(ctx, "users", "alice");
+        const doc = try n.get(ctx, "SELECT data FROM users WHERE id = 'alice'");
         if (doc) |d| {
             defer ctx.allocator.free(d);
             try ctx.response.json(.{ .doc = d }, .{});
@@ -270,4 +274,85 @@ pub fn nosqlGet(ctx: *Context) !void {
         ctx.response.setStatus(.not_implemented);
         try ctx.response.json(.{ .message = "CASSANDRA_CONTACT_POINTS not configured" }, .{});
     }
+}
+
+pub fn clickhouseWrite(ctx: *Context) !void {
+    if (ctx.container.ClickHouse) |_| {
+        const name: []const u8 = "alice";
+        _ = ctx.SQL.exec(ctx, "CREATE TABLE IF NOT EXISTS events (id Int64, name String)", .{}) catch |e| {
+            if (e == error.ClickHouseQueryFailed and respondUpstreamError(ctx, ctx.SQL.lastError())) return;
+            return e;
+        };
+        _ = ctx.SQL.exec(ctx, "INSERT INTO events (id, name) VALUES (?, ?)", .{ @as(i64, 1), name }) catch |e| {
+            if (e == error.ClickHouseQueryFailed and respondUpstreamError(ctx, ctx.SQL.lastError())) return;
+            return e;
+        };
+        try ctx.response.json(.{ .status = "stored" }, .{});
+    } else {
+        ctx.response.setStatus(.not_implemented);
+        try ctx.response.json(.{ .message = "CLICKHOUSE_URL not configured" }, .{});
+    }
+}
+
+pub fn clickhouseQuery(ctx: *Context) !void {
+    if (ctx.container.ClickHouse) |_| {
+        const Event = struct { id: i64, name: []const u8 };
+        const row = ctx.SQL.queryRow(ctx, Event, "SELECT id, name FROM events LIMIT 1", .{}) catch |e| {
+            if (e == error.ClickHouseQueryFailed and respondUpstreamError(ctx, ctx.SQL.lastError())) return;
+            return e;
+        };
+        if (row) |r| {
+            try ctx.response.json(.{ .event = r }, .{});
+        } else {
+            try ctx.response.json(.{ .event = null }, .{});
+        }
+    } else {
+        ctx.response.setStatus(.not_implemented);
+        try ctx.response.json(.{ .message = "CLICKHOUSE_URL not configured" }, .{});
+    }
+}
+
+pub fn couchbasePut(ctx: *Context) !void {
+    if (ctx.NoSQL) |n| {
+        n.put(ctx, "INSERT INTO users (id, data) VALUES ('alice', '{\"age\":30}')") catch |e| {
+            if (e == error.CouchbaseQueryFailed and respondUpstreamError(ctx, ctx.NoSQL.?.lastError())) return;
+            return e;
+        };
+        try ctx.response.json(.{ .status = "stored" }, .{});
+    } else {
+        ctx.response.setStatus(.not_implemented);
+        try ctx.response.json(.{ .message = "COUCHBASE_CONTACT_POINTS not configured" }, .{});
+    }
+}
+
+pub fn couchbaseGet(ctx: *Context) !void {
+    if (ctx.NoSQL) |n| {
+        const doc = n.get(ctx, "SELECT data FROM users WHERE id = 'alice'") catch |e| {
+            if (e == error.CouchbaseQueryFailed and respondUpstreamError(ctx, ctx.NoSQL.?.lastError())) return;
+            return e;
+        };
+        if (doc) |d| {
+            defer ctx.allocator.free(d);
+            try ctx.response.json(.{ .doc = d }, .{});
+        } else {
+            try ctx.response.json(.{ .doc = null }, .{});
+        }
+    } else {
+        ctx.response.setStatus(.not_implemented);
+        try ctx.response.json(.{ .message = "COUCHBASE_CONTACT_POINTS not configured" }, .{});
+    }
+}
+
+/// Surface an upstream datasource failure as an explicit error response. The
+/// datasource no longer logs; status + message come from `detail` (read via the
+/// backend/interface `lastError()` accessor). Returns `true` when handled.
+fn respondUpstreamError(ctx: *Context, detail: ?zero.Error.DataSourceError) bool {
+    const d = detail orelse return false;
+    ctx.response.setStatus(switch (d.status) {
+        401, 403 => .unauthorized,
+        404 => .not_found,
+        else => .bad_gateway,
+    });
+    ctx.response.json(.{ .err = "upstream_failed", .status = d.status, .message = d.message }, .{}) catch {};
+    return true;
 }

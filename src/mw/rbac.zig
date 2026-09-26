@@ -201,9 +201,7 @@ fn isWellKnownPath(_: *const rbac, req: *httpz.Request) bool {
     return false;
 }
 
-
 // ===================== Tests =====================
-
 
 test "rbac allows public route with no rule" {
     var rb = RBAC.init(std.testing.allocator);
@@ -304,4 +302,3 @@ test "rbac exempt bypasses role check" {
     // non-exempt method on same path still requires a role rule
     try std.testing.expect(!rb.allows("anonymous", "POST", "/healthz"));
 }
-

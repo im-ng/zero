@@ -6,6 +6,8 @@ const Context = root.Context;
 const SQL = root.SQL;
 const SQLite = root.SQLite;
 const DuckDB = root.DuckDB;
+const ClickHouse = root.ClickHouse;
+const DuckGres = root.DuckGres;
 const Datasource = root.Datasource;
 const MockBackend = root.datasourceInterface.MockBackend;
 
@@ -73,19 +75,25 @@ fn buildStmts(comptime T: type, comptime table: []const u8, comptime id_field: [
 
     comptime var c: []const u8 = "";
     inline for (fields, 0..) |f, i| {
-        if (i > 0) c = c ++ ",";
+        if (i > 0) {
+            c = c ++ ",";
+        }
         c = c ++ f.name;
     }
 
     comptime var pgph: []const u8 = "";
     inline for (0..n) |i| {
-        if (i > 0) pgph = pgph ++ ",";
+        if (i > 0) {
+            pgph = pgph ++ ",";
+        }
         pgph = pgph ++ std.fmt.comptimePrint("${d}", .{i + 1});
     }
 
     comptime var qph: []const u8 = "";
     inline for (0..n) |i| {
-        if (i > 0) qph = qph ++ ",";
+        if (i > 0) {
+            qph = qph ++ ",";
+        }
         qph = qph ++ "?";
     }
 
@@ -129,6 +137,14 @@ fn backendDuckDB(ctx: *Context) *DuckDB {
     return @as(*DuckDB, @ptrCast(@alignCast(ctx.SQL.ptr)));
 }
 
+fn backendClickHouse(ctx: *Context) *ClickHouse {
+    return @as(*ClickHouse, @ptrCast(@alignCast(ctx.SQL.ptr)));
+}
+
+fn backendDuckGres(ctx: *Context) *DuckGres {
+    return @as(*DuckGres, @ptrCast(@alignCast(ctx.SQL.ptr)));
+}
+
 fn listHandler(comptime T: type, comptime st: Stmts) *const fn (*Context) anyerror!void {
     const impl = struct {
         fn call(ctx: *Context) anyerror!void {
@@ -137,12 +153,20 @@ fn listHandler(comptime T: type, comptime st: Stmts) *const fn (*Context) anyerr
                     const rows = try backendPg(ctx).queryRows(ctx, T, st.list, .{});
                     try ctx.json(rows);
                 },
+                .duckgres => {
+                    const rows = try backendDuckGres(ctx).queryRows(ctx, T, st.list, .{});
+                    try ctx.json(rows);
+                },
                 .sqlite => {
                     const rows = try backendSqlite(ctx).queryRows(ctx, T, st.list, .{});
                     try ctx.json(rows);
                 },
                 .duckdb => {
                     const rows = try backendDuckDB(ctx).queryRows(ctx, T, st.list, .{});
+                    try ctx.json(rows);
+                },
+                .clickhouse => {
+                    const rows = try backendClickHouse(ctx).queryRows(ctx, T, st.list, .{});
                     try ctx.json(rows);
                 },
                 .mock => {
@@ -167,8 +191,10 @@ fn getHandler(comptime T: type, comptime st: Stmts, comptime id_idx: usize) *con
             };
             const row = switch (ctx.SQL.dialect) {
                 .postgres => try backendPg(ctx).queryRow(ctx, T, st.get_pg, .{idv}),
+                .duckgres => try backendDuckGres(ctx).queryRow(ctx, T, st.get_pg, .{idv}),
                 .sqlite => try backendSqlite(ctx).queryRow(ctx, T, st.get_q, .{idv}),
                 .duckdb => try backendDuckDB(ctx).queryRow(ctx, T, st.get_q, .{idv}),
+                .clickhouse => try backendClickHouse(ctx).queryRow(ctx, T, st.get_q, .{idv}),
                 .mock => try @as(*MockBackend, @ptrCast(@alignCast(ctx.SQL.ptr))).queryRow(ctx, T, st.get_q, .{idv}),
             };
             if (row) |r| {
@@ -198,8 +224,10 @@ fn createHandler(comptime T: type, comptime st: Stmts) *const fn (*Context) anye
             const args = toTuple(T, o, null);
             switch (ctx.SQL.dialect) {
                 .postgres => _ = try backendPg(ctx).execWithContext(ctx, st.insert_pg, args),
+                .duckgres => _ = try backendDuckGres(ctx).execWithContext(ctx, st.insert_pg, args),
                 .sqlite => _ = try backendSqlite(ctx).execWithContext(ctx, st.insert_q, args),
                 .duckdb => _ = try backendDuckDB(ctx).execWithContext(ctx, st.insert_q, args),
+                .clickhouse => _ = try backendClickHouse(ctx).execWithContext(ctx, st.insert_q, args),
                 .mock => _ = try @as(*MockBackend, @ptrCast(@alignCast(ctx.SQL.ptr))).execWithContext(ctx, st.insert_q, args),
             }
             try ctx.json(o);
@@ -232,8 +260,10 @@ fn updateHandler(comptime T: type, comptime st: Stmts, comptime id_idx: usize) *
             const args = toTuple(T, o, id_idx);
             const updated = switch (ctx.SQL.dialect) {
                 .postgres => (try backendPg(ctx).execWithContext(ctx, st.update_pg, args)) > 0,
+                .duckgres => (try backendDuckGres(ctx).execWithContext(ctx, st.update_pg, args)) > 0,
                 .sqlite => (try backendSqlite(ctx).execWithContext(ctx, st.update_q, args)) > 0,
                 .duckdb => (try backendDuckDB(ctx).execWithContext(ctx, st.update_q, args)) > 0,
+                .clickhouse => (try backendClickHouse(ctx).execWithContext(ctx, st.update_q, args)) > 0,
                 .mock => (try @as(*MockBackend, @ptrCast(@alignCast(ctx.SQL.ptr))).execWithContext(ctx, st.update_q, args)) > 0,
             };
             if (!updated) {
@@ -243,8 +273,10 @@ fn updateHandler(comptime T: type, comptime st: Stmts, comptime id_idx: usize) *
             }
             const row = switch (ctx.SQL.dialect) {
                 .postgres => try backendPg(ctx).queryRow(ctx, T, st.get_pg, .{idv}),
+                .duckgres => try backendDuckGres(ctx).queryRow(ctx, T, st.get_pg, .{idv}),
                 .sqlite => try backendSqlite(ctx).queryRow(ctx, T, st.get_q, .{idv}),
                 .duckdb => try backendDuckDB(ctx).queryRow(ctx, T, st.get_q, .{idv}),
+                .clickhouse => try backendClickHouse(ctx).queryRow(ctx, T, st.get_q, .{idv}),
                 .mock => try @as(*MockBackend, @ptrCast(@alignCast(ctx.SQL.ptr))).queryRow(ctx, T, st.get_q, .{idv}),
             };
             if (row) |r| {
@@ -273,6 +305,10 @@ fn deleteHandler(comptime T: type, comptime st: Stmts, comptime id_idx: usize) *
                     _ = try backendPg(ctx).execWithContext(ctx, st.delete_pg, .{idv});
                     break :blk backendPg(ctx).rowsAffected();
                 },
+                .duckgres => blk: {
+                    _ = try backendDuckGres(ctx).execWithContext(ctx, st.delete_pg, .{idv});
+                    break :blk backendDuckGres(ctx).rowsAffected();
+                },
                 .sqlite => blk: {
                     _ = try backendSqlite(ctx).execWithContext(ctx, st.delete_q, .{idv});
                     break :blk backendSqlite(ctx).rowsAffected();
@@ -280,6 +316,10 @@ fn deleteHandler(comptime T: type, comptime st: Stmts, comptime id_idx: usize) *
                 .duckdb => blk: {
                     _ = try backendDuckDB(ctx).execWithContext(ctx, st.delete_q, .{idv});
                     break :blk backendDuckDB(ctx).rowsAffected();
+                },
+                .clickhouse => blk: {
+                    _ = try backendClickHouse(ctx).execWithContext(ctx, st.delete_q, .{idv});
+                    break :blk backendClickHouse(ctx).rowsAffected();
                 },
                 .mock => blk: {
                     _ = try @as(*MockBackend, @ptrCast(@alignCast(ctx.SQL.ptr))).execWithContext(ctx, st.delete_q, .{idv});
@@ -298,7 +338,7 @@ fn deleteHandler(comptime T: type, comptime st: Stmts, comptime id_idx: usize) *
 }
 
 /// Registers list/get/create/update/delete REST handlers for struct `T` against
-/// the configured SQL datasource (Postgres, SQLite, or DuckDB — all are
+/// the configured SQL datasource (Postgres, SQLite, DuckDB, or DuckGres — all are
 /// generated and dispatched at runtime on `ctx.SQL.dialect`).
 pub fn addRestHandlers(self: *App, comptime T: type, comptime opts: AutoCrudOptions) !void {
     const table = if (opts.table.len > 0) opts.table else opts.resource;
@@ -326,9 +366,7 @@ pub fn addRestHandlers(self: *App, comptime T: type, comptime opts: AutoCrudOpti
 
 const Sample = struct { id: i64, name: []const u8, email: []const u8 };
 
-
 // ===================== Tests =====================
-
 
 test "AutoCrud generates dialect-correct SQL" {
     const st = comptime buildStmts(Sample, "users", "id", 0);

@@ -35,6 +35,17 @@ const migrationTableSQLite =
     \\ )
 ;
 
+/// ClickHouse has no transaction support and requires an explicit engine;
+/// `MergeTree ORDER BY epoch` gives a usable primary-ordering table.
+const migrationTableClickHouse =
+    \\ CREATE TABLE IF NOT EXISTS zero_migrations (
+    \\ epoch Int64,
+    \\ execution String,
+    \\ start_time String,
+    \\ duration Int64
+    \\ ) ENGINE = MergeTree() ORDER BY epoch
+;
+
 const lastMigrationRecord =
     \\SELECT epoch, execution, start_time, duration FROM zero_migrations order by epoch desc limit 1
 ;
@@ -45,11 +56,28 @@ const insertMigrationRecordPostgres =
 
 pub fn checkAndCreateMigrationTable(ctx: *Context) !void {
     const dialect = ctx.container.config.get("DB_DIALECT");
-    if (std.mem.eql(u8, "postgres", dialect)) {
+    if (std.mem.eql(u8, "postgres", dialect) or std.mem.eql(u8, "duckgres", dialect)) {
         _ = try ctx.SQL.exec(ctx, migrationTablePostgres, .{});
         ctx.info("migration table created");
     } else if (std.mem.eql(u8, "sqlite", dialect)) {
         _ = ctx.SQL.exec(ctx, migrationTableSQLite, .{}) catch |err| {
+            var buffer: []u8 = undefined;
+            buffer = try ctx.allocator.alloc(u8, 100);
+            buffer = try std.fmt.bufPrint(buffer, "migration table creation failed: {}", .{err});
+            return;
+        };
+        ctx.info("migration table created");
+    } else if (std.mem.eql(u8, "duckdb", dialect)) {
+        // DuckDB understands the SQLite-shaped DDL above.
+        _ = ctx.SQL.exec(ctx, migrationTableSQLite, .{}) catch |err| {
+            var buffer: []u8 = undefined;
+            buffer = try ctx.allocator.alloc(u8, 100);
+            buffer = try std.fmt.bufPrint(buffer, "migration table creation failed: {}", .{err});
+            return;
+        };
+        ctx.info("migration table created");
+    } else if (std.mem.eql(u8, "clickhouse", dialect)) {
+        _ = ctx.SQL.exec(ctx, migrationTableClickHouse, .{}) catch |err| {
             var buffer: []u8 = undefined;
             buffer = try ctx.allocator.alloc(u8, 100);
             buffer = try std.fmt.bufPrint(buffer, "migration table creation failed: {}", .{err});
@@ -62,14 +90,24 @@ pub fn checkAndCreateMigrationTable(ctx: *Context) !void {
 pub fn lastMigration(ctx: *Context) !i64 {
     const dialect = ctx.container.config.get("DB_DIALECT");
 
-    if (std.mem.eql(u8, "postgres", dialect)) {
+    if (std.mem.eql(u8, "postgres", dialect) or std.mem.eql(u8, "duckgres", dialect)) {
         const result = try ctx.SQL.queryRowContext(ctx, zeroTable, lastMigrationRecord, .{});
         if (result) |r| {
+            // pg dupes the text columns (`execution`, `start_time`) into
+            // `ctx.allocator`; free them before returning the scalar we care about.
+            defer {
+                ctx.allocator.free(r.execution);
+                ctx.allocator.free(r.start_time);
+            }
             return r.epoch;
         }
-    } else if (std.mem.eql(u8, "sqlite", dialect)) {
+    } else if (std.mem.eql(u8, "sqlite", dialect) or std.mem.eql(u8, "duckdb", dialect) or std.mem.eql(u8, "clickhouse", dialect)) {
         const result = try ctx.SQL.queryRowContext(ctx, zeroTable, lastMigrationRecord, .{});
         if (result) |r| {
+            defer {
+                ctx.allocator.free(r.execution);
+                ctx.allocator.free(r.start_time);
+            }
             return r.epoch;
         }
     }
@@ -79,32 +117,30 @@ pub fn lastMigration(ctx: *Context) !i64 {
 
 pub fn insertMigration(ctx: *Context, m: *const migrate, duration: u64) !i64 {
     const dialect = ctx.container.config.get("DB_DIALECT");
-    if (std.mem.eql(u8, "postgres", dialect)) {
-        const epoch = m.migrationNumber;
-        const status = "UP";
-        const startTime = try utils.sqlTimestampz(ctx.allocator);
+    const epoch = m.migrationNumber;
+    const status = "UP";
+    const startTime = try utils.sqlTimestampz(ctx.allocator);
+    // `sqlTimestampz` returns a caller-owned buffer; free it once the bind is done.
+    defer ctx.allocator.free(startTime);
 
+    if (std.mem.eql(u8, "postgres", dialect) or std.mem.eql(u8, "duckgres", dialect)) {
         return try ctx.SQL.exec(ctx, insertMigrationRecordPostgres, .{ epoch, status, startTime, duration });
-    } else if (std.mem.eql(u8, "sqlite", dialect)) {
-        const epoch = m.migrationNumber;
-        const status = "UP";
-        const startTime = try utils.sqlTimestampz(ctx.allocator);
-
-        _ = ctx.SQL.exec(
-            ctx,
-            "INSERT INTO zero_migrations (epoch, execution, start_time, duration) VALUES (?, ?, ?, ?)",
-            .{ epoch, status, startTime, duration },
-        ) catch |err| {
-            var buffer: []u8 = undefined;
-            buffer = try ctx.allocator.alloc(u8, 100);
-            buffer = try std.fmt.bufPrint(buffer, "migration insert failed: {}", .{err});
-            return 0;
-        };
-
-        return ctx.SQL.lastInsertRowID();
     }
 
-    return 0;
+    // sqlite / duckdb / clickhouse share `?` positional placeholders; ClickHouse
+    // interpolates them, duckdb/sqlite bind them.
+    _ = ctx.SQL.exec(
+        ctx,
+        "INSERT INTO zero_migrations (epoch, execution, start_time, duration) VALUES (?, ?, ?, ?)",
+        .{ epoch, status, startTime, duration },
+    ) catch |err| {
+        var buffer: []u8 = undefined;
+        buffer = try ctx.allocator.alloc(u8, 100);
+        buffer = try std.fmt.bufPrint(buffer, "migration insert failed: {}", .{err});
+        return 0;
+    };
+
+    return ctx.SQL.lastInsertRowID();
 }
 
 // pub fn commitExecution(c: *container) !void {}

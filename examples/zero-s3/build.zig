@@ -25,6 +25,6 @@ pub fn build(b: *std.Build) void {
         run_cmd.addArgs(args);
     }
 
-    const run_step = b.step("zero-s3", "Run zero S3 file store example");
+    const run_step = b.step("run", "Run zero S3 file store example");
     run_step.dependOn(&run_cmd.step);
 }

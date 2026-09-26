@@ -14,6 +14,7 @@
         // .zdt = .{ .path = "../zdt" },
         // .dotenv = .{ .path = "../dotenv" },
         // .sqlite = .{ .path = "../zig-sqlite" },
+        // .zf = .{ .path = "../zf" },
         .zdt = .{
             .url = "git+https://codeberg.org/FObersteiner/zdt.git#0db1d32005b7058fea0138e97976cc55b58b403d",
             .hash = "zdt-0.9.5-xr0_vK7ZEQDFyjfdx_ds5WMEMEUCfUkOnNqLNyvaA8b9",
@@ -74,6 +75,10 @@
         .opentelemetry = .{
             .url = "git+https://github.com/im-ng/opentelemetry-zig.git#928f309694b0dc8ee02c45b4067b96f3d9cc01fd",
             .hash = "opentelemetry-0.0.1-U_uKJ8NrIwD5nbZmmLowE41NMPGhiwKQ1sCb3K3L-0lV",
+        },
+        .zf = .{
+            .url = "git+https://github.com/im-ng/zf.git#d4eb03086ce4f68117b994eb90f625c268d7aa92",
+            .hash = "zf-0.1.2-_F0afypSAQAjnG_X5THdAVO79IJls-aHP-uu1MNLHe82",
         },
     },
     .paths = .{

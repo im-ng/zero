@@ -1,22 +1,14 @@
 const std = @import("std");
+const utils = @import("../utils.zig");
 
-const linux = std.os.linux;
-
-/// Linux `struct sockaddr_in` layout (family, port, addr, padding).
-const SockAddrIn = extern struct {
-    family: u16 = linux.AF.INET,
-    port: u16,
-    addr: u32,
-    zero: [8]u8 = [_]u8{0} ** 8,
-};
-
-const List = std.array_list.AlignedManaged(u8, null);
+const Io = std.Io;
+const net = Io.net;
 
 /// Minimal Apache Cassandra native protocol v4 client (binary CQL), implemented
-/// directly on `std.posix` so it has no external dependencies. Covers the subset
-/// needed by the `NoSQL` interface: STARTUP/AUTH handshake + QUERY (no bound
-/// values, consistency ONE) + Rows result parsing. Compression is not negotiated.
-
+/// on `std.Io.net` so it is portable across Linux and macOS (no `std.os.linux`
+/// syscalls). Covers the subset needed by the `NoSQL` interface: STARTUP/AUTH
+/// handshake + QUERY (no bound values, consistency ONE) + Rows result parsing.
+/// Compression is not negotiated.
 pub const Consistency = enum(u16) {
     any = 0x0000,
     one = 0x0001,
@@ -64,10 +56,16 @@ pub const QueryResult = struct {
     rows: []Row,
 
     pub fn deinit(self: *QueryResult) void {
-        for (self.columns) |c| self.allocator.free(c.name);
+        for (self.columns) |c| {
+            self.allocator.free(c.name);
+        }
         self.allocator.free(self.columns);
         for (self.rows) |r| {
-            for (r.cells) |c| if (c.data) |d| self.allocator.free(d);
+            for (r.cells) |c| {
+                if (c.data) |d| {
+                    self.allocator.free(d);
+                }
+            }
             self.allocator.free(r.cells);
         }
         self.allocator.free(self.rows);
@@ -75,13 +73,17 @@ pub const QueryResult = struct {
 
     /// Render the rows as a JSON array of objects, using `alloc` for output.
     pub fn toJson(self: *const QueryResult, alloc: std.mem.Allocator) ![]u8 {
-        var buf = List.init(alloc);
+        var buf: std.array_list.Managed(u8) = .init(alloc);
         try buf.append('[');
         for (self.rows, 0..) |row, ri| {
-            if (ri > 0) try buf.append(',');
+            if (ri > 0) {
+                try buf.append(',');
+            }
             try buf.append('{');
             for (row.cells, self.columns, 0..) |cell, col, ci| {
-                if (ci > 0) try buf.append(',');
+                if (ci > 0) {
+                    try buf.append(',');
+                }
                 try writeJsonString(&buf, col.name);
                 try buf.append(':');
                 try writeValue(&buf, alloc, cell);
@@ -95,14 +97,28 @@ pub const QueryResult = struct {
 
 pub const Connection = struct {
     allocator: std.mem.Allocator,
-    fd: ?linux.fd_t = null,
+    stream: net.Stream,
+    stream_reader: net.Stream.Reader,
+    stream_writer: net.Stream.Writer,
+    buf: []u8,
+    read_buf: []u8,
+    write_buf: []u8,
     contact_points: []const u8,
     user: []const u8,
     pass: []const u8,
+    /// When set, a `USE` statement is issued right after the auth handshake so
+    /// every later statement runs in this keyspace without re-qualifying it.
+    keyspace: ?[]const u8 = null,
+    connected: bool = false,
     mutex: std.atomic.Mutex = .unlocked,
+
+    const read_buffer_size = 1 << 16;
+    const write_buffer_size = 1 << 16;
 
     fn lock(self: *Connection) void {
         while (!self.mutex.tryLock()) {
+            // Best-effort: yielding is an optimization while spinning for the lock;
+            // if it fails there is nothing to do but retry.
             std.Thread.yield() catch {};
         }
     }
@@ -111,76 +127,62 @@ pub const Connection = struct {
         self.mutex.unlock();
     }
 
-    pub fn init(allocator: std.mem.Allocator, contact_points: []const u8, user: []const u8, pass: []const u8) Connection {
-        return .{
+    pub fn init(allocator: std.mem.Allocator, contact_points: []const u8, user: []const u8, pass: []const u8, keyspace: ?[]const u8) Connection {
+        const buf = allocator.alloc(u8, read_buffer_size + write_buffer_size) catch @panic("oom");
+        const read_buf = buf[0..read_buffer_size];
+        const write_buf = buf[read_buffer_size..][0..write_buffer_size];
+        const self: Connection = .{
             .allocator = allocator,
+            .stream = undefined,
+            .stream_reader = undefined,
+            .stream_writer = undefined,
+            .buf = buf,
+            .read_buf = read_buf,
+            .write_buf = write_buf,
             .contact_points = contact_points,
             .user = user,
             .pass = pass,
+            .keyspace = keyspace,
         };
+        return self;
     }
 
     pub fn deinit(self: *Connection) void {
-        if (self.fd) |fd| _ = linux.close(fd);
-        self.fd = null;
+        if (self.connected) {
+            self.stream.close(utils.io);
+        }
+        self.allocator.free(self.buf);
+    }
+
+    fn connectHost(host: []const u8, port: u16) !net.Stream {
+        const addr = net.IpAddress.parse(host, port) catch try net.IpAddress.resolve(utils.io, host, port);
+        return try addr.connect(utils.io, .{ .mode = .stream });
     }
 
     fn ensureConnected(self: *Connection) !void {
-        if (self.fd != null) return;
+        if (self.connected) return;
         var it = std.mem.tokenizeScalar(u8, self.contact_points, ',');
         while (it.next()) |cp| {
             const hostport = std.mem.trim(u8, cp, " ");
-            if (try connectOne(hostport)) |fd| {
-                self.fd = fd;
-                try self.handshake();
-                return;
-            }
+            const sep = std.mem.indexOfScalar(u8, hostport, ':') orelse continue;
+            const host = hostport[0..sep];
+            const port = std.fmt.parseInt(u16, std.mem.trim(u8, hostport[sep + 1 ..], " "), 10) catch continue;
+            const stream = connectHost(host, port) catch continue;
+            self.stream = stream;
+            self.stream_reader = stream.reader(utils.io, self.read_buf);
+            self.stream_writer = stream.writer(utils.io, self.write_buf);
+            self.handshake() catch {
+                stream.close(utils.io);
+                continue;
+            };
+            self.connected = true;
+            return;
         }
         return error.CassandraConnectionFailed;
     }
 
-    fn connectOne(hostport: []const u8) !?linux.fd_t {
-        const sep = std.mem.indexOfScalar(u8, hostport, ':') orelse return null;
-        const host = hostport[0..sep];
-        const port = std.fmt.parseInt(u16, std.mem.trim(u8, hostport[sep + 1 ..], " "), 10) catch return null;
-
-        const rc = linux.socket(linux.AF.INET, linux.SOCK.STREAM, 0);
-        if (linux.errno(rc) != .SUCCESS) return null;
-        const fd: linux.fd_t = @intCast(rc);
-
-        var sa: SockAddrIn = .{
-            .port = std.mem.nativeToBig(u16, port),
-            .addr = parseIpv4(host) catch {
-                _ = linux.close(fd);
-                return null;
-            },
-        };
-
-        const rc2 = linux.connect(fd, @ptrCast(&sa), @sizeOf(SockAddrIn));
-        if (linux.errno(rc2) != .SUCCESS) {
-            _ = linux.close(fd);
-            return null;
-        }
-        return fd;
-    }
-
-    fn parseIpv4(host: []const u8) !u32 {
-        var octets: [4]u32 = undefined;
-        var i: usize = 0;
-        var it = std.mem.tokenizeScalar(u8, host, '.');
-        while (i < 4) {
-            const part = it.next() orelse return error.InvalidIp;
-            octets[i] = try std.fmt.parseInt(u32, part, 10);
-            if (octets[i] > 255) return error.InvalidIp;
-            i += 1;
-        }
-        if (it.next() != null) return error.InvalidIp;
-        const raw = (octets[0] << 24) | (octets[1] << 16) | (octets[2] << 8) | octets[3];
-        return std.mem.nativeToBig(u32, raw);
-    }
-
     fn handshake(self: *Connection) !void {
-        var body = std.array_list.AlignedManaged(u8, null).init(self.allocator);
+        var body = std.array_list.Managed(u8).init(self.allocator);
         defer body.deinit();
         const entries = [_]struct { k: []const u8, v: []const u8 }{.{
             .k = "CQL_VERSION",
@@ -194,14 +196,14 @@ pub const Connection = struct {
         switch (resp.opcode) {
             Opcode.ready => {},
             Opcode.authenticate => {
-                var token = std.array_list.AlignedManaged(u8, null).init(self.allocator);
+                var token = std.array_list.Managed(u8).init(self.allocator);
                 defer token.deinit();
                 try token.append(0);
                 try token.appendSlice(self.user);
                 try token.append(0);
                 try token.appendSlice(self.pass);
 
-                var fb = std.array_list.AlignedManaged(u8, null).init(self.allocator);
+                var fb = std.array_list.Managed(u8).init(self.allocator);
                 defer fb.deinit();
                 try writeBytes(&fb, token.items);
                 try self.writeFrame(Opcode.auth_response, fb.items);
@@ -215,6 +217,27 @@ pub const Connection = struct {
             Opcode.error_code => return error.CassandraStartupError,
             else => return error.CassandraProtocolError,
         }
+
+        // Pin the session to the configured keyspace so callers need not
+        // qualify every table reference. This runs inside the connect lock,
+        // so it writes/reads frames directly rather than via `query`.
+        if (self.keyspace) |ks| {
+            const use_cql = try std.fmt.allocPrint(self.allocator, "USE {s}", .{ks});
+            defer self.allocator.free(use_cql);
+            var use_body = std.array_list.Managed(u8).init(self.allocator);
+            defer use_body.deinit();
+            try writeLongString(&use_body, use_cql);
+            var cf: [3]u8 = undefined;
+            std.mem.writeInt(u16, cf[0..2], @intFromEnum(Consistency.one), .big);
+            cf[2] = 0x00; // flags: no values
+            try use_body.appendSlice(&cf);
+            try self.writeFrame(Opcode.query, use_body.items);
+
+            const use_resp = try self.readFrame();
+            defer self.allocator.free(use_resp.body);
+            if (use_resp.opcode == Opcode.error_code) return error.CassandraQueryError;
+            if (use_resp.opcode != Opcode.result) return error.CassandraProtocolError;
+        }
     }
 
     pub fn query(self: *Connection, cql: []const u8) !QueryResult {
@@ -222,7 +245,7 @@ pub const Connection = struct {
         defer self.unlock();
         try self.ensureConnected();
 
-        var body = std.array_list.AlignedManaged(u8, null).init(self.allocator);
+        var body = std.array_list.Managed(u8).init(self.allocator);
         defer body.deinit();
         try writeLongString(&body, cql);
         var cf: [3]u8 = undefined;
@@ -240,7 +263,7 @@ pub const Connection = struct {
     }
 
     fn writeFrame(self: *Connection, opcode: u8, body: []const u8) !void {
-        const fd = self.fd.?;
+        const writer = &self.stream_writer.interface;
         var header: [9]u8 = undefined;
         header[0] = 0x04; // protocol version 4 (request)
         header[1] = 0x00; // flags
@@ -248,70 +271,52 @@ pub const Connection = struct {
         header[3] = 0x00; // stream id
         header[4] = opcode;
         std.mem.writeInt(u32, header[5..9], @intCast(body.len), .big);
-        try writeAll(fd, &header);
-        try writeAll(fd, body);
+        try writer.writeAll(&header);
+        try writer.writeAll(body);
+        try writer.flush();
     }
 
     fn readFrame(self: *Connection) !struct { opcode: u8, body: []u8 } {
-        const fd = self.fd.?;
+        const reader = &self.stream_reader.interface;
         var header: [9]u8 = undefined;
-        try readExact(fd, &header);
+        try reader.readSliceAll(&header);
         const opcode = header[4];
         const len = std.mem.readInt(u32, header[5..9], .big);
         const body = try self.allocator.alloc(u8, len);
         errdefer self.allocator.free(body);
-        try readExact(fd, body);
+        try reader.readSliceAll(body);
         return .{ .opcode = opcode, .body = body };
     }
 };
 
-fn writeAll(fd: linux.fd_t, buf: []const u8) !void {
-    var off: usize = 0;
-    while (off < buf.len) {
-        const n = linux.write(fd, buf[off..].ptr, buf.len - off);
-        if (linux.errno(n) != .SUCCESS) return error.WriteFailed;
-        off += n;
-    }
-}
-
-fn readExact(fd: linux.fd_t, buf: []u8) !void {
-    var off: usize = 0;
-    while (off < buf.len) {
-        const n = linux.read(fd, buf[off..].ptr, buf.len - off);
-        if (n == 0) return error.ConnectionClosed;
-        if (linux.errno(n) != .SUCCESS) return error.ReadFailed;
-        off += n;
-    }
-}
-
-fn writeInt16(list: *std.array_list.AlignedManaged(u8, null), v: u16) !void {
+fn writeInt16(list: *std.array_list.Managed(u8), v: u16) !void {
     var buf: [2]u8 = undefined;
     std.mem.writeInt(u16, &buf, v, .big);
     try list.appendSlice(&buf);
 }
 
-fn writeInt32(list: *std.array_list.AlignedManaged(u8, null), v: u32) !void {
+fn writeInt32(list: *std.array_list.Managed(u8), v: u32) !void {
     var buf: [4]u8 = undefined;
     std.mem.writeInt(u32, &buf, v, .big);
     try list.appendSlice(&buf);
 }
 
-fn writeString(list: *std.array_list.AlignedManaged(u8, null), s: []const u8) !void {
+fn writeString(list: *std.array_list.Managed(u8), s: []const u8) !void {
     try writeInt16(list, @intCast(s.len));
     try list.appendSlice(s);
 }
 
-fn writeLongString(list: *std.array_list.AlignedManaged(u8, null), s: []const u8) !void {
+fn writeLongString(list: *std.array_list.Managed(u8), s: []const u8) !void {
     try writeInt32(list, @intCast(s.len));
     try list.appendSlice(s);
 }
 
-fn writeBytes(list: *std.array_list.AlignedManaged(u8, null), b: []const u8) !void {
+fn writeBytes(list: *std.array_list.Managed(u8), b: []const u8) !void {
     try writeInt32(list, @intCast(b.len));
     try list.appendSlice(b);
 }
 
-fn writeStringMap(list: *std.array_list.AlignedManaged(u8, null), entries: anytype) !void {
+fn writeStringMap(list: *std.array_list.Managed(u8), entries: anytype) !void {
     try writeInt16(list, @intCast(entries.len));
     for (entries) |e| {
         try writeString(list, e.k);
@@ -429,7 +434,7 @@ fn parseResult(alloc: std.mem.Allocator, body: []const u8) !QueryResult {
     return QueryResult{ .allocator = alloc, .columns = columns, .rows = rows };
 }
 
-fn writeJsonString(list: *List, s: []const u8) !void {
+fn writeJsonString(list: *std.array_list.Managed(u8), s: []const u8) !void {
     try list.append('"');
     for (s) |c| {
         switch (c) {
@@ -464,7 +469,7 @@ fn uuidHex(alloc: std.mem.Allocator, b: []const u8) ![]u8 {
     return out;
 }
 
-fn writeValue(list: *List, alloc: std.mem.Allocator, cell: Cell) !void {
+fn writeValue(list: *std.array_list.Managed(u8), alloc: std.mem.Allocator, cell: Cell) !void {
     if (cell.data == null) {
         try list.appendSlice("null");
         return;
@@ -514,13 +519,19 @@ fn writeValue(list: *List, alloc: std.mem.Allocator, cell: Cell) !void {
     }
 }
 
-
 // ===================== Tests =====================
-
 
 test "cassandra live round-trip (set CASSANDRA_TEST=1 to run)" {
     if (std.testing.environ.getPosix("CASSANDRA_TEST")) |_| {} else return;
-    var conn = Connection.init(std.testing.allocator, "127.0.0.1:9042", "cassandra", "cassandra");
+    const host = std.testing.environ.getPosix("CASSANDRA_HOST") orelse "127.0.0.1";
+    const port = std.fmt.parseInt(u16, std.testing.environ.getPosix("CASSANDRA_PORT") orelse "9042", 10) catch 9042;
+    const hostport = try std.fmt.allocPrint(std.testing.allocator, "{s}:{d}", .{ host, port });
+    defer std.testing.allocator.free(hostport);
+
+    // Connect without a keyspace: a fresh container has none, so the client must
+    // not issue `USE` until this test creates it. Statements qualify the
+    // keyspace explicitly instead.
+    var conn = Connection.init(std.testing.allocator, hostport, "cassandra", "cassandra", null);
     defer conn.deinit();
 
     var rv = try conn.query("SELECT release_version FROM system.local");

@@ -4,41 +4,29 @@ const root = @import("../zero.zig");
 const utils = root.utils;
 const Context = root.Context;
 
-/// Retrieves the current process statistics.
+/// Retrieves the current host statistics.
 ///
-/// This function reads the process usage statistics from the `/proc/process-id/status` file and returns a `ProcessStatus`
-/// struct containing the values.
+/// Cross-platform: delegates to `zf.gather` so this works on macOS as well as
+/// Linux, instead of reading /etc/os-release and /etc/hostname directly.
 ///
-/// Returns a `ProcessStatus` struct with the current memory usage statistics.
+/// Returns a `Host` struct with the current host info.
 pub fn usage(ctx: *Context) !Host {
-    const file = try std.Io.Dir.openFileAbsolute(utils.io, "/etc/os-release", .{});
-    defer file.close(utils.io);
+    var sys = root.sysinfo.gather.gather(ctx.allocator, utils.io);
+    defer sys.deinit();
 
-    var buffer: [1024]u8 = undefined;
-    var bytes_read = try file.readPositionalAll(utils.io, &buffer, 0);
-    var contents = buffer[0..bytes_read];
-
-    var lines = std.mem.splitSequence(u8, contents, "\n");
+    const a = ctx.allocator;
     var host = Host{};
-    while (lines.next()) |line| {
-        try setValue(ctx.allocator, []const u8, &host.pretty, line, "PRETTY_NAME=");
-        try setValue(ctx.allocator, []const u8, &host.name, line, "NAME=");
-        try setValue(ctx.allocator, []const u8, &host.id, line, "ID=");
-        try setValue(ctx.allocator, []const u8, &host.codename, line, "VERSION_CODENAME=");
-        try setValue(ctx.allocator, []const u8, &host.version, line, "VERSION=");
-        try setValue(ctx.allocator, []const u8, &host.versionFull, line, "DEBIAN_VERSION_FULL=");
-    }
-
-    const file2 = try std.Io.Dir.openFileAbsolute(utils.io, "/etc/hostname", .{});
-    defer file2.close(utils.io);
-
-    buffer = undefined;
-    bytes_read = try file2.readPositionalAll(utils.io, &buffer, 0);
-    contents = buffer[0..bytes_read];
-
-    try setValue(ctx.allocator, []const u8, &host.hostname, contents, "");
-
+    host.name = dupeOrEmpty(a, sys.os_name);
+    host.id = dupeOrEmpty(a, sys.distro_id);
+    host.version = dupeOrEmpty(a, sys.os_version);
+    host.hostname = dupeOrEmpty(a, sys.hostname);
     return host;
+}
+
+/// Dupes `value` into `allocator`, or returns an empty slice when `value` is null.
+fn dupeOrEmpty(allocator: std.mem.Allocator, value: ?[]const u8) []const u8 {
+    if (value) |v| return allocator.dupe(u8, v) catch "";
+    return "";
 }
 
 /// Sets the value of a field in the `MemUsage` struct.
@@ -87,9 +75,7 @@ pub const Host = struct {
     hostname: []const u8 = "",
 };
 
-
 // ===================== Tests =====================
-
 
 test "setValue parses NAME field with quotes" {
     const allocator = std.testing.allocator;

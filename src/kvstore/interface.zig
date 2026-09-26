@@ -36,6 +36,20 @@ pub const KVStore = struct {
         };
     }
 
+    /// Frees the backend impl and the type-erased `KVStore` wrapper. Both were
+    /// allocated from `container.allocator` in `build`. The backend's owned
+    /// resources (e.g. `KVMemory` map entries) are released by the backend deinit;
+    /// borrowed handles (`rediz.Client`, `*SQLite`, NATS `KeyValue`) are not.
+    pub fn deinit(self: *KVStore, allocator: std.mem.Allocator) void {
+        switch (self.backend) {
+            .redis => @as(*redis.KVRedis, @ptrCast(@alignCast(self.ptr))).deinit(allocator),
+            .nats_kv => @as(*natskv.KVNats, @ptrCast(@alignCast(self.ptr))).deinit(allocator),
+            .memory => @as(*memory.KVMemory, @ptrCast(@alignCast(self.ptr))).deinit(),
+            .sqlite => @as(*sqlite.KVSQLite, @ptrCast(@alignCast(self.ptr))).deinit(allocator),
+        }
+        allocator.destroy(self);
+    }
+
     pub fn get(self: *KVStore, ctx: *root.Context, key: []const u8) !?[]const u8 {
         if (self.breaker) |*b| b.before() catch return error.CircuitOpen;
         const r = switch (self.backend) {

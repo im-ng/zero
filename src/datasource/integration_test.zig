@@ -20,9 +20,7 @@ fn envOr(allocator: std.mem.Allocator, name: []const u8, default: []const u8) []
     return envGet(name) orelse default;
 }
 
-
 // ===================== Tests =====================
-
 
 // Real-database integration tests. Kept out of the kcov-traced coverage build
 // because `sqlitez.Db.init` aborts under kcov's ptrace. Run them via the separate
@@ -46,7 +44,7 @@ test "datasource sqlite backend integration" {
 
     // Unified handle; the caller never names the concrete backend.
     // `var` (not `const`): `exec` takes a mutable `*Interface` receiver.
-    var ds = root.Datasource.init(sqlite, .sqlite, null);
+    var ds = root.Datasource.init(sqlite, .sqlite, null, null);
 
     var ctx_storage: root.Context = undefined;
     ctx_storage.allocator = allocator;
@@ -139,7 +137,7 @@ test "datasource postgres backend integration" {
     sql.metricz = m;
     sql.allocator = allocator;
 
-    var ds = root.Datasource.init(sql, .postgres, null);
+    var ds = root.Datasource.init(sql, .postgres, null, null);
 
     var ctx_storage: root.Context = undefined;
     ctx_storage.allocator = allocator;
@@ -260,7 +258,9 @@ test "datasource postgres concurrent transactions isolation" {
             return;
         };
     }
-    for (&threads) |t| t.join();
+    for (&threads) |t| {
+        t.join();
+    }
 
     const Row = struct { n: i64 };
     const got = try sql.select(Row, "SELECT n FROM bench_counter WHERE id = 1", .{});
@@ -359,7 +359,11 @@ test "redis kvstore concurrent set/get (mutex serialization)" {
             return;
         };
     }
-    for (&threads) |t| t.join();
+    for (&threads) |t| {
+        t.join();
+    }
 
-    for (results) |ok| try std.testing.expect(ok);
+    for (results) |ok| {
+        try std.testing.expect(ok);
+    }
 }

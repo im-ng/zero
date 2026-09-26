@@ -96,21 +96,21 @@ pub fn execute(self: *const tracz, req: *httpz.Request, res: *httpz.Response, ex
 
     const result = executor.next();
 
-        if (server_span) |*sp| {
-            try sp.setAttribute("http.request.method", .{ .string = @tagName(req.method) });
-            try sp.setAttribute("url.path", .{ .string = req.url.path });
-            try sp.setAttribute("http.response.status_code", .{ .int = @as(i64, res.status) });
+    if (server_span) |*sp| {
+        try sp.setAttribute("http.request.method", .{ .string = @tagName(req.method) });
+        try sp.setAttribute("url.path", .{ .string = req.url.path });
+        try sp.setAttribute("http.response.status_code", .{ .int = @as(i64, res.status) });
 
-            if (res.status < 400) {
-                sp.setStatus(otel.Status.ok());
-            } else {
-                sp.setStatus(otel.Status.error_with_description(""));
-            }
-
-            self.provider.endSpan(sp);
-            sp.deinit();
-            otel.popSpan();
+        if (res.status < 400) {
+            sp.setStatus(otel.Status.ok());
+        } else {
+            sp.setStatus(otel.Status.error_with_description(""));
         }
+
+        self.provider.endSpan(sp);
+        sp.deinit();
+        otel.popSpan();
+    }
 
     return result;
 }
@@ -120,9 +120,7 @@ pub const Config = struct {
     provider: *otel.Provider,
 };
 
-
 // ===================== Tests =====================
-
 
 test "tracz Config struct can be initialized" {
     const allocator = std.testing.allocator;

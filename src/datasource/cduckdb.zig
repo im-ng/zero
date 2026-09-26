@@ -10,8 +10,10 @@ pub const duckdb_type = c_int;
 
 /// `typedef struct _duckdb_database { ... } *duckdb_database;` — a pointer type.
 pub const duckdb_database = ?*anyopaque;
+
 /// `typedef struct _duckdb_connection { ... } *duckdb_connection;`
 pub const duckdb_connection = ?*anyopaque;
+
 /// `duckdb_result` is a struct passed by value.
 pub const duckdb_result = extern struct {
     deprecated_column_count: idx_t,

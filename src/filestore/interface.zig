@@ -41,6 +41,17 @@ pub const FileStore = struct {
         };
     }
 
+    /// Frees the backend impl and the type-erased `FileStore` wrapper. The wrapper
+    /// and backend were both allocated from `container.allocator` in `build`.
+    pub fn deinit(self: *FileStore, allocator: std.mem.Allocator) void {
+        switch (self.backend) {
+            .local => @as(*local.FileStoreLocal, @ptrCast(@alignCast(self.ptr))).deinit(allocator),
+            .s3 => @as(*s3.FileStoreS3, @ptrCast(@alignCast(self.ptr))).deinit(),
+            .ftp, .sftp => {},
+        }
+        allocator.destroy(self);
+    }
+
     pub fn get(self: *FileStore, ctx: *root.Context, key: []const u8) !?[]const u8 {
         return switch (self.backend) {
             .local => @as(*local.FileStoreLocal, @ptrCast(@alignCast(self.ptr))).get(ctx, key),

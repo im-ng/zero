@@ -4,6 +4,7 @@ const root = @import("../zero.zig");
 const SQLite = root.SQLite;
 const SQL = root.SQL;
 const service = root.circuit_breaker;
+const utils = root.utils;
 
 /// Supported database dialects. Resolved at runtime from `DB_DIALECT` so the
 /// same `Interface` handle works for any configured backend without the caller
@@ -15,6 +16,15 @@ pub const Dialect = enum {
     /// In-process OLAP SQL engine (DuckDB). Reuses this relational interface;
     /// backed by `src/datasource/DuckDB.zig` (links `libs/libduckdb.so`).
     duckdb,
+    /// Columnar OLAP SQL engine (ClickHouse) over HTTP. Reuses this relational
+    /// interface; backed by `src/datasource/ClickHouse.zig` (HTTP via `zul`,
+    /// no native driver). Transactions/lastInsertRowID are no-ops (eventually
+    /// consistent).
+    clickhouse,
+    /// Wired (network) DuckDB over the Postgres wire protocol (PG-wire front-end
+    /// such as duckgres / PostDuck). Reuses this relational interface; backed by
+    /// `src/datasource/duckgres.zig` (the pure-Zig `pgz` client, no duckdb C lib).
+    duckgres,
     /// Test-only dialect backed by `MockBackend`. Lets the `Interface` dispatch
     /// be exercised without loading a real database driver (keeps the
     /// coverage/unit-test build free of the native `libsqlite3` dependency that
@@ -57,7 +67,9 @@ pub const MockBackend = struct {
 
     pub fn selectSlice(self: *MockBackend, ctx: *root.Context, comptime Type: type, list: *std.array_list.Managed(Type), comptime stmt: []const u8, args: anytype) !i64 {
         const rows = try self.queryRowsContext(ctx, Type, stmt, args);
-        for (rows) |r| try list.append(r);
+        for (rows) |r| {
+            try list.append(r);
+        }
         self.select_slice_calls += 1;
         return @intCast(list.items.len);
     }
@@ -100,19 +112,49 @@ pub const Interface = struct {
     /// Optional circuit breaker guarding all backend calls. When `null`, calls
     /// pass straight through (no trip/fail-fast). Enable via `SQL_CIRCUIT_BREAKER_ENABLE`.
     breaker: ?service.CircuitBreaker = null,
+    /// Optional metrics registry. When `null`, no datasource metrics are emitted.
+    /// Wired from `container.metricz` via `wireDatasource` / `Context.init`.
+    metricz: ?*root.metricz = null,
 
     /// Build an interface handle from a concrete backend pointer.
-    pub fn init(ptr: anytype, dialect: Dialect, breaker: ?service.CircuitBreaker) Interface {
+    pub fn init(ptr: anytype, dialect: Dialect, breaker: ?service.CircuitBreaker, metricz: ?*root.metricz) Interface {
         return .{
             .ptr = @ptrCast(@alignCast(ptr)),
             .dialect = dialect,
             .breaker = breaker,
+            .metricz = metricz,
         };
     }
 
+    fn backendName(d: Dialect) []const u8 {
+        return switch (d) {
+            .sqlite => "sqlite",
+            .postgres => "postgres",
+            .duckdb => "duckdb",
+            .clickhouse => "clickhouse",
+            .duckgres => "duckgres",
+            .mock => "mock",
+        };
+    }
+
+    fn dsError(self: *Interface, op: []const u8) void {
+        if (self.metricz) |mz| {
+            mz.datasourceError(.{ .backend = backendName(self.dialect), .name = "", .operation = op, .status = 0 }) catch {};
+        }
+    }
+
+    fn dsOk(self: *Interface, op: []const u8, start: std.Io.Timestamp) void {
+        if (self.metricz) |mz| {
+            mz.datasourceResponse(.{ .backend = backendName(self.dialect), .name = "", .operation = op, .status = 200 }, utils.elapsedMs(start)) catch {};
+        }
+    }
+
     /// Single typed row. `null` when the query matches no rows.
-    pub fn queryRow(    self: *Interface, ctx: *root.Context, comptime Type: type, comptime stmt: []const u8, args: anytype) !?Type {
-        if (self.breaker) |*b| b.before() catch return error.CircuitOpen;
+    pub fn queryRow(self: *Interface, ctx: *root.Context, comptime Type: type, comptime stmt: []const u8, args: anytype) !?Type {
+        if (self.breaker) |*b| {
+            b.before() catch return error.CircuitOpen;
+        }
+        const start = utils.nowMonotonic();
         const r = switch (self.dialect) {
             .sqlite => @as(*SQLite, @ptrCast(@alignCast(self.ptr))).queryRow(
                 ctx,
@@ -138,17 +180,38 @@ pub const Interface = struct {
                 stmt,
                 args,
             ),
+            .clickhouse => @as(*root.ClickHouse, @ptrCast(@alignCast(self.ptr))).queryRow(
+                ctx,
+                Type,
+                stmt,
+                args,
+            ),
+            .duckgres => @as(*root.DuckGres, @ptrCast(@alignCast(self.ptr))).queryRow(
+                ctx,
+                Type,
+                stmt,
+                args,
+            ),
         } catch |e| {
-            if (self.breaker) |*b| b.recordFailure();
+            if (self.breaker) |*b| {
+                b.recordFailure();
+            }
+            self.dsError("queryRow");
             return e;
         };
-        if (self.breaker) |*b| b.recordSuccess();
+        if (self.breaker) |*b| {
+            b.recordSuccess();
+        }
+        self.dsOk("queryRow", start);
         return r;
     }
 
     /// Multiple typed rows, owned by the connection allocator.
-    pub fn queryRows(    self: *Interface, ctx: *root.Context, comptime Type: type, comptime stmt: []const u8, args: anytype) ![]Type {
-        if (self.breaker) |*b| b.before() catch return error.CircuitOpen;
+    pub fn queryRows(self: *Interface, ctx: *root.Context, comptime Type: type, comptime stmt: []const u8, args: anytype) ![]Type {
+        if (self.breaker) |*b| {
+            b.before() catch return error.CircuitOpen;
+        }
+        const start = utils.nowMonotonic();
         const r = switch (self.dialect) {
             .sqlite => @as(*SQLite, @ptrCast(@alignCast(self.ptr))).queryRows(
                 ctx,
@@ -174,17 +237,38 @@ pub const Interface = struct {
                 stmt,
                 args,
             ),
+            .clickhouse => @as(*root.ClickHouse, @ptrCast(@alignCast(self.ptr))).queryRows(
+                ctx,
+                Type,
+                stmt,
+                args,
+            ),
+            .duckgres => @as(*root.DuckGres, @ptrCast(@alignCast(self.ptr))).queryRows(
+                ctx,
+                Type,
+                stmt,
+                args,
+            ),
         } catch |e| {
-            if (self.breaker) |*b| b.recordFailure();
+            if (self.breaker) |*b| {
+                b.recordFailure();
+            }
+            self.dsError("queryRows");
             return e;
         };
-        if (self.breaker) |*b| b.recordSuccess();
+        if (self.breaker) |*b| {
+            b.recordSuccess();
+        }
+        self.dsOk("queryRows", start);
         return r;
     }
 
     /// Single typed row with a request context (tracing / metrics).
-    pub fn queryRowContext(    self: *Interface, ctx: *root.Context, comptime Type: type, comptime stmt: []const u8, args: anytype) !?Type {
-        if (self.breaker) |*b| b.before() catch return error.CircuitOpen;
+    pub fn queryRowContext(self: *Interface, ctx: *root.Context, comptime Type: type, comptime stmt: []const u8, args: anytype) !?Type {
+        if (self.breaker) |*b| {
+            b.before() catch return error.CircuitOpen;
+        }
+        const start = utils.nowMonotonic();
         const r = switch (self.dialect) {
             .sqlite => @as(*SQLite, @ptrCast(@alignCast(self.ptr))).queryRowContext(
                 ctx,
@@ -210,17 +294,38 @@ pub const Interface = struct {
                 stmt,
                 args,
             ),
+            .clickhouse => @as(*root.ClickHouse, @ptrCast(@alignCast(self.ptr))).queryRowContext(
+                ctx,
+                Type,
+                stmt,
+                args,
+            ),
+            .duckgres => @as(*root.DuckGres, @ptrCast(@alignCast(self.ptr))).queryRowContext(
+                ctx,
+                Type,
+                stmt,
+                args,
+            ),
         } catch |e| {
-            if (self.breaker) |*b| b.recordFailure();
+            if (self.breaker) |*b| {
+                b.recordFailure();
+            }
+            self.dsError("queryRowContext");
             return e;
         };
-        if (self.breaker) |*b| b.recordSuccess();
+        if (self.breaker) |*b| {
+            b.recordSuccess();
+        }
+        self.dsOk("queryRowContext", start);
         return r;
     }
 
     /// Multiple typed rows with a request context.
-    pub fn queryRowsContext(    self: *Interface, ctx: *root.Context, comptime Type: type, comptime stmt: []const u8, args: anytype) ![]Type {
-        if (self.breaker) |*b| b.before() catch return error.CircuitOpen;
+    pub fn queryRowsContext(self: *Interface, ctx: *root.Context, comptime Type: type, comptime stmt: []const u8, args: anytype) ![]Type {
+        if (self.breaker) |*b| {
+            b.before() catch return error.CircuitOpen;
+        }
+        const start = utils.nowMonotonic();
         const r = switch (self.dialect) {
             .sqlite => @as(*SQLite, @ptrCast(@alignCast(self.ptr))).queryRowsContext(
                 ctx,
@@ -246,17 +351,38 @@ pub const Interface = struct {
                 stmt,
                 args,
             ),
+            .clickhouse => @as(*root.ClickHouse, @ptrCast(@alignCast(self.ptr))).queryRowsContext(
+                ctx,
+                Type,
+                stmt,
+                args,
+            ),
+            .duckgres => @as(*root.DuckGres, @ptrCast(@alignCast(self.ptr))).queryRowsContext(
+                ctx,
+                Type,
+                stmt,
+                args,
+            ),
         } catch |e| {
-            if (self.breaker) |*b| b.recordFailure();
+            if (self.breaker) |*b| {
+                b.recordFailure();
+            }
+            self.dsError("queryRowsContext");
             return e;
         };
-        if (self.breaker) |*b| b.recordSuccess();
+        if (self.breaker) |*b| {
+            b.recordSuccess();
+        }
+        self.dsOk("queryRowsContext", start);
         return r;
     }
 
     /// Append typed rows into `list`. Returns the number of rows appended.
-    pub fn selectSlice(    self: *Interface, ctx: *root.Context, comptime Type: type, list: *std.array_list.Managed(Type), comptime stmt: []const u8, args: anytype) !i64 {
-        if (self.breaker) |*b| b.before() catch return error.CircuitOpen;
+    pub fn selectSlice(self: *Interface, ctx: *root.Context, comptime Type: type, list: *std.array_list.Managed(Type), comptime stmt: []const u8, args: anytype) !i64 {
+        if (self.breaker) |*b| {
+            b.before() catch return error.CircuitOpen;
+        }
+        const start = utils.nowMonotonic();
         const r = switch (self.dialect) {
             .sqlite => @as(*SQLite, @ptrCast(@alignCast(self.ptr))).selectSlice(
                 ctx,
@@ -286,17 +412,40 @@ pub const Interface = struct {
                 stmt,
                 args,
             ),
+            .clickhouse => @as(*root.ClickHouse, @ptrCast(@alignCast(self.ptr))).selectSlice(
+                ctx,
+                Type,
+                list,
+                stmt,
+                args,
+            ),
+            .duckgres => @as(*root.DuckGres, @ptrCast(@alignCast(self.ptr))).selectSlice(
+                ctx,
+                Type,
+                list,
+                stmt,
+                args,
+            ),
         } catch |e| {
-            if (self.breaker) |*b| b.recordFailure();
+            if (self.breaker) |*b| {
+                b.recordFailure();
+            }
+            self.dsError("selectSlice");
             return e;
         };
-        if (self.breaker) |*b| b.recordSuccess();
+        if (self.breaker) |*b| {
+            b.recordSuccess();
+        }
+        self.dsOk("selectSlice", start);
         return r;
     }
 
     /// Execute a write statement (INSERT/UPDATE/DELETE). Returns the last insert id.
-    pub fn exec(    self: *Interface, ctx: *root.Context, comptime stmt: []const u8, args: anytype) !i64 {
-        if (self.breaker) |*b| b.before() catch return error.CircuitOpen;
+    pub fn exec(self: *Interface, ctx: *root.Context, comptime stmt: []const u8, args: anytype) !i64 {
+        if (self.breaker) |*b| {
+            b.before() catch return error.CircuitOpen;
+        }
+        const start = utils.nowMonotonic();
         const r = switch (self.dialect) {
             .sqlite => @as(*SQLite, @ptrCast(@alignCast(self.ptr))).execWithContext(
                 ctx,
@@ -318,11 +467,27 @@ pub const Interface = struct {
                 stmt,
                 args,
             ),
+            .clickhouse => @as(*root.ClickHouse, @ptrCast(@alignCast(self.ptr))).execWithContext(
+                ctx,
+                stmt,
+                args,
+            ),
+            .duckgres => @as(*root.DuckGres, @ptrCast(@alignCast(self.ptr))).execWithContext(
+                ctx,
+                stmt,
+                args,
+            ),
         } catch |e| {
-            if (self.breaker) |*b| b.recordFailure();
+            if (self.breaker) |*b| {
+                b.recordFailure();
+            }
+            self.dsError("exec");
             return e;
         };
-        if (self.breaker) |*b| b.recordSuccess();
+        if (self.breaker) |*b| {
+            b.recordSuccess();
+        }
+        self.dsOk("exec", start);
         return r;
     }
 
@@ -333,6 +498,8 @@ pub const Interface = struct {
             .postgres => @as(*SQL, @ptrCast(@alignCast(self.ptr))).lastInsertRowID(),
             .mock => @as(*MockBackend, @ptrCast(@alignCast(self.ptr))).lastInsertRowID(),
             .duckdb => @as(*root.DuckDB, @ptrCast(@alignCast(self.ptr))).lastInsertRowID(),
+            .clickhouse => @as(*root.ClickHouse, @ptrCast(@alignCast(self.ptr))).lastInsertRowID(),
+            .duckgres => @as(*root.DuckGres, @ptrCast(@alignCast(self.ptr))).lastInsertRowID(),
         };
     }
 
@@ -343,6 +510,8 @@ pub const Interface = struct {
             .postgres => @as(*SQL, @ptrCast(@alignCast(self.ptr))).rowsAffected(),
             .mock => @as(*MockBackend, @ptrCast(@alignCast(self.ptr))).rowsAffected(),
             .duckdb => @as(*root.DuckDB, @ptrCast(@alignCast(self.ptr))).rowsAffected(),
+            .clickhouse => @as(*root.ClickHouse, @ptrCast(@alignCast(self.ptr))).rowsAffected(),
+            .duckgres => @as(*root.DuckGres, @ptrCast(@alignCast(self.ptr))).rowsAffected(),
         };
     }
 
@@ -353,6 +522,8 @@ pub const Interface = struct {
             .postgres => @as(*SQL, @ptrCast(@alignCast(self.ptr))).begin(),
             .mock => @as(*MockBackend, @ptrCast(@alignCast(self.ptr))).begin(),
             .duckdb => @as(*root.DuckDB, @ptrCast(@alignCast(self.ptr))).begin(),
+            .clickhouse => @as(*root.ClickHouse, @ptrCast(@alignCast(self.ptr))).begin(),
+            .duckgres => @as(*root.DuckGres, @ptrCast(@alignCast(self.ptr))).begin(),
         };
     }
 
@@ -363,6 +534,8 @@ pub const Interface = struct {
             .postgres => @as(*SQL, @ptrCast(@alignCast(self.ptr))).commit(),
             .mock => @as(*MockBackend, @ptrCast(@alignCast(self.ptr))).commit(),
             .duckdb => @as(*root.DuckDB, @ptrCast(@alignCast(self.ptr))).commit(),
+            .clickhouse => @as(*root.ClickHouse, @ptrCast(@alignCast(self.ptr))).commit(),
+            .duckgres => @as(*root.DuckGres, @ptrCast(@alignCast(self.ptr))).commit(),
         };
     }
 
@@ -373,17 +546,32 @@ pub const Interface = struct {
             .postgres => @as(*SQL, @ptrCast(@alignCast(self.ptr))).rollback(),
             .mock => @as(*MockBackend, @ptrCast(@alignCast(self.ptr))).rollback(),
             .duckdb => @as(*root.DuckDB, @ptrCast(@alignCast(self.ptr))).rollback(),
+            .clickhouse => @as(*root.ClickHouse, @ptrCast(@alignCast(self.ptr))).rollback(),
+            .duckgres => @as(*root.DuckGres, @ptrCast(@alignCast(self.ptr))).rollback(),
         }
     }
 
     /// `query` alias — single typed row.
-    pub fn query(    self: *Interface, ctx: *root.Context, comptime Type: type, comptime stmt: []const u8, args: anytype) !?Type {
+    pub fn query(self: *Interface, ctx: *root.Context, comptime Type: type, comptime stmt: []const u8, args: anytype) !?Type {
         return self.queryRow(ctx, Type, stmt, args);
     }
 
     /// `select` alias — single typed row.
-    pub fn select(    self: *Interface, ctx: *root.Context, comptime Type: type, comptime stmt: []const u8, args: anytype) !?Type {
+    pub fn select(self: *Interface, ctx: *root.Context, comptime Type: type, comptime stmt: []const u8, args: anytype) !?Type {
         return self.queryRow(ctx, Type, stmt, args);
+    }
+
+    /// Return the last upstream failure recorded by the backend, if any. Call
+    /// right after catching a `ClickHouseQueryFailed` error to read status/message
+    /// (ClickHouse is the zul-http relational backend). All other backends
+    /// (Postgres, SQLite, DuckDB, mock) return `null` — their error handling is
+    /// untouched. The backend owns the `message` buffer (freed on the next call /
+    /// `deinit`); the caller must read it, not free it.
+    pub fn lastError(self: Interface) ?root.Error.DataSourceError {
+        return switch (self.dialect) {
+            .clickhouse => @as(*root.ClickHouse, @ptrCast(@alignCast(self.ptr))).lastError(),
+            else => null,
+        };
     }
 };
 

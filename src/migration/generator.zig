@@ -14,7 +14,7 @@ fn sanitizeName(allocator: std.mem.Allocator, name: []const u8) ![]const u8 {
 }
 
 fn epochSeconds() i64 {
-    return @as(i64, @intCast(@divTrunc(utils.nowReal().nanoseconds, 1_000_000_000)));
+    return @as(i64, @intCast(@divFloor(utils.nowReal().nanoseconds, 1_000_000_000)));
 }
 
 fn nameLessThan(_: void, a: []const u8, b: []const u8) bool {
@@ -85,14 +85,15 @@ fn addToDir(allocator: std.mem.Allocator, dir: []const u8, raw_name: []const u8)
     // The generated file needs exactly two backslashes (`\\`) to start the
     // multiline-string SQL line. A Zig string literal halves backslashes, so
     // four source backslashes yield the two we want in the output file.
-    try sb.appendSlice(allocator, "        \\\\ -- TODO: write your migration SQL\n    ;\n    _ = try c.SQL.exec(c, query, .{{}});\n}}\n\n");
+    try sb.appendSlice(allocator, "        \\\\ -- TODO: write your migration SQL\n    ;\n    _ = try c.SQL.exec(c, query, .{});\n}\n\n");
 
-    const migrate_line = try std.fmt.allocPrint(allocator,
+    const migrate_line = try std.fmt.allocPrint(
+        allocator,
         \\pub const _migrate = &migrate{{
         \\    .migrationNumber = migrationNumber,
         \\    .run = {s},
         \\}};
-        ,
+    ,
         .{fn_name},
     );
     try sb.appendSlice(allocator, migrate_line);

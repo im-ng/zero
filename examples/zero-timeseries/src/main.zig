@@ -21,6 +21,9 @@ pub fn main(init: std.process.Init) !void {
     try app.get("/query", queryFlux);
     try app.post("/query", queryFlux);
 
+    // Create the bucket (v3 database) at startup so the first write succeeds.
+    app.onStartup(ensureBucket);
+
     try app.run();
 
     // Bail out if leak detected on load test
@@ -39,10 +42,10 @@ pub fn index(ctx: *Context) !void {
         \\                     "fields":"usage=42.1","ts":null})
         \\   POST /write    write a point (InfluxDB line protocol body:
         \\                    cpu,host=server1 usage=42.1)
-        \\   GET  /query?q=<flux>   run a Flux query
-        \\   POST /query            run a Flux query (request body)
+        \\   GET  /query?q=<sql>   run a SQL/InfluxQL query
+        \\   POST /query            run a SQL/InfluxQL query (request body)
         \\
-        \\ Set INFLUXDB_URL / INFLUXDB_ORG / INFLUXDB_BUCKET in configs/.env.
+        \\ Set INFLUXDB_URL / INFLUXDB_BUCKET in configs/.env.
     ;
 }
 
@@ -60,7 +63,25 @@ pub fn writePoint(ctx: *Context) !void {
         };
         defer parsed.deinit();
         const p = parsed.value;
-        try ts.write(ctx, p.measurement, p.tags, p.fields, p.ts);
+
+        // The backend takes one line-protocol statement, so assemble it here. A
+        // leading comma on `tags` is optional.
+        const sep = if (p.tags.len > 0 and p.tags[0] != ',') "," else "";
+        const base = if (p.tags.len > 0)
+            try std.fmt.allocPrint(ctx.allocator, "{s}{s}{s} {s}", .{ p.measurement, sep, p.tags, p.fields })
+        else
+            try std.fmt.allocPrint(ctx.allocator, "{s} {s}", .{ p.measurement, p.fields });
+        const line = if (p.ts) |tsv|
+            try std.fmt.allocPrint(ctx.allocator, "{s} {d}", .{ base, tsv })
+        else
+            base;
+        if (p.ts != null) ctx.allocator.free(base);
+        defer ctx.allocator.free(line);
+
+        ts.write(ctx, line) catch |e| {
+            if (timeseriesUpstreamError(ctx, e)) return;
+            return e;
+        };
         try ctx.response.json(.{ .status = "written" }, .{});
     } else {
         notConfigured(ctx);
@@ -69,25 +90,15 @@ pub fn writePoint(ctx: *Context) !void {
 
 pub fn writeLine(ctx: *Context) !void {
     if (ctx.Timeseries) |ts| {
-        const body = ctx.request.body() orelse "";
-        var it = std.mem.tokenizeScalar(u8, body, ' ');
-        const series = it.next() orelse {
-            badRequest(ctx, "invalid line protocol");
+        const line = ctx.request.body() orelse "";
+        if (line.len == 0) {
+            badRequest(ctx, "empty line protocol");
             return;
+        }
+        ts.write(ctx, line) catch |e| {
+            if (timeseriesUpstreamError(ctx, e)) return;
+            return e;
         };
-        const fields = it.next() orelse {
-            badRequest(ctx, "invalid line protocol");
-            return;
-        };
-        const ts_str = it.next();
-        var sit = std.mem.splitScalar(u8, series, ',');
-        const measurement = sit.next() orelse "";
-        const tags = sit.rest();
-        const ts_val: ?i64 = if (ts_str) |t|
-            std.fmt.parseInt(i64, std.mem.trim(u8, t, " \r\n"), 10) catch null
-        else
-            null;
-        try ts.write(ctx, measurement, tags, fields, ts_val);
         try ctx.response.json(.{ .status = "written" }, .{});
     } else {
         notConfigured(ctx);
@@ -101,7 +112,10 @@ pub fn queryFlux(ctx: *Context) !void {
             const qs = ctx.request.query() catch break :blk "";
             break :blk qs.get("q") orelse "";
         };
-        const csv = try ts.query(ctx, q);
+        const csv = ts.query(ctx, q) catch |e| {
+            if (timeseriesUpstreamError(ctx, e)) return;
+            return e;
+        };
         defer ctx.allocator.free(csv);
         ctx.response.content_type = .TEXT;
         try ctx.response.writer().writeAll(csv);
@@ -115,7 +129,37 @@ fn badRequest(ctx: *Context, msg: []const u8) void {
     ctx.response.json(.{ .message = msg }, .{}) catch {};
 }
 
+/// Map an InfluxDB upstream failure to an explicit error response. The datasource
+/// no longer logs; status + message live on `ts.lastError()` and are surfaced
+/// here. Returns `true` when handled (response already written).
+fn timeseriesUpstreamError(ctx: *Context, err: anyerror) bool {
+    const is_influx = err == error.InfluxDBWriteFailed or
+        err == error.InfluxDBQueryFailed;
+    if (!is_influx) return false;
+    const detail = ctx.Timeseries.?.lastError() orelse return false;
+    ctx.response.setStatus(switch (detail.status) {
+        401, 403 => .unauthorized,
+        404 => .not_found,
+        else => .bad_gateway,
+    });
+    ctx.response.json(.{ .err = "influxdb_upstream_failed", .status = detail.status, .message = detail.message }, .{}) catch {};
+    return true;
+}
+
+/// Startup hook: ensure the configured v3 database exists before serving
+/// traffic. Failures are logged but non-fatal, so the app still boots even if
+/// the server is momentarily unreachable.
+fn ensureBucket(ctx: *Context) !void {
+    if (ctx.Timeseries) |ts| {
+        const bucket = ctx.container.config.get("INFLUXDB_BUCKET");
+        if (std.mem.eql(u8, bucket, "")) return;
+        ts.createDatabase(ctx, bucket) catch |e| {
+            std.log.warn("timeseries: could not ensure bucket '{s}': {s}", .{ bucket, @errorName(e) });
+        };
+    }
+}
+
 fn notConfigured(ctx: *Context) void {
     ctx.response.setStatus(.not_implemented);
-    ctx.response.json(.{ .message = "INFLUXDB_URL / INFLUXDB_ORG / INFLUXDB_BUCKET not configured" }, .{}) catch {};
+    ctx.response.json(.{ .message = "INFLUXDB_URL / INFLUXDB_BUCKET not configured" }, .{}) catch {};
 }
