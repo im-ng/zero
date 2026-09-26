@@ -70,7 +70,7 @@ pub fn run(self: *Self) anyerror!void {
         }
     }
 
-    const relational_configured = self.container.SQL != null or self.container.SQLite != null or self.container.DuckDB != null or self.container.ClickHouse != null;
+    const relational_configured = self.container.SQL != null or self.container.SQLite != null or self.container.DuckDB != null or self.container.ClickHouse != null or self.container.DuckGres != null;
     const nosql_configured = self.container.NoSQL != null;
 
     var rel_last: i64 = 0;

@@ -1,5 +1,6 @@
 const std = @import("std");
 const zero = @import("zero");
+const migrations = @import("migrations/all.zig");
 
 const App = zero.App;
 const Context = zero.Context;
@@ -33,15 +34,16 @@ const CreateUser = struct {
 };
 
 pub fn main(init: std.process.Init) !void {
-
     var gpa: std.heap.DebugAllocator(.{}) = .init;
     const allocator = gpa.allocator();
     _ = gpa.detectLeaks();
 
     const app = try App.new(allocator, init.io, init.environ_map);
 
+    try migrations.all(app);
+    try app.runMigrations();
+
     try app.get("/", index);
-    try app.get("/sqlite/init", sqliteInit);
     try app.post("/sqlite/users", createUser);
     try app.get("/sqlite/users", listUsers);
     try app.get("/sqlite/users/:id", getUser);
@@ -69,7 +71,6 @@ pub fn index(ctx: *Context) !void {
         \\ ===========================
         \\
         \\ CRUD Endpoints:
-        \\ POST   /sqlite/users         - Create user
         \\ GET    /sqlite/users         - List all users
         \\ GET    /sqlite/users/{id}    - Get user by ID
         \\ PUT    /sqlite/users/{id}    - Update user
@@ -77,20 +78,6 @@ pub fn index(ctx: *Context) !void {
         \\ GET    /sqlite/init          - Initialize database
         \\ GET    /memory               - System info
     ;
-}
-
-pub fn sqliteInit(ctx: *Context) !void {
-    ctx.response.setStatus(.ok);
-
-    _ = try ctx.SQL.exec(ctx, 
-        \\CREATE TABLE IF NOT EXISTS users (
-        \\    id INTEGER PRIMARY KEY AUTOINCREMENT,
-        \\    name TEXT NOT NULL,
-        \\    email TEXT NOT NULL
-        \\)
-    , .{});
-
-    try ctx.json(.{ .message = "Database initialized with users table" });
 }
 
 pub fn createUser(ctx: *Context) !void {
@@ -137,7 +124,8 @@ pub fn createUser(ctx: *Context) !void {
         },
     };
 
-    _ = try ctx.SQL.exec(ctx, 
+    _ = try ctx.SQL.exec(
+        ctx,
         "INSERT INTO users (name, email) VALUES (?, ?)",
         .{ name_str, email_str },
     );
@@ -224,18 +212,21 @@ pub fn updateUser(ctx: *Context) !void {
 
     if (name_str) |n| {
         if (email_str) |e| {
-            _ = try ctx.SQL.exec(ctx, 
+            _ = try ctx.SQL.exec(
+                ctx,
                 "UPDATE users SET name = ?, email = ? WHERE id = ?",
                 .{ n, e, id },
             );
         } else {
-            _ = try ctx.SQL.exec(ctx, 
+            _ = try ctx.SQL.exec(
+                ctx,
                 "UPDATE users SET name = ? WHERE id = ?",
                 .{ n, id },
             );
         }
     } else if (email_str) |e| {
-        _ = try ctx.SQL.exec(ctx, 
+        _ = try ctx.SQL.exec(
+            ctx,
             "UPDATE users SET email = ? WHERE id = ?",
             .{ e, id },
         );
@@ -259,7 +250,8 @@ pub fn deleteUser(ctx: *Context) !void {
         return;
     };
 
-    _ = try ctx.SQL.exec(ctx, 
+    _ = try ctx.SQL.exec(
+        ctx,
         "DELETE FROM users WHERE id = ?",
         .{id},
     );

@@ -21,6 +21,10 @@ pub const Dialect = enum {
     /// no native driver). Transactions/lastInsertRowID are no-ops (eventually
     /// consistent).
     clickhouse,
+    /// Wired (network) DuckDB over the Postgres wire protocol (PG-wire front-end
+    /// such as duckgres / PostDuck). Reuses this relational interface; backed by
+    /// `src/datasource/duckgres.zig` (the pure-Zig `pgz` client, no duckdb C lib).
+    duckgres,
     /// Test-only dialect backed by `MockBackend`. Lets the `Interface` dispatch
     /// be exercised without loading a real database driver (keeps the
     /// coverage/unit-test build free of the native `libsqlite3` dependency that
@@ -128,6 +132,7 @@ pub const Interface = struct {
             .postgres => "postgres",
             .duckdb => "duckdb",
             .clickhouse => "clickhouse",
+            .duckgres => "duckgres",
             .mock => "mock",
         };
     }
@@ -176,6 +181,12 @@ pub const Interface = struct {
                 args,
             ),
             .clickhouse => @as(*root.ClickHouse, @ptrCast(@alignCast(self.ptr))).queryRow(
+                ctx,
+                Type,
+                stmt,
+                args,
+            ),
+            .duckgres => @as(*root.DuckGres, @ptrCast(@alignCast(self.ptr))).queryRow(
                 ctx,
                 Type,
                 stmt,
@@ -232,6 +243,12 @@ pub const Interface = struct {
                 stmt,
                 args,
             ),
+            .duckgres => @as(*root.DuckGres, @ptrCast(@alignCast(self.ptr))).queryRows(
+                ctx,
+                Type,
+                stmt,
+                args,
+            ),
         } catch |e| {
             if (self.breaker) |*b| {
                 b.recordFailure();
@@ -283,6 +300,12 @@ pub const Interface = struct {
                 stmt,
                 args,
             ),
+            .duckgres => @as(*root.DuckGres, @ptrCast(@alignCast(self.ptr))).queryRowContext(
+                ctx,
+                Type,
+                stmt,
+                args,
+            ),
         } catch |e| {
             if (self.breaker) |*b| {
                 b.recordFailure();
@@ -329,6 +352,12 @@ pub const Interface = struct {
                 args,
             ),
             .clickhouse => @as(*root.ClickHouse, @ptrCast(@alignCast(self.ptr))).queryRowsContext(
+                ctx,
+                Type,
+                stmt,
+                args,
+            ),
+            .duckgres => @as(*root.DuckGres, @ptrCast(@alignCast(self.ptr))).queryRowsContext(
                 ctx,
                 Type,
                 stmt,
@@ -390,6 +419,13 @@ pub const Interface = struct {
                 stmt,
                 args,
             ),
+            .duckgres => @as(*root.DuckGres, @ptrCast(@alignCast(self.ptr))).selectSlice(
+                ctx,
+                Type,
+                list,
+                stmt,
+                args,
+            ),
         } catch |e| {
             if (self.breaker) |*b| {
                 b.recordFailure();
@@ -436,6 +472,11 @@ pub const Interface = struct {
                 stmt,
                 args,
             ),
+            .duckgres => @as(*root.DuckGres, @ptrCast(@alignCast(self.ptr))).execWithContext(
+                ctx,
+                stmt,
+                args,
+            ),
         } catch |e| {
             if (self.breaker) |*b| {
                 b.recordFailure();
@@ -458,6 +499,7 @@ pub const Interface = struct {
             .mock => @as(*MockBackend, @ptrCast(@alignCast(self.ptr))).lastInsertRowID(),
             .duckdb => @as(*root.DuckDB, @ptrCast(@alignCast(self.ptr))).lastInsertRowID(),
             .clickhouse => @as(*root.ClickHouse, @ptrCast(@alignCast(self.ptr))).lastInsertRowID(),
+            .duckgres => @as(*root.DuckGres, @ptrCast(@alignCast(self.ptr))).lastInsertRowID(),
         };
     }
 
@@ -469,6 +511,7 @@ pub const Interface = struct {
             .mock => @as(*MockBackend, @ptrCast(@alignCast(self.ptr))).rowsAffected(),
             .duckdb => @as(*root.DuckDB, @ptrCast(@alignCast(self.ptr))).rowsAffected(),
             .clickhouse => @as(*root.ClickHouse, @ptrCast(@alignCast(self.ptr))).rowsAffected(),
+            .duckgres => @as(*root.DuckGres, @ptrCast(@alignCast(self.ptr))).rowsAffected(),
         };
     }
 
@@ -480,6 +523,7 @@ pub const Interface = struct {
             .mock => @as(*MockBackend, @ptrCast(@alignCast(self.ptr))).begin(),
             .duckdb => @as(*root.DuckDB, @ptrCast(@alignCast(self.ptr))).begin(),
             .clickhouse => @as(*root.ClickHouse, @ptrCast(@alignCast(self.ptr))).begin(),
+            .duckgres => @as(*root.DuckGres, @ptrCast(@alignCast(self.ptr))).begin(),
         };
     }
 
@@ -491,6 +535,7 @@ pub const Interface = struct {
             .mock => @as(*MockBackend, @ptrCast(@alignCast(self.ptr))).commit(),
             .duckdb => @as(*root.DuckDB, @ptrCast(@alignCast(self.ptr))).commit(),
             .clickhouse => @as(*root.ClickHouse, @ptrCast(@alignCast(self.ptr))).commit(),
+            .duckgres => @as(*root.DuckGres, @ptrCast(@alignCast(self.ptr))).commit(),
         };
     }
 
@@ -502,6 +547,7 @@ pub const Interface = struct {
             .mock => @as(*MockBackend, @ptrCast(@alignCast(self.ptr))).rollback(),
             .duckdb => @as(*root.DuckDB, @ptrCast(@alignCast(self.ptr))).rollback(),
             .clickhouse => @as(*root.ClickHouse, @ptrCast(@alignCast(self.ptr))).rollback(),
+            .duckgres => @as(*root.DuckGres, @ptrCast(@alignCast(self.ptr))).rollback(),
         }
     }
 

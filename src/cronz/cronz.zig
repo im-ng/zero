@@ -127,13 +127,7 @@ pub fn runSchedules(self: *Self, _: i128) void {
     }
 }
 
-fn expandOccurance(
-    _: *Self,
-    map: *std.AutoHashMap(u8, bool),
-    max: u8,
-    min: u8,
-    step: u8,
-) !void {
+fn expandOccurance(_: *Self, map: *std.AutoHashMap(u8, bool), max: u8, min: u8, step: u8) !void {
     var i = min;
     while (i <= max) {
         try map.put(i, true);
@@ -141,14 +135,7 @@ fn expandOccurance(
     }
 }
 
-fn expandRanges(
-    self: *Self,
-    value: []const u8,
-    map: *std.AutoHashMap(u8, bool),
-    max: u8,
-    min: u8,
-    step: u8,
-) !void {
+fn expandRanges(self: *Self, value: []const u8, map: *std.AutoHashMap(u8, bool), max: u8, min: u8, step: u8) !void {
     var r = try RegExp.compile(self.container.allocator, constants.REGEXP_RANGES);
     defer r.deinit();
 
@@ -180,14 +167,7 @@ fn expandRanges(
     return;
 }
 
-fn expandSteps(
-    self: *Self,
-    prefix: []const u8,
-    suffix: []const u8,
-    map: *std.AutoHashMap(u8, bool),
-    max: u8,
-    min: u8,
-) !void {
+fn expandSteps(self: *Self, prefix: []const u8, suffix: []const u8, map: *std.AutoHashMap(u8, bool), max: u8, min: u8) !void {
     var _min = min;
     var _max = max;
 

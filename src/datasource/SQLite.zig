@@ -110,17 +110,17 @@ pub fn lastInsertRowID(self: *SQLite) i64 {
 /// Begin a transaction. SQLite auto-commits each statement, so an explicit
 /// BEGIN/COMMIT pair is required to make a set of writes atomic.
 pub fn begin(self: *SQLite) !void {
-    try self.db.exec("BEGIN", .{}, .{});
+    try self.db.execDynamic("BEGIN", .{}, .{});
 }
 
 /// Commit the active transaction.
 pub fn commit(self: *SQLite) !void {
-    try self.db.exec("COMMIT", .{}, .{});
+    try self.db.execDynamic("COMMIT", .{}, .{});
 }
 
 /// Roll back the active transaction (best-effort).
 pub fn rollback(self: *SQLite) void {
     // A failed rollback cannot be recovered here; the transaction is abandoned
     // either way, so the error is intentionally ignored.
-    self.db.exec("ROLLBACK", .{}, .{}) catch {};
+    self.db.execDynamic("ROLLBACK", .{}, .{}) catch {};
 }

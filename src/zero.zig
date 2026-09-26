@@ -63,6 +63,7 @@ pub const SQL = @import("datasource/SQL.zig");
 pub const SQLite = @import("datasource/SQLite.zig");
 
 pub const DuckDB = @import("datasource/DuckDB.zig").DuckDB;
+pub const DuckGres = @import("datasource/duckgres.zig").DuckGres;
 pub const ClickHouse = @import("datasource/ClickHouse.zig").ClickHouse;
 pub const datasourceInterface = @import("datasource/interface.zig");
 pub const Datasource = datasourceInterface.Interface;

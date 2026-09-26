@@ -13,6 +13,7 @@ pub const InfluxDB = struct {
     base_url: []const u8,
     bucket: []const u8,
     token: []const u8,
+
     // Last upstream failure, read by the caller right after catching the bare
     // error (mirrors pg.zig's `conn.err`). `message` is owned by `allocator`.
     last_error: ?root.Error.DataSourceError = null,
@@ -45,8 +46,10 @@ pub const InfluxDB = struct {
             self.allocator.free(e.message);
             self.last_error = null;
         }
+
         const url = try std.fmt.allocPrint(ctx.allocator, "{s}/api/v3/write_lp", .{self.base_url});
         defer ctx.allocator.free(url);
+
         var req = try self.client.allocRequest(ctx.allocator, url);
         defer req.deinit();
         req.method = .POST;
@@ -56,15 +59,19 @@ pub const InfluxDB = struct {
 
         const auth = try std.fmt.allocPrint(ctx.allocator, "Bearer {s}", .{self.token});
         defer ctx.allocator.free(auth);
-        try req.header("authorization", auth);
 
+        try req.header("authorization", auth);
         req.body(statement);
 
         var res: zul.http.Response = try req.getResponse(.{});
         if (res.status < 200 or res.status > 299) {
             const sb = try res.allocBody(ctx.allocator, .{});
             defer sb.deinit();
-            self.last_error = .{ .status = res.status, .message = try self.allocator.dupe(u8, sb.buf[0..sb.pos]) };
+            self.last_error = .{
+                .status = res.status,
+                .message = try self.allocator.dupe(u8, sb.buf[0..sb.pos]),
+            };
+
             return error.InfluxDBWriteFailed;
         }
     }
@@ -76,6 +83,7 @@ pub const InfluxDB = struct {
             self.allocator.free(e.message);
             self.last_error = null;
         }
+
         const url = try std.fmt.allocPrint(ctx.allocator, "{s}/api/v3/query_sql", .{self.base_url});
         defer ctx.allocator.free(url);
 
@@ -119,6 +127,7 @@ pub const InfluxDB = struct {
             self.allocator.free(e.message);
             self.last_error = null;
         }
+
         const url = try std.fmt.allocPrint(ctx.allocator, "{s}/api/v3/configure/database", .{self.base_url});
         defer ctx.allocator.free(url);
 

@@ -130,6 +130,11 @@ datasource: root.Datasource = undefined,
 // In-process OLAP SQL engine (DuckDB). Linked via libs/libduckdb.so.
 DuckDB: ?*root.DuckDB = null,
 
+// Wired (network) DuckDB client. Speaks the Postgres wire protocol to a
+// DuckDB PG-wire front-end (e.g. duckgres / PostDuck); no duckdb C library
+// linked. Selected via DB_DIALECT=duckgres and exposed on ctx.SQL.
+DuckGres: ?*root.DuckGres = null,
+
 // Columnar OLAP SQL engine (ClickHouse) over HTTP. No native driver / C lib.
 ClickHouse: ?*root.ClickHouse = null,
 
@@ -208,11 +213,16 @@ pub fn create(self: Self) anyerror!*container {
     // initialize duckdb (in-process OLAP SQL) when configured
     try c.loadDuckDB();
 
+    // initialize duckgres (wired DuckDB over the Postgres wire protocol) when
+    // DB_DIALECT=duckgres is set; shares the DB_* connection configuration.
+    // try c.loadDuckGres();
+
     // initialize clickhouse (columnar OLAP SQL over HTTP) when configured
     try c.loadClickhouse();
 
     // initialize specialized datasources (time-series / search) when configured
     try c.loadTimeseries();
+
     try c.loadSearch();
 
     // initialize nosql datasource (document / wide-column) when configured
@@ -221,8 +231,7 @@ pub fn create(self: Self) anyerror!*container {
     // initilize message queues
     try c.loadPubSub();
 
-    const msg: []const u8 = "container is created";
-    c.log.info(msg);
+    c.log.info("container is created");
 
     return c;
 }
@@ -272,6 +281,13 @@ pub fn destroy(self: *Self) void {
     // struct allocated by `create` / `addDuckDB`.
     if (self.DuckDB) |db| {
         db.deinit(allocator);
+    }
+
+    // Wired (network) DuckDB client: closes the pgz pool, then frees the struct
+    // allocated by `loadDuckGres` / `DuckGres.create`.
+    if (self.DuckGres) |db| {
+        db.deinit();
+        allocator.destroy(db);
     }
 
     // Columnar OLAP engine (ClickHouse): frees the HTTP client and the struct.
@@ -754,7 +770,9 @@ fn loadRedis(self: *Self) !void {
     // expose Redis through the unified KV store interface (default store)
     const redisStore = try root.kvstore.build(self, .redis, .{});
     try self.kvStores.put("cache", redisStore);
-    if (self.defaultKV == null) self.defaultKV = redisStore;
+    if (self.defaultKV == null) {
+        self.defaultKV = redisStore;
+    }
 }
 
 fn loadSQL(self: *Self) !void {
@@ -770,6 +788,11 @@ fn loadSQL(self: *Self) !void {
 
     if (std.mem.eql(u8, dialect, "sqlite") == true) {
         try self.loadSQLite();
+        return;
+    }
+
+    if (std.mem.eql(u8, dialect, "duckgres") == true) {
+        try self.loadDuckGres();
         return;
     }
 
@@ -958,6 +981,97 @@ fn loadDuckDB(self: *Self) !void {
     try self.registerSqlHealth();
 }
 
+// Auto-wire the wired (network) DuckDB client when DB_DIALECT=duckgres is set.
+// It reuses the shared DB_* connection configuration (host/port/user/password/
+// database/TLS) and speaks the Postgres wire protocol to a DuckDB PG-wire
+// front-end (e.g. duckgres / PostDuck), so the duckdb C library stays out of the
+// link. SQL is sent verbatim in the DuckDB dialect; `pgz` is dialect-agnostic at
+// the protocol layer. Exposed on the request context as `ctx.SQL` via the
+// `duckgres` dialect. Disabled (returns early) when the dialect is unset, so a
+// default startup with no dialect is unaffected.
+fn loadDuckGres(self: *Self) !void {
+    if (self.DuckGres != null) return;
+
+    var buffer: []u8 = undefined;
+    buffer = try self.bootstrap.alloc(u8, 512);
+
+    const hostname = self.config.get("DB_HOST");
+    if (std.mem.eql(u8, hostname, "") == true) {
+        buffer = try std.fmt.bufPrint(buffer, "connection to duckgres failed: host name is empty.", .{});
+        self.log.err(buffer);
+        return;
+    }
+    const port = self.config.get("DB_PORT");
+    if (std.mem.eql(u8, port, "") == true) {
+        buffer = try std.fmt.bufPrint(buffer, "connection to duckgres failed: database port is empty.", .{});
+        self.log.err(buffer);
+        return;
+    }
+    // DuckDB PG-wire front-ends (e.g. duckgres / PostDuck) typically require no
+    // password and accept any username/database, so these are optional and
+    // defaulted rather than hard-failing the wiring. Only host/port are required.
+    const user = if (std.mem.eql(u8, self.config.get("DB_USER"), "")) "duckdb" else self.config.get("DB_USER");
+    const password = self.config.get("DB_PASSWORD");
+    const db = if (std.mem.eql(u8, self.config.get("DB_NAME"), "")) "main" else self.config.get("DB_NAME");
+
+    const portInt = try self.config.getAsInt("DB_PORT");
+    const dbPort: u16 = @intCast(portInt);
+
+    const sslMode = self.config.getOrDefault("DB_SSL_MODE", "disable");
+    var tlsMode: pgz.Conn.Opts.TLS = .off;
+    if (std.mem.eql(u8, sslMode, "require")) {
+        tlsMode = .require;
+    } else if (std.mem.eql(u8, sslMode, "verify-ca") or
+        std.mem.eql(u8, sslMode, "verify-full") or
+        std.mem.eql(u8, sslMode, "verifyca") or
+        std.mem.eql(u8, sslMode, "verifyfull"))
+    {
+        const rootCa = self.config.get("DB_TLS_ROOT_CA");
+        if (std.mem.eql(u8, rootCa, "")) {
+            tlsMode = .{ .verify_full = null };
+        } else {
+            tlsMode = .{ .verify_full = rootCa };
+        }
+    }
+
+    const pool_size: u16 = @intCast(blk: {
+        const v = self.config.getAsInt("PG_POOL_SIZE") catch 0;
+        break :blk if (v == 0) constants.DEFAULT_PG_POOL_SIZE else @as(u32, v);
+    });
+    const acquire_timeout_ms: u32 = blk: {
+        const v = self.config.getAsInt("PG_POOL_ACQUIRE_TIMEOUT_MS") catch 0;
+        break :blk if (v == 0) constants.DEFAULT_PG_POOL_ACQUIRE_TIMEOUT_MS else @as(u32, v);
+    };
+    const options: pgz.Pool.Opts = .{
+        .size = pool_size,
+        .connect = .{
+            .host = hostname,
+            .port = dbPort,
+            .tls = tlsMode,
+        },
+        .auth = .{
+            .application_name = self.config.get("APP_NAME"),
+            .username = user,
+            .password = password,
+            .database = db,
+            .timeout = acquire_timeout_ms,
+        },
+    };
+
+    const dg = root.DuckGres.create(self.allocator, options, self.log, self.metricz) catch |err| {
+        buffer = try std.fmt.bufPrint(buffer, "Failed to connect: {}", .{err});
+        self.log.err(buffer);
+        std.process.exit(1);
+    };
+    self.DuckGres = dg;
+    self.wireDatasource(dg, .duckgres);
+
+    buffer = try std.fmt.bufPrint(buffer, "connected to duckgres (wired) user to {s} database at '{s}:{s}'", .{ user, hostname, port });
+    self.log.info(buffer);
+
+    try self.registerSqlHealth();
+}
+
 // Auto-wire the columnar OLAP SQL engine (ClickHouse) over HTTP when
 // CLICKHOUSE_URL is set. No native driver / C library is required; every
 // query travels over the framework's `zul` HTTP client.
@@ -1135,7 +1249,9 @@ fn loadFileStore(self: *Self) !void {
             return;
         };
         try self.fileStores.put("s3", store);
-        if (self.defaultFileStore == null) self.defaultFileStore = store;
+        if (self.defaultFileStore == null) {
+            self.defaultFileStore = store;
+        }
         self.log.info("connected to s3 file store");
         return;
     }
@@ -1153,7 +1269,9 @@ fn loadFileStore(self: *Self) !void {
     };
 
     try self.fileStores.put("local", store);
-    if (self.defaultFileStore == null) self.defaultFileStore = store;
+    if (self.defaultFileStore == null) {
+        self.defaultFileStore = store;
+    }
 
     self.log.info("connected to local file store");
 }

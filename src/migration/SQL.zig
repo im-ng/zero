@@ -56,7 +56,7 @@ const insertMigrationRecordPostgres =
 
 pub fn checkAndCreateMigrationTable(ctx: *Context) !void {
     const dialect = ctx.container.config.get("DB_DIALECT");
-    if (std.mem.eql(u8, "postgres", dialect)) {
+    if (std.mem.eql(u8, "postgres", dialect) or std.mem.eql(u8, "duckgres", dialect)) {
         _ = try ctx.SQL.exec(ctx, migrationTablePostgres, .{});
         ctx.info("migration table created");
     } else if (std.mem.eql(u8, "sqlite", dialect)) {
@@ -90,7 +90,7 @@ pub fn checkAndCreateMigrationTable(ctx: *Context) !void {
 pub fn lastMigration(ctx: *Context) !i64 {
     const dialect = ctx.container.config.get("DB_DIALECT");
 
-    if (std.mem.eql(u8, "postgres", dialect)) {
+    if (std.mem.eql(u8, "postgres", dialect) or std.mem.eql(u8, "duckgres", dialect)) {
         const result = try ctx.SQL.queryRowContext(ctx, zeroTable, lastMigrationRecord, .{});
         if (result) |r| {
             // pg dupes the text columns (`execution`, `start_time`) into
@@ -123,7 +123,7 @@ pub fn insertMigration(ctx: *Context, m: *const migrate, duration: u64) !i64 {
     // `sqlTimestampz` returns a caller-owned buffer; free it once the bind is done.
     defer ctx.allocator.free(startTime);
 
-    if (std.mem.eql(u8, "postgres", dialect)) {
+    if (std.mem.eql(u8, "postgres", dialect) or std.mem.eql(u8, "duckgres", dialect)) {
         return try ctx.SQL.exec(ctx, insertMigrationRecordPostgres, .{ epoch, status, startTime, duration });
     }
 

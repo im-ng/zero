@@ -85,7 +85,7 @@ fn addToDir(allocator: std.mem.Allocator, dir: []const u8, raw_name: []const u8)
     // The generated file needs exactly two backslashes (`\\`) to start the
     // multiline-string SQL line. A Zig string literal halves backslashes, so
     // four source backslashes yield the two we want in the output file.
-    try sb.appendSlice(allocator, "        \\\\ -- TODO: write your migration SQL\n    ;\n    _ = try c.SQL.exec(c, query, .{{}});\n}}\n\n");
+    try sb.appendSlice(allocator, "        \\\\ -- TODO: write your migration SQL\n    ;\n    _ = try c.SQL.exec(c, query, .{});\n}\n\n");
 
     const migrate_line = try std.fmt.allocPrint(
         allocator,

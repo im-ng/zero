@@ -68,7 +68,7 @@ pub const Context = struct {
             // clobber each other's last-insert-id.
             const session = try root.SQL.createSession(allocator, container.SQL.?);
             c.SQL = root.Datasource.init(session, .postgres, container.datasource.breaker, container.metricz);
-        } else if (container.SQLite != null or container.DuckDB != null or container.ClickHouse != null) {
+        } else if (container.SQLite != null or container.DuckDB != null or container.ClickHouse != null or container.DuckGres != null) {
             // SQLite/DuckDB backends reuse a single shared connection; the
             // per-request session does not apply (see ZIG_LEARNINGS.md — their
             // single-connection concurrency is a separate, documented limitation).
@@ -126,18 +126,36 @@ pub const Context = struct {
             .params = std.StringHashMap([]const u8).init(allocator),
         };
 
-        if (container.SQL != null or container.SQLite != null or container.DuckDB != null or container.ClickHouse != null) {
+        if (container.SQL != null or container.SQLite != null or container.DuckDB != null or container.ClickHouse != null or container.DuckGres != null) {
             c.SQL = container.datasource;
         }
-        if (container.defaultKV) |kv| c.KV = kv;
-        if (container.Timeseries) |ts| c.Timeseries = ts;
-        if (container.Search) |s| c.Search = s;
-        if (container.NoSQL) |n| c.NoSQL = n;
-        if (container.defaultFileStore) |fs| c.FileStore = fs;
-        if (container.mqtt) |pb| c.MQ = pb;
-        if (container.Kakfa) |k| c.KF = k;
-        if (container.Nats) |n| c.NATS = n;
-        if (container.pubSub) |ps| c.pubsub = ps;
+        if (container.defaultKV) |kv| {
+            c.KV = kv;
+        }
+        if (container.Timeseries) |ts| {
+            c.Timeseries = ts;
+        }
+        if (container.Search) |s| {
+            c.Search = s;
+        }
+        if (container.NoSQL) |n| {
+            c.NoSQL = n;
+        }
+        if (container.defaultFileStore) |fs| {
+            c.FileStore = fs;
+        }
+        if (container.mqtt) |pb| {
+            c.MQ = pb;
+        }
+        if (container.Kakfa) |k| {
+            c.KF = k;
+        }
+        if (container.Nats) |n| {
+            c.NATS = n;
+        }
+        if (container.pubSub) |ps| {
+            c.pubsub = ps;
+        }
 
         return c;
     }
@@ -371,28 +389,28 @@ pub const Context = struct {
 
     /// checks availability of the pubsub service
     pub fn getPubSubAvailability(self: *Context) bool {
-        if (self.container.pubsub == null) {
+        if (self.container.pubSub == null) {
             return false;
         }
         return true;
     }
 
     /// retrieves registered pubsub client
-    pub fn getPublisher(self: *Context) *pubSub {
-        if (self.container.pubsub == null) {
-            self.container.log.Err(self.allocator, "no mqtt client initilized");
+    pub fn getPublisher(self: *Context) *root.PubSub {
+        if (self.container.pubSub == null) {
+            self.container.log.Err(self.allocator, "no pubsub client initialized");
             return;
         }
-        return self.container.pubsub.?;
+        return self.container.pubSub.?;
     }
 
     /// retrieve registered pubsub subscriber client
-    pub fn getSubscriber(self: *Context) !*pubSub {
-        if (self.container.pubsub == null) {
-            self.container.log.Err(self.allocator, "no mqtt client initilized");
+    pub fn getSubscriber(self: *Context) !*root.PubSub {
+        if (self.container.pubSub == null) {
+            self.container.log.Err(self.allocator, "no pubsub client initialized");
             return;
         }
-        return self.container.pubsub.?;
+        return self.container.pubSub.?;
     }
 
     /// packs response in custom json to respond
