@@ -50,8 +50,13 @@ pub fn init(c: Config) !rateLimiter {
 }
 
 pub fn execute(self: *rateLimiter, req: *httpz.Request, res: *httpz.Response, executor: anytype) !void {
-    if (!self.enabled) return executor.next();
-    if (std.mem.startsWith(u8, req.url.path, "/.well-known")) return executor.next();
+    if (!self.enabled) {
+        return executor.next();
+    }
+
+    if (std.mem.startsWith(u8, req.url.path, "/.well-known")) {
+        return executor.next();
+    }
 
     const key = self.keyFor(req) orelse return executor.next();
     const now = utils.nowMonotonic().nanoseconds;
@@ -89,7 +94,9 @@ fn keyFor(self: *const rateLimiter, req: *httpz.Request) ?u64 {
             return std.hash.XxHash3.hash(0, h);
         }
     }
+
     var buf: [64]u8 = undefined;
     const s = std.fmt.bufPrint(&buf, "{}", .{req.address}) catch return null;
+
     return std.hash.XxHash3.hash(0, s);
 }

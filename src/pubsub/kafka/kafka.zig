@@ -22,7 +22,7 @@ const Context = root.Context;
 const constants = root.constants;
 const httpz = root.httpz;
 
-const _req: *httpz.Request = undefined;
+const _req: ?*httpz.Request = null;
 const _res: *httpz.Response = undefined;
 
 thread: std.Thread = undefined,
@@ -151,7 +151,9 @@ pub fn publish(self: *Self, ctx: *Context, topic: *kafkaTopic, key: []const u8, 
     const key_ptr: ?*anyopaque = @constCast(key.ptr);
 
     // Propagate the inbound correlation id as a Kafka record header when present.
-    const cid = ctx.request.header("X-Correlation-ID");
+    // ctx.request is only set during an HTTP request; cron/pub-sub driven
+    // publishes have no request, so guard against a null request.
+    const cid = if (ctx.request) |r| r.header("X-Correlation-ID") else null;
 
     const err_code: c_int = blk: {
         if (cid) |id| {
@@ -162,9 +164,14 @@ pub fn publish(self: *Self, ctx: *Context, topic: *kafkaTopic, key: []const u8, 
                 topic,
                 rdkafka.RD_KAFKA_PARTITION_UA,
                 rdkafka.RD_KAFKA_MSG_F_COPY,
-                rdkafka.RD_KAFKA_VTYPE_VALUE, message_ptr, payload.len,
-                rdkafka.RD_KAFKA_VTYPE_KEY, key_ptr, key.len,
-                rdkafka.RD_KAFKA_VTYPE_HEADERS, hdrs,
+                rdkafka.RD_KAFKA_VTYPE_VALUE,
+                message_ptr,
+                payload.len,
+                rdkafka.RD_KAFKA_VTYPE_KEY,
+                key_ptr,
+                key.len,
+                rdkafka.RD_KAFKA_VTYPE_HEADERS,
+                hdrs,
                 rdkafka.RD_KAFKA_VTYPE_END,
             );
             rdkafka.rd_kafka_headers_destroy(hdrs);
@@ -190,7 +197,7 @@ pub fn publish(self: *Self, ctx: *Context, topic: *kafkaTopic, key: []const u8, 
 
         ctx.info(msg);
 
-        self.container.metricz.publisherSuccess(.{ .topic = self.getTopicName(topic) }) catch unreachable;
+        self.container.metricz.publisherSuccess(.{ .topic = self.getTopicName(topic) }) catch |e| std.debug.print("kafka publisherSuccess metric failed: {}\n", .{e});
     } else {
         const msg = try utils.combine(
             ctx.allocator,
@@ -201,7 +208,7 @@ pub fn publish(self: *Self, ctx: *Context, topic: *kafkaTopic, key: []const u8, 
         ctx.err(msg);
     }
 
-    self.container.metricz.publisherTotal(.{ .topic = self.getTopicName(topic) }) catch unreachable;
+    self.container.metricz.publisherTotal(.{ .topic = self.getTopicName(topic) }) catch |e| std.debug.print("kafka publisherTotal metric failed: {}\n", .{e});
 }
 
 /// Convenience for the unified `PubSub` interface: publish to a subject
@@ -311,7 +318,7 @@ pub fn readPayload(self: *Self, subscriber: kafkaSubscriber) !void {
 
             self.commitOffset(context, msg);
 
-            self.container.metricz.subscriberTotal(.{ .topic = msg.getTopic(), .consumer = "zero-consumer" }) catch unreachable;
+            self.container.metricz.subscriberTotal(.{ .topic = msg.getTopic(), .consumer = "zero-consumer" }) catch |e| std.debug.print("kafka subscriberTotal metric failed: {}\n", .{e});
         }
     }
 }
@@ -324,7 +331,9 @@ fn subscriptions(self: *Self) !void {
     // ever be serviced).
     var threads = try std.ArrayList(std.Thread).initCapacity(self.container.allocator, 0);
     defer {
-        for (threads.items) |t| t.join();
+        for (threads.items) |t| {
+            t.join();
+        }
     }
 
     for (self.subscriber.items) |s| {
@@ -352,18 +361,18 @@ fn subscriptions(self: *Self) !void {
 pub fn commitOffset(self: *Self, ctx: *Context, message: kafkaMessage) void {
     const err_code: c_int = rdkafka.rd_kafka_commit_message(self.client, message._message, 1);
     if (err_code != rdkafka.RD_KAFKA_RESP_ERR_NO_ERROR) {
-        const msg = utils.combine(ctx.allocator, "failed to commit offset {s}", .{rdkafka.rd_kafka_err2str(err_code)}) catch unreachable;
+        const msg = utils.combine(ctx.allocator, "failed to commit offset {s}", .{rdkafka.rd_kafka_err2str(err_code)}) catch "failed to commit offset";
         ctx.err(msg);
         return;
     }
-    const msg = utils.combine(ctx.allocator, "Offset {d} commited", .{message.getOffset()}) catch unreachable;
+    const msg = utils.combine(ctx.allocator, "Offset {d} commited", .{message.getOffset()}) catch "offset committed";
     ctx.info(msg);
 }
 
 pub inline fn unsubscribe(self: *Self, ctx: *Context) void {
     const err_code: c_int = rdkafka.rd_kafka_unsubscribe(self.client);
     if (err_code != rdkafka.RD_KAFKA_RESP_ERR_NO_ERROR) {
-        const msg = utils.combine(ctx.allocator, "failed to unsubsribe {s}", .{rdkafka.rd_kafka_err2str(err_code)}) catch unreachable;
+        const msg = utils.combine(ctx.allocator, "failed to unsubsribe {s}", .{rdkafka.rd_kafka_err2str(err_code)}) catch "failed to unsubscribe";
         ctx.err(msg);
         return;
     }
@@ -373,7 +382,7 @@ pub inline fn unsubscribe(self: *Self, ctx: *Context) void {
 pub inline fn close(self: *Self, ctx: *Context) void {
     const err_code: c_int = rdkafka.rd_kafka_consumer_close(self._consumer);
     if (err_code != rdkafka.RD_KAFKA_RESP_ERR_NO_ERROR) {
-        const msg = utils.combine(ctx.allocator, "failed to close {s}", .{rdkafka.rd_kafka_err2str(err_code)}) catch unreachable;
+        const msg = utils.combine(ctx.allocator, "failed to close {s}", .{rdkafka.rd_kafka_err2str(err_code)}) catch "failed to close consumer";
         ctx.err(msg);
         return;
     }

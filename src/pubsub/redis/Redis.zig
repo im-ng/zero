@@ -34,18 +34,18 @@ wbuf: [8192]u8 = undefined,
 sub_rdbuf: [8192]u8 = undefined,
 sub_wbuf: [8192]u8 = undefined,
 
-    subscriber: std.array_list.Managed(Subscriber) = undefined,
-    mu: std.Io.Mutex = undefined,
-    signal: Atomic(bool) = undefined,
-    thread: std.Thread = undefined,
-    started: bool = false,
-    isPubSubSet: bool = false,
-    // Connection parameters retained so the consumer can reconnect on drop.
-    host: []const u8 = undefined,
-    port: u16 = 0,
-    user: []const u8 = undefined,
-    password: []const u8 = undefined,
-    db: u16 = 0,
+subscriber: std.array_list.Managed(Subscriber) = undefined,
+mu: std.Io.Mutex = undefined,
+signal: Atomic(bool) = undefined,
+thread: std.Thread = undefined,
+started: bool = false,
+isPubSubSet: bool = false,
+// Connection parameters retained so the consumer can reconnect on drop.
+host: []const u8 = undefined,
+port: u16 = 0,
+user: []const u8 = undefined,
+password: []const u8 = undefined,
+db: u16 = 0,
 
 pub fn create(
     container: *root.container,
@@ -116,8 +116,12 @@ fn connect(self: *Self) !void {
 
 /// Close the active sockets (best-effort). Safe to call when not connected.
 fn disconnect(self: *Self) void {
-    if (self.stream) |s| s.close(self.container.io);
-    if (self.sub_stream) |s| s.close(self.container.io);
+    if (self.stream) |s| {
+        s.close(self.container.io);
+    }
+    if (self.sub_stream) |s| {
+        s.close(self.container.io);
+    }
     self.stream = null;
     self.sub_stream = null;
     self.reader = null;
@@ -142,8 +146,12 @@ pub fn destroy(self: *Self) void {
     if (self.subscriber.items.len > 0) {
         self.thread.join();
     }
-    if (self.stream) |s| s.close(self.container.io);
-    if (self.sub_stream) |s| s.close(self.container.io);
+    if (self.stream) |s| {
+        s.close(self.container.io);
+    }
+    if (self.sub_stream) |s| {
+        s.close(self.container.io);
+    }
 }
 
 pub fn Publish(self: *Self, subject: []const u8, payload: []const u8) !void {
@@ -174,12 +182,19 @@ pub fn addSubscriber(self: *Self, topic: []const u8, hook: *const fn (*root.Cont
 }
 
 pub fn startSubscription(self: *Self) !void {
-    if (self.started) return;
-    if (self.subscriber.items.len == 0) return;
+    if (self.started) {
+        return;
+    }
+
+    if (self.subscriber.items.len == 0) {
+        return;
+    }
+
     self.thread = Thread.spawn(.{}, Self.subscriptions, .{self}) catch |err| {
         self.container.log.Any(self.allocator, err);
         return;
     };
+
     self.started = true;
 }
 
@@ -191,13 +206,17 @@ fn subscriptions(self: *Self) !void {
             // resume. This keeps the subscription alive across Redis restarts /
             // network blips instead of the consumer thread dying permanently.
             self.disconnect();
+
             self.connect() catch |e| {
                 self.container.log.Any(self.allocator, e);
                 std.Io.sleep(self.container.io, std.Io.Duration.fromSeconds(2), .awake) catch {};
                 continue;
             };
+
             self.resubscribe();
+
             std.Io.sleep(self.container.io, std.Io.Duration.fromMilliseconds(500), .awake) catch {};
+
             continue;
         };
         break;
@@ -230,7 +249,7 @@ fn runHook(self: *Self, hook: *const fn (*root.Context) anyerror!void, channel: 
         self.allocator.destroy(ca);
     }
 
-    var ctx = Context.init(ca.allocator(), self.container, @as(*httpz.Request, undefined), @as(*httpz.Response, undefined)) catch return;
+    var ctx = Context.init(ca.allocator(), self.container, null, @as(*httpz.Response, undefined)) catch return;
     const context = &ctx;
 
     var message = root.redisMessage{
@@ -252,10 +271,13 @@ fn runHook(self: *Self, hook: *const fn (*root.Context) anyerror!void, channel: 
                 std.Io.sleep(self.container.io, std.Io.Duration.fromMilliseconds(backoff_ms), .awake) catch {};
                 continue;
             }
+
             const dlq = std.fmt.allocPrint(self.allocator, "{s}.dlq", .{channel}) catch break;
             defer self.allocator.free(dlq);
+
             self.container.metricz.dlq(.{ .topic = channel, .consumer = "dlq" }) catch {};
             self.Publish(dlq, payload) catch |dlerr| self.container.log.Any(self.allocator, dlerr);
+
             break;
         };
         break;
@@ -267,7 +289,7 @@ fn runHook(self: *Self, hook: *const fn (*root.Context) anyerror!void, channel: 
 fn encodeCommand(w: *std.Io.Writer, args: []const []const u8) !void {
     try w.print("*{d}\r\n", .{args.len});
     for (args) |a| {
-        try w.print("${d}\r\n{s}\r\n", .{a.len, a});
+        try w.print("${d}\r\n{s}\r\n", .{ a.len, a });
     }
 }
 
@@ -307,14 +329,18 @@ fn readSubFrame(r: *std.Io.Reader, alloc: std.mem.Allocator) !?Frame {
             // integer or simple-string element (e.g. confirmations)
             e.* = line;
         }
-        if (i == 0) kind = e.*;
+        if (i == 0) {
+            kind = e.*;
+        }
     }
 
     return Frame{ .kind = kind, .elements = elements };
 }
 
 fn freeFrame(frame: Frame, alloc: std.mem.Allocator) void {
-    for (frame.elements) |e| alloc.free(e);
+    for (frame.elements) |e| {
+        alloc.free(e);
+    }
     alloc.free(frame.elements);
     // frame.kind aliases elements[0]; already freed above.
 }
@@ -357,7 +383,6 @@ fn writtenLen(buf: []const u8) usize {
 }
 
 // ===================== Tests =====================
-
 
 test "redis readSubFrame parses a message push frame" {
     const payload = "*3\r\n$7\r\nmessage\r\n$5\r\nusers\r\n$11\r\nhello world\r\n";

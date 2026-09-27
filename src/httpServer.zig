@@ -38,6 +38,17 @@ buffer: [1024]u8 = undefined,
 provider: ?*root.AuthProvider = undefined,
 refresherThread: ?std.Thread = undefined,
 
+fn configIntOr(comptime T: type, container: *root.container, key: []const u8, default: T) T {
+    const raw = container.config.getAsInt(key) catch 0;
+    return if (raw == 0) default else @as(T, @intCast(raw));
+}
+
+/// Read a millisecond config key, falling back to `default` when missing/zero/unparseable.
+fn configMsOr(container: *root.container, key: []const u8, default: u32) u32 {
+    const raw = container.config.getOrDefault(key, "");
+    return std.fmt.parseInt(u32, raw, 10) catch default;
+}
+
 pub fn create(allocator: std.mem.Allocator, container: *root.container) !*server {
     const hzs = try allocator.create(server);
     errdefer allocator.destroy(hzs);
@@ -52,10 +63,7 @@ pub fn create(allocator: std.mem.Allocator, container: *root.container) !*server
     }
 
     const default_request_timeout_ms: u32 = constants.DEFAULT_REQUEST_TIMEOUT_MS;
-    const request_timeout_ms: u32 = blk: {
-        const v = hzs.container.config.getOrDefault("ZERO_REQUEST_TIMEOUT_MS", "");
-        break :blk std.fmt.parseInt(u32, v, 10) catch default_request_timeout_ms;
-    };
+    const request_timeout_ms: u32 = configMsOr(hzs.container, "ZERO_REQUEST_TIMEOUT_MS", default_request_timeout_ms);
     const request_timeout_s: u32 = if (request_timeout_ms == 0) 0 else @max(1, request_timeout_ms / 1000);
 
     // Idle keep-alive timeout: close idle keep-alive connections so they don't
@@ -78,18 +86,12 @@ pub fn create(allocator: std.mem.Allocator, container: *root.container) !*server
     // --- Event-loop workers (I/O only: accept/parse/write) -------------------
     // Scale to CPU cores. Your route/handler code does NOT run here; it runs on
     // the separate `thread_pool` (see below). Override via ZERO_HTTP_WORKERS.
-    const workers_count: u16 = blk: {
-        const v = hzs.container.config.getAsInt("ZERO_HTTP_WORKERS") catch 0;
-        break :blk if (v == 0) constants.DEFAULT_HTTP_WORKERS else @as(u16, v);
-    };
+    const workers_count: u16 = configIntOr(u16, hzs.container, "ZERO_HTTP_WORKERS", constants.DEFAULT_HTTP_WORKERS);
 
     // --- Max request body ----------------------------------------------------
     // Hard ceiling; a body larger than this is rejected with 413 (BodyTooBig).
     // Override via ZERO_HTTP_MAX_BODY_SIZE (bytes).
-    const max_body_size: usize = blk: {
-        const v = hzs.container.config.getAsInt("ZERO_HTTP_MAX_BODY_SIZE") catch 0;
-        break :blk if (v == 0) constants.DEFAULT_HTTP_MAX_BODY_SIZE_BYTES else @as(usize, v);
-    };
+    const max_body_size: usize = configIntOr(usize, hzs.container, "ZERO_HTTP_MAX_BODY_SIZE", constants.DEFAULT_HTTP_MAX_BODY_SIZE_BYTES);
 
     // --- Body-buffer pool (per event-loop worker, eagerly allocated) ---------
     // httpz pre-allocates `large_buffer_count` buffers of `large_buffer_size`
@@ -98,23 +100,14 @@ pub fn create(allocator: std.mem.Allocator, container: *root.container) !*server
     // pooled buffer (no per-request arena fallback). Bodies larger than the
     // pooled buffer still grow on the per-request arena and free at request end.
     // Override via ZERO_HTTP_LARGE_BUFFER_SIZE / ZERO_HTTP_LARGE_BUFFER_COUNT.
-    const large_buffer_size: u32 = blk: {
-        const v = hzs.container.config.getAsInt("ZERO_HTTP_LARGE_BUFFER_SIZE") catch 0;
-        break :blk if (v == 0) @as(u32, @intCast(max_body_size)) else @as(u32, @intCast(v));
-    };
-    const large_buffer_count: u16 = blk: {
-        const v = hzs.container.config.getAsInt("ZERO_HTTP_LARGE_BUFFER_COUNT") catch 0;
-        break :blk if (v == 0) constants.DEFAULT_HTTP_LARGE_BUFFER_COUNT else @as(u16, v);
-    };
+    const large_buffer_size: u32 = configIntOr(u32, hzs.container, "ZERO_HTTP_LARGE_BUFFER_SIZE", @as(u32, @intCast(max_body_size)));
+    const large_buffer_count: u16 = configIntOr(u16, hzs.container, "ZERO_HTTP_LARGE_BUFFER_COUNT", constants.DEFAULT_HTTP_LARGE_BUFFER_COUNT);
 
     // --- Handler thread pool (runs your route code) --------------------------
     // Separate from the I/O event-loop workers above. Keep generous: handlers
     // block on DB/Redis, so more threads hide that latency. Override via
     // ZERO_HTTP_THREAD_POOL_COUNT.
-    const thread_pool_count: u16 = blk: {
-        const v = hzs.container.config.getAsInt("ZERO_HTTP_THREAD_POOL_COUNT") catch 0;
-        break :blk if (v == 0) constants.DEFAULT_HTTP_THREAD_POOL_COUNT else @as(u16, v);
-    };
+    const thread_pool_count: u16 = configIntOr(u16, hzs.container, "ZERO_HTTP_THREAD_POOL_COUNT", constants.DEFAULT_HTTP_THREAD_POOL_COUNT);
 
     hzs.http = try httpz.Server(*root.handler.Handler).init(
         container.io,
@@ -308,7 +301,7 @@ fn loadAuthProviderConfig(self: *Self) anyerror!?*authProvider {
 
             while (encodedKeys.next()) |key| {
                 var payload: []u8 = undefined;
-                payload = self.container.bootstrap.alloc(u8, 1024) catch unreachable;
+                payload = try self.container.bootstrap.alloc(u8, 1024);
 
                 const codecs = std.base64.standard;
                 try codecs.Decoder.decode(payload, key);

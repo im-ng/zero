@@ -109,7 +109,7 @@ pub const Provider = struct {
 
         p.server_scope = .{
             .name = "zero.server",
-            .version = "0.5.1", // TODO: derive this from build step
+            .version = root.constants.SERVER_VERSION, // TODO: derive this from build step
             .schema_url = "https://opentelemetry.io/schemas/1.21.0",
         };
         p.tracer = try p.tracer_provider.?.getTracer(p.server_scope);
@@ -158,7 +158,9 @@ pub const Provider = struct {
         // Raw custom headers ("Key=Value,...").
         const headers = cfg.getOrDefault("OTEL_EXPORTER_OTLP_HEADERS", "");
         if (headers.len > 0) {
-            if (buf.items.len > 0) try buf.append(allocator, ',');
+            if (buf.items.len > 0) {
+                try buf.append(allocator, ',');
+            }
             try buf.appendSlice(allocator, headers);
         }
 
@@ -310,7 +312,9 @@ pub fn pushSpan(s: ActiveSpan) void {
 }
 
 pub fn popSpan() void {
-    if (span_stack_len > 0) span_stack_len -= 1;
+    if (span_stack_len > 0) {
+        span_stack_len -= 1;
+    }
 }
 
 pub fn currentSpan() ?ActiveSpan {

@@ -15,7 +15,9 @@ const kafkaMessage = root.kafkaMessage;
 const gql = @import("graphql.zig");
 
 pub const Context = struct {
-    request: *httpz.Request = undefined,
+    // Null outside an HTTP request (cron jobs, pub/sub message handlers, CLI).
+    // Code that reads it must guard on null instead of assuming a request.
+    request: ?*httpz.Request = null,
     response: *httpz.Response = undefined,
     allocator: std.mem.Allocator = undefined,
     container: *root.container = undefined,
@@ -50,7 +52,7 @@ pub const Context = struct {
     pub fn init(
         allocator: std.mem.Allocator,
         container: *root.container,
-        req: *httpz.Request,
+        req: ?*httpz.Request,
         res: *httpz.Response,
     ) !Context {
         var c = Context{
@@ -67,8 +69,8 @@ pub const Context = struct {
             // /lastId/rows so concurrent requests can't share a transaction or
             // clobber each other's last-insert-id.
             const session = try root.SQL.createSession(allocator, container.SQL.?);
-            c.SQL = root.Datasource.init(session, .postgres, container.datasource.breaker);
-        } else if (container.SQLite != null or container.DuckDB != null) {
+            c.SQL = root.Datasource.init(session, .postgres, container.datasource.breaker, container.metricz);
+        } else if (container.SQLite != null or container.DuckDB != null or container.ClickHouse != null or container.DuckGres != null) {
             // SQLite/DuckDB backends reuse a single shared connection; the
             // per-request session does not apply (see ZIG_LEARNINGS.md — their
             // single-connection concurrency is a separate, documented limitation).
@@ -126,18 +128,36 @@ pub const Context = struct {
             .params = std.StringHashMap([]const u8).init(allocator),
         };
 
-        if (container.SQL != null or container.SQLite != null or container.DuckDB != null) {
+        if (container.SQL != null or container.SQLite != null or container.DuckDB != null or container.ClickHouse != null or container.DuckGres != null) {
             c.SQL = container.datasource;
         }
-        if (container.defaultKV) |kv| c.KV = kv;
-        if (container.Timeseries) |ts| c.Timeseries = ts;
-        if (container.Search) |s| c.Search = s;
-        if (container.NoSQL) |n| c.NoSQL = n;
-        if (container.defaultFileStore) |fs| c.FileStore = fs;
-        if (container.mqtt) |pb| c.MQ = pb;
-        if (container.Kakfa) |k| c.KF = k;
-        if (container.Nats) |n| c.NATS = n;
-        if (container.pubSub) |ps| c.pubsub = ps;
+        if (container.defaultKV) |kv| {
+            c.KV = kv;
+        }
+        if (container.Timeseries) |ts| {
+            c.Timeseries = ts;
+        }
+        if (container.Search) |s| {
+            c.Search = s;
+        }
+        if (container.NoSQL) |n| {
+            c.NoSQL = n;
+        }
+        if (container.defaultFileStore) |fs| {
+            c.FileStore = fs;
+        }
+        if (container.mqtt) |pb| {
+            c.MQ = pb;
+        }
+        if (container.Kakfa) |k| {
+            c.KF = k;
+        }
+        if (container.Nats) |n| {
+            c.NATS = n;
+        }
+        if (container.pubSub) |ps| {
+            c.pubsub = ps;
+        }
 
         return c;
     }
@@ -204,12 +224,18 @@ pub const Context = struct {
 
     /// returns traceID of the service request
     pub fn trace(self: *Context) ?[]const u8 {
-        return self.request.headers.get("X-Correlation-ID");
+        if (self.request) |r| {
+            return r.headers.get("X-Correlation-ID");
+        }
+        return null;
     }
 
     /// returns correlationID of the request
     pub fn getCorrelationID(self: *Context) ?[]const u8 {
-        return self.request.headers.get("X-Correlation-ID");
+        if (self.request) |r| {
+            return r.headers.get("X-Correlation-ID");
+        }
+        return null;
     }
 
     /// Returns the active OpenTelemetry span handle for this request, or null when
@@ -232,23 +258,35 @@ pub const Context = struct {
 
     /// returns basic auth username claim
     pub fn getUsername(self: *Context) !?[]const u8 {
-        return try self.container.authProvider.retrieveUserName(
-            self.allocator,
-            self.request.header(constants.AUTH_HEADER).?,
-        );
+        if (self.request) |r| {
+            if (r.header(constants.AUTH_HEADER)) |header| {
+                return try self.container.authProvider.retrieveUserName(
+                    self.allocator,
+                    header,
+                );
+            }
+        }
+
+        return "";
     }
 
     /// returns basic auth claim
     pub fn getAuthClaims(self: *Context) !?jwtClaims {
         return try self.container.authProvider.retrieveClaims(
             self.allocator,
-            self.request.header(constants.AUTH_HEADER).?,
+            (self.request.?.header(constants.AUTH_HEADER)).?,
         );
     }
 
     /// returns api key claim
     pub fn getAuthKey(self: *Context) !?[]const u8 {
-        return self.request.header(constants.APIKEY_HEADER).?;
+        if (self.request) |r| {
+            if (r.header(constants.APIKEY_HEADER)) |header| {
+                return header;
+            }
+        }
+
+        return "";
     }
 
     /// returns registered http service
@@ -273,7 +311,7 @@ pub const Context = struct {
     /// if no field with that name was submitted. The `data` slice is valid only
     /// for the lifetime of the request (arena-owned) — copy it to persist.
     pub fn GetFile(self: *Context, field: []const u8) !?root.UploadedFile {
-        const form = try self.request.multiFormData();
+        const form = try self.request.?.multiFormData();
         const f = form.get(field) orelse return null;
         return root.UploadedFile{
             .data = f.value,
@@ -363,28 +401,28 @@ pub const Context = struct {
 
     /// checks availability of the pubsub service
     pub fn getPubSubAvailability(self: *Context) bool {
-        if (self.container.pubsub == null) {
+        if (self.container.pubSub == null) {
             return false;
         }
         return true;
     }
 
     /// retrieves registered pubsub client
-    pub fn getPublisher(self: *Context) *pubSub {
-        if (self.container.pubsub == null) {
-            self.container.log.Err(self.allocator, "no mqtt client initilized");
+    pub fn getPublisher(self: *Context) *root.PubSub {
+        if (self.container.pubSub == null) {
+            self.container.log.Err(self.allocator, "no pubsub client initialized");
             return;
         }
-        return self.container.pubsub.?;
+        return self.container.pubSub.?;
     }
 
     /// retrieve registered pubsub subscriber client
-    pub fn getSubscriber(self: *Context) !*pubSub {
-        if (self.container.pubsub == null) {
-            self.container.log.Err(self.allocator, "no mqtt client initilized");
+    pub fn getSubscriber(self: *Context) !*root.PubSub {
+        if (self.container.pubSub == null) {
+            self.container.log.Err(self.allocator, "no pubsub client initialized");
             return;
         }
-        return self.container.pubsub.?;
+        return self.container.pubSub.?;
     }
 
     /// packs response in custom json to respond
@@ -408,7 +446,7 @@ pub const Context = struct {
 
     /// transforms incoming request json to comptime type
     pub fn bind(self: *Context, comptime T: type) !?T {
-        const b = self.request.body() orelse return null;
+        const b = self.request.?.body() orelse return null;
         return try std.json.parseFromSliceLeaky(T, self.allocator, b, .{ .ignore_unknown_fields = true });
     }
 
@@ -416,7 +454,7 @@ pub const Context = struct {
     /// the comptime type `T` (a generated protobuf message exposing `decode`).
     /// Decoding uses the per-request arena allocator, released at request end.
     pub fn bindProto(self: *Context, comptime T: type) !?T {
-        const b = self.request.body() orelse return null;
+        const b = self.request.?.body() orelse return null;
         var reader: std.Io.Reader = .fixed(b);
         return try T.decode(&reader, self.allocator);
     }
@@ -457,7 +495,7 @@ pub const Context = struct {
 
     /// returns if path param exist
     pub fn param(self: *Context, name: []const u8) []const u8 {
-        const value = self.request.param(name);
+        const value = self.request.?.param(name);
         if (value == null) {
             return "";
         }
@@ -466,9 +504,7 @@ pub const Context = struct {
     }
 };
 
-
 // ===================== Tests =====================
-
 
 test "context: protobuf bindProto and protobuf round-trip" {
     const protobuf = @import("protobuf");

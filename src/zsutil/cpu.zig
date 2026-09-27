@@ -34,30 +34,38 @@ pub const CpuInfo = struct {
 
 /// Retrieves the CPU information.
 ///
+/// Cross-platform: delegates to `zf.gather` so this works on macOS (sysctl)
+/// as well as Linux (/proc/cpuinfo), instead of reading /proc directly.
 /// Returns a `CpuInfo` struct containing the CPU information.
 pub fn info(ctx: *Context) !CpuInfo {
-    const file = try std.Io.Dir.openFileAbsolute(utils.io, "/proc/cpuinfo", .{});
-    defer file.close(utils.io);
+    var sys = root.sysinfo.gather.gather(ctx.allocator, utils.io);
+    defer sys.deinit();
 
-    var buffer: [1024]u8 = undefined;
-
-    const bytes_read = try file.readPositionalAll(utils.io, &buffer, 0);
-    const contents = buffer[0..bytes_read];
-
+    const a = ctx.allocator;
     var cpuinfo = CpuInfo{};
-    var lines = std.mem.splitSequence(u8, contents, "\n");
-    while (lines.next()) |line| {
-        try setValue(ctx.allocator, []const u8, &cpuinfo.vendor_id, line, "vendor_id");
-        try setValue(ctx.allocator, []const u8, &cpuinfo.cpu_family, line, "cpu family");
-        try setValue(ctx.allocator, []const u8, &cpuinfo.model, line, "model");
-        try setValue(ctx.allocator, []const u8, &cpuinfo.model_name, line, "model name");
-        try setValue(ctx.allocator, []const u8, &cpuinfo.microcode, line, "microcode");
-        try setValue(ctx.allocator, []const u8, &cpuinfo.cache_size, line, "cache size");
-        try setValue(ctx.allocator, []const u8, &cpuinfo.cpu_cores, line, "cpu cores");
-        try setValue(ctx.allocator, []const u8, &cpuinfo.cpu_speed, line, "cpu MHz");
+    cpuinfo.vendor_id = dupeOrEmpty(a, sys.cpu_vendor);
+    cpuinfo.cpu_family = dupeOrEmpty(a, sys.cpu_family);
+    cpuinfo.model = dupeOrEmpty(a, sys.cpu_model);
+    cpuinfo.model_name = dupeOrEmpty(a, sys.cpu_model_name);
+    cpuinfo.microcode = dupeOrEmpty(a, sys.microcode);
+    cpuinfo.cache_size = dupeOrEmpty(a, sys.l1_cache);
+
+    if (sys.cpu_cores) |c| {
+        var buf: [32]u8 = undefined;
+        cpuinfo.cpu_cores = try a.dupe(u8, try std.fmt.bufPrint(&buf, "{d}", .{c}));
+    }
+    if (sys.cpu_speed) |s| {
+        var buf: [32]u8 = undefined;
+        cpuinfo.cpu_speed = try a.dupe(u8, try std.fmt.bufPrint(&buf, "{d:.2}", .{s}));
     }
 
     return cpuinfo;
+}
+
+/// Dupes `value` into `allocator`, or returns an empty slice when `value` is null.
+fn dupeOrEmpty(allocator: std.mem.Allocator, value: ?[]const u8) []const u8 {
+    if (value) |v| return allocator.dupe(u8, v) catch "";
+    return "";
 }
 
 /// Sets the value of a field in the `CpuInfo` struct.
@@ -170,9 +178,7 @@ fn calculateCpuUsage(prev: CpuUsage, curr: CpuUsage) f32 {
     return res;
 }
 
-
 // ===================== Tests =====================
-
 
 test "getFirstNumber finds first digit" {
     try std.testing.expectEqual(@as(usize, 5), getFirstNumber("cpu  1234 5678"));

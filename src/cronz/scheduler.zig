@@ -20,9 +20,7 @@ pub fn create(allocator: std.mem.Allocator) !*Scheduler {
     return s;
 }
 
-
 // ===================== Tests =====================
-
 
 test "create compiles regex patterns" {
     const allocator = std.testing.allocator;

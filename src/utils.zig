@@ -27,7 +27,7 @@ pub fn elapsedNanos(start: std.Io.Timestamp) i96 {
 }
 
 pub fn elapsedMs(start: std.Io.Timestamp) f32 {
-    return @floatFromInt(@as(u64, @intCast(@divTrunc(elapsedNanos(start), 1_000_000))));
+    return @floatFromInt(@as(u64, @intCast(@divFloor(elapsedNanos(start), 1_000_000))));
 }
 
 pub fn combine(allocator: std.mem.Allocator, comptime format: []const u8, value: anytype) ![]const u8 {

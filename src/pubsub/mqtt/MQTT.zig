@@ -17,7 +17,7 @@ const Context = root.Context;
 const constants = root.constants;
 const httpz = root.httpz;
 
-const _req: *httpz.Request = undefined;
+const _req: ?*httpz.Request = null;
 const _res: *httpz.Response = undefined;
 
 thread: std.Thread = undefined,
@@ -26,12 +26,12 @@ rootContext: *root.Context = undefined,
 subscriber: std.array_list.Managed(mqSubscriber) = undefined,
 mu: std.Io.Mutex = undefined,
 signal: Atomic(bool) = undefined,
-    mqtt: root.mqttz.posix.Client311 = undefined,
-    mqttClient: ?[]const u8 = undefined,
-    isPubSubSet: bool = false,
-    // Connection config retained so the consumer can reconnect after a drop.
-    config: *const mqConfig = undefined,
-    mqtt_initialized: bool = false,
+mqtt: root.mqttz.posix.Client311 = undefined,
+mqttClient: ?[]const u8 = undefined,
+isPubSubSet: bool = false,
+// Connection config retained so the consumer can reconnect after a drop.
+config: *const mqConfig = undefined,
+mqtt_initialized: bool = false,
 
 pub fn create(container: *root.container, config: *const mqConfig) !*MQTT {
     const c = try container.allocator.create(MQTT);
@@ -144,9 +144,9 @@ pub fn readPackets(self: *Self, subscriber: mqSubscriber) !void {
         // (Re)subscribe this topic and consume its messages.
         const packet_identifier = try self.mqtt.subscribe(
             .{},
-            .{ .topics = &.{.{ .filter = subscriber.topic, .qos = .at_most_once } },
-        },
-
+            .{
+                .topics = &.{.{ .filter = subscriber.topic, .qos = .at_most_once }},
+            },
         );
 
         if (try self.mqtt.readPacket(.{})) |packet| switch (packet) {
@@ -242,7 +242,9 @@ fn subscriptions(self: *Self) !void {
     // start the rest, so only the first topic would ever be serviced.
     var threads = try std.ArrayList(std.Thread).initCapacity(self.container.allocator, 0);
     defer {
-        for (threads.items) |t| t.join();
+        for (threads.items) |t| {
+            t.join();
+        }
     }
 
     for (self.subscriber.items) |client| {

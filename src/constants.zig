@@ -1,5 +1,7 @@
 const std = @import("std");
 
+pub const SERVER_VERSION = "0.5.2";
+
 pub const APP_ENVIRONMENT = "APP_ENV";
 pub const APP_NAME = "APP_NAME";
 pub const APP_VERSION = "APP_VERSION";

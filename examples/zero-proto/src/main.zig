@@ -48,9 +48,16 @@ pub fn main(init: std.process.Init) !void {
 
     // Run the migration explicitly (app.run() does not auto-run migrations;
     // re-runs are skipped via the zero_migrations bookkeeping table).
-    const key = try utils.toStringFromInt(app.container.allocator, "{d}", createProtoUsersMigration.migrationNumber);
+    // `allocPrint` (unlike `utils.toStringFromInt`, which returns a borrowed
+    // subslice of a 256-byte buffer that must not be freed) yields an owned,
+    // freeable allocation.
+    const key = try std.fmt.allocPrint(app.container.allocator, "{d}", .{createProtoUsersMigration.migrationNumber});
     try app.addMigration(key, createProtoUsersMigration);
     try app.runMigrations();
+    // Free the key up front: `app.run()` below tears down via `std.process.exit`
+    // on leak detection, which skips `defer`, so an explicit free is required.
+    // `addMigration` keeps its own duped copy, so this is safe.
+    app.container.allocator.free(key);
 
     // Postgres-backed CRUD over protobuf (Content-Type: application/x-protobuf).
     try app.post("/users", createUser);

@@ -68,9 +68,7 @@ pub const ProcessStatus = struct {
     vmRSS: u64 = 0,
 };
 
-
 // ===================== Tests =====================
-
 
 test "setValue parses VmHWM line" {
     const allocator = std.testing.allocator;

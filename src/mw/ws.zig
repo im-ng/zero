@@ -40,9 +40,7 @@ fn isWebSocketPath(_: *const wsUpgrader, req: *httpz.Request) bool {
     return false;
 }
 
-
 // ===================== Tests =====================
-
 
 test "ws Config struct can be initialized" {
     const allocator = std.testing.allocator;

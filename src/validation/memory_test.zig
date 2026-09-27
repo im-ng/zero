@@ -6,9 +6,9 @@ const Context = root.Context;
 const utils = root.utils;
 
 /// Byte-counting allocator used by the memory-validation harness (canonical
-/// definition lives in `src/bench/alloc_count.zig` so the bench alloc-probe and
+/// definition lives in `src/bench/allocCount.zig` so the bench alloc-probe and
 /// the test suite share one implementation).
-pub const CountingAllocator = @import("../bench/alloc_count.zig").CountingAllocator;
+pub const CountingAllocator = @import("../bench/allocCount.zig").CountingAllocator;
 
 /// Minimal container whose optional backend fields are null so Context.init
 /// takes no branch that dereferences a missing client. The allocator used here
@@ -36,9 +36,7 @@ fn mockContainer(allocator: std.mem.Allocator) root.container {
     };
 }
 
-
 // ===================== Tests =====================
-
 
 // HTTP flow: Context.allocator is set to the per-request req.arena, which
 // httpz resets (deinit) after every request. Allocations made during the

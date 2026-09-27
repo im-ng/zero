@@ -20,7 +20,7 @@ pub const tracz = @import("mw/tracz.zig");
 pub const ws = @import("mw/ws.zig");
 pub const logger = @import("logger.zig");
 pub const app = @import("app.zig");
-pub const datasourceError = @import("datasource/error.zig");
+pub const datasourceError = @import("datasource/sql/error.zig");
 pub const migrate = @import("migration/migrate.zig");
 pub const kafkaConfig = @import("pubsub/kafka/config.zig");
 pub const kafkaSubscriber = @import("pubsub/kafka/subscriber.zig");
@@ -29,7 +29,7 @@ pub const mqttSubscriber = @import("pubsub/mqtt/subscriber.zig");
 pub const natsConfig = @import("pubsub/nats/config.zig");
 pub const natsSubscriber = @import("pubsub/nats/subscriber.zig");
 pub const pubsub = @import("pubsub/interface.zig");
-pub const datasourceInterface = @import("datasource/interface.zig");
+pub const datasourceInterface = @import("datasource/sql/interface.zig");
 
 comptime {
     _ = zero;
@@ -62,7 +62,7 @@ comptime {
     _ = natsSubscriber;
     _ = pubsub;
     _ = datasourceInterface;
-    _ = @import("service/circuit_breaker.zig");
-    _ = @import("service/outbound_auth.zig");
-    _ = @import("service/client.zig");
+    _ = @import("service/circuitBreaker.zig");
+    // _ = @import("service/client.zig");
+    _ = @import("datasource/nosql/mongodbClient.zig");
 }

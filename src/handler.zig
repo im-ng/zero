@@ -175,9 +175,14 @@ pub const Handler = struct {
             \\ {"error": "something went wrong"}
         ;
 
-        self.metric(0, @tagName(req.method), res.status, req.url.path) catch unreachable;
+        self.metric(0, @tagName(req.method), res.status, req.url.path) catch |e| {
+            std.debug.print("metric recording failed: {}\n", .{e});
+        };
 
-        const access_log = std.fmt.allocPrint(req.arena, "{s}\t {d} {d}ms {s} {s}", .{ res.headers.get("X-Correlation-ID").?, res.status, 0, @tagName(req.method), req.url.path }) catch unreachable;
+        const access_log = std.fmt.allocPrint(req.arena, "{s}\t {d} {d}ms {s} {s}", .{ res.headers.get("X-Correlation-ID").?, res.status, 0, @tagName(req.method), req.url.path }) catch |e| {
+            std.debug.print("access log alloc failed: {}\n", .{e});
+            return;
+        };
         ctx.info(access_log);
 
         ctx.any(err);

@@ -1,5 +1,6 @@
 const std = @import("std");
 const zero = @import("zero");
+const migrations = @import("migrations/all.zig");
 
 const App = zero.App;
 const Context = zero.Context;
@@ -31,6 +32,9 @@ pub fn main(init: std.process.Init) !void {
     // In-process OLAP SQL engine. No external service required.
     // Pass a file path instead of ":memory:" for a persistent database.
     try app.addDuckDB(":memory:");
+
+    try migrations.all(app);
+    try app.runMigrations();
 
     try app.get("/", index);
     try app.get("/users", listUsers);
@@ -71,7 +75,7 @@ fn ensureSchema(ctx: *Context) !void {
 }
 
 fn parseId(ctx: *Context) ?i64 {
-    const raw = ctx.request.params.get("id") orelse return null;
+    const raw = ctx.request.?.params.get("id") orelse return null;
     return std.fmt.parseInt(i64, raw, 10) catch null;
 }
 

@@ -54,9 +54,7 @@ pub const RateLimiter = struct {
     }
 };
 
-
 // ===================== Tests =====================
-
 
 test "RateLimiter: allows up to limit then trips, resets after window" {
     const testing = std.testing;

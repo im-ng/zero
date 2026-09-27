@@ -32,7 +32,7 @@ fn ExecCtx(comptime Ctx: type) type {
 }
 
 pub fn handle(ctx: anytype, comptime Query: type, comptime Mutation: ?type, query_root: *const Query, mutation_root: ?*const anyopaque) !void {
-    const body = ctx.request.body() orelse "";
+    const body = ctx.request.?.body() orelse "";
     var req: GraphQLRequest = .{};
     if (body.len > 0) {
         req = std.json.parseFromSliceLeaky(GraphQLRequest, ctx.allocator, body, .{ .ignore_unknown_fields = true }) catch blk: {
@@ -121,7 +121,7 @@ pub fn handle(ctx: anytype, comptime Query: type, comptime Mutation: ?type, quer
 /// Fallback request source: GraphQL-over-HTTP GET uses URL query params
 /// (?query=...&variables=...&operationName=...). Values are URL-decoded by httpz.
 fn readFromQueryString(ctx: anytype) !GraphQLRequest {
-    const qs = ctx.request.query() catch return GraphQLRequest{};
+    const qs = ctx.request.?.query() catch return GraphQLRequest{};
 
     const q = qs.get("query") orelse return GraphQLRequest{};
 
@@ -163,7 +163,9 @@ fn findOperation(doc: ast.DocumentNode, operation_name: ?[]const u8) ?ast.Operat
             }
         } else {
             if (op.name == null) return op;
-            if (fallback == null) fallback = op;
+            if (fallback == null) {
+                fallback = op;
+            }
         }
     }
 
@@ -238,7 +240,7 @@ fn resolve(comptime T: type, instance: T, ss: ast.SelectionSetNode, ec: anytype)
             .FragmentSpread => |sp| {
                 if (findFragment(ec.doc, sp.name.value)) |frag| {
                     const sub = try resolve(T, instance, frag.selection_set, ec);
-                    mergeObjects(&obj, sub.object, ec.alloc);
+                    try mergeObjects(&obj, sub.object, ec.alloc);
                 }
             },
             .InlineFragment => |inf| {
@@ -246,17 +248,18 @@ fn resolve(comptime T: type, instance: T, ss: ast.SelectionSetNode, ec: anytype)
                     if (!std.mem.eql(u8, tc.name.value, @typeName(T))) continue;
                 }
                 const sub = try resolve(T, instance, inf.selection_set, ec);
-                mergeObjects(&obj, sub.object, ec.alloc);
+                try mergeObjects(&obj, sub.object, ec.alloc);
             },
         }
     }
     return .{ .object = obj };
 }
 
-fn mergeObjects(dest: *std.json.ObjectMap, src: std.json.ObjectMap, alloc: std.mem.Allocator) void {
+fn mergeObjects(dest: *std.json.ObjectMap, src: std.json.ObjectMap, alloc: std.mem.Allocator) !void {
     var it = src.iterator();
     while (it.next()) |e| {
-        dest.put(alloc, e.key_ptr.*, e.value_ptr.*) catch {};
+        // Propagate OOM instead of silently dropping a merged field.
+        try dest.put(alloc, e.key_ptr.*, e.value_ptr.*);
     }
 }
 
@@ -296,9 +299,13 @@ fn resolveList(comptime T: type, list: T, ss: ast.SelectionSetNode, ec: anytype)
     const ti = @typeInfo(T);
 
     if (ti == .pointer) {
-        for (list) |item| try arr.append(try resolveValue(item, ss, ec));
+        for (list) |item| {
+            try arr.append(try resolveValue(item, ss, ec));
+        }
     } else if (ti == .array) {
-        for (list) |item| try arr.append(try resolveValue(item, ss, ec));
+        for (list) |item| {
+            try arr.append(try resolveValue(item, ss, ec));
+        }
     }
 
     return .{ .array = arr };
@@ -307,7 +314,9 @@ fn resolveList(comptime T: type, list: T, ss: ast.SelectionSetNode, ec: anytype)
 fn sliceToJson(comptime T: type, list: T, alloc: std.mem.Allocator) !std.json.Value {
     var arr = std.json.Array.init(alloc);
 
-    for (list) |item| try arr.append(try primitiveToJson(item, alloc));
+    for (list) |item| {
+        try arr.append(try primitiveToJson(item, alloc));
+    }
 
     return .{
         .array = arr,
@@ -352,7 +361,9 @@ fn primitiveToJson(value: anytype, alloc: std.mem.Allocator) !std.json.Value {
         .array => {
             var arr = std.json.Array.init(alloc);
 
-            for (value) |item| try arr.append(try primitiveToJson(item, alloc));
+            for (value) |item| {
+                try arr.append(try primitiveToJson(item, alloc));
+            }
 
             return .{
                 .array = arr,
@@ -511,7 +522,9 @@ fn valueNodeToJsonValue(node: ast.ValueNode, alloc: std.mem.Allocator) anyerror!
         .Variable => .null,
         .List => blk: {
             var arr = std.json.Array.init(alloc);
-            for (node.List.values) |v| try arr.append(try valueNodeToJsonValue(v, alloc));
+            for (node.List.values) |v| {
+                try arr.append(try valueNodeToJsonValue(v, alloc));
+            }
             break :blk .{ .array = arr };
         },
         .Object => try valueNodeToJson(node.Object, alloc),
@@ -523,7 +536,9 @@ fn listToT(comptime T: type, list: ast.ListValueNode, ec: anytype) !T {
     if (ti == .pointer and ti.pointer.size == .slice and ti.pointer.child != u8) {
         const Elem = ti.pointer.child;
         var items = std.array_list.Managed(Elem).init(ec.alloc);
-        for (list.values) |v| try items.append(try coerceValue(v, Elem, ec));
+        for (list.values) |v| {
+            try items.append(try coerceValue(v, Elem, ec));
+        }
         return items.items;
     }
     if (ti == .array) {

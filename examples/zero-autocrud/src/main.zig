@@ -16,7 +16,6 @@ const User = struct {
 };
 
 pub fn main(init: std.process.Init) !void {
-
     var gpa: std.heap.DebugAllocator(.{}) = .init;
     const allocator = gpa.allocator();
     _ = gpa.detectLeaks();
@@ -40,7 +39,6 @@ pub fn index(ctx: *Context) !void {
         \\ Auto CRUD Demo - Zero Framework
         \\ ============================
         \\
-        \\ GET    /init                 - Create the users table
         \\ GET    /users                - List users
         \\ GET    /users/:id            - Get user by ID
         \\ POST   /users                - Create user (body: {"id":N,"name":..,"email":..})

@@ -44,7 +44,9 @@ const JsonSink = struct {
     fn write(self: *JsonSink, s: []const u8) void {
         const avail = self.buf.len - self.len;
         const take = @min(s.len, avail);
-        if (take > 0) @memcpy(self.buf[self.len .. self.len + take], s[0..take]);
+        if (take > 0) {
+            @memcpy(self.buf[self.len .. self.len + take], s[0..take]);
+        }
         self.len += take;
     }
     fn writeEsc(self: *JsonSink, s: []const u8) void {
@@ -257,7 +259,11 @@ pub fn custom(
         on += rclean.len;
         const otel_clean = otel_buf[0..on];
 
-        if (otel_json) otel.emitLog(level, json_slice) else otel.emitLog(level, otel_clean);
+        if (otel_json) {
+            otel.emitLog(level, json_slice);
+        } else {
+            otel.emitLog(level, otel_clean);
+        }
     }
 }
 
@@ -420,7 +426,6 @@ pub fn Fatal(self: *Self, _: std.mem.Allocator, message: []const u8) void {
     std.log.err(errFormat, .{ ts, message });
 }
 
-
 // ===================== Tests =====================
 
 test "redactInto masks credential tokens and secret key=value pairs" {
@@ -442,7 +447,6 @@ test "redactInto masks credential tokens and secret key=value pairs" {
         redactInto("x-api-key: secret-key done", &buf),
     );
 }
-
 
 test "create returns logger with default logLevel 1" {
     const allocator = std.testing.allocator;

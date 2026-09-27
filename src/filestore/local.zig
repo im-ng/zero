@@ -3,6 +3,11 @@ const Io = std.Io;
 const root = @import("../zero.zig");
 const constants = root.constants;
 
+/// Hard cap on directory-tree depth `walk` will descend. Filesystems are
+/// shallow in practice; a deeper tree is a malformed/attack input and must
+/// fail fast rather than recurse without bound.
+const max_walk_depth: usize = 64;
+
 /// Local-disk file store. Keys are treated as posix-style relative paths under
 /// a configured root directory; `..` segments are rejected to prevent path
 /// traversal outside the root.
@@ -22,6 +27,12 @@ pub const FileStoreLocal = struct {
             if (err != error.PathAlreadyExists) return err;
         };
         return self;
+    }
+
+    /// Frees the `FileStoreLocal` wrapper. `root_dir` is a borrowed config/env
+    /// slice, so only the struct itself is released.
+    pub fn deinit(self: *FileStoreLocal, allocator: std.mem.Allocator) void {
+        allocator.destroy(self);
     }
 
     /// Resolve `key` to an absolute-ish path under `root_dir`, rejecting any
@@ -98,10 +109,12 @@ pub const FileStoreLocal = struct {
     pub fn list(self: *FileStoreLocal, ctx: *root.Context, prefix: []const u8) ![][]const u8 {
         var out = std.ArrayList([]const u8).init(ctx.allocator);
         errdefer {
-            for (out.items) |k| ctx.allocator.free(k);
+            for (out.items) |k| {
+                ctx.allocator.free(k);
+            }
             out.deinit();
         }
-        try self.walk(ctx.allocator, self.root_dir, prefix, &out);
+        try self.walk(ctx.allocator, self.root_dir, prefix, &out, 0);
         return out.toOwnedSlice();
     }
 
@@ -111,7 +124,10 @@ pub const FileStoreLocal = struct {
         dir: []const u8,
         prefix: []const u8,
         out: *std.ArrayList([]const u8),
+        depth: usize,
     ) !void {
+        // Fail fast on an unexpectedly deep tree instead of recursing forever.
+        std.debug.assert(depth <= max_walk_depth);
         var d = std.Io.Dir.cwd().openDir(root.utils.io, dir, .{ .iterate = true }) catch |err| {
             if (err == error.FileNotFound) return;
             return err;
@@ -122,7 +138,7 @@ pub const FileStoreLocal = struct {
         while (try it.next(root.utils.io)) |entry| {
             const child = try std.fmt.allocPrint(allocator, "{s}/{s}", .{ dir, entry.name });
             if (entry.kind == .directory) {
-                try self.walk(allocator, child, prefix, out);
+                try self.walk(allocator, child, prefix, out, depth + 1);
                 allocator.free(child);
                 continue;
             }
@@ -138,9 +154,7 @@ pub const FileStoreLocal = struct {
     }
 };
 
-
 // ===================== Tests =====================
-
 
 test "FileStoreLocal: create/get/delete/list + path-traversal guard" {
     const ta = std.testing;
@@ -162,7 +176,9 @@ test "FileStoreLocal: create/get/delete/list + path-traversal guard" {
 
     const list = try store.list(&ctx, "avatars/");
     defer {
-        for (list) |k| ta.allocator.free(k);
+        for (list) |k| {
+            ta.allocator.free(k);
+        }
         ta.allocator.free(list);
     }
     try ta.expectEqual(@as(usize, 1), list.len);
@@ -170,7 +186,9 @@ test "FileStoreLocal: create/get/delete/list + path-traversal guard" {
 
     const all = try store.list(&ctx, "");
     defer {
-        for (all) |k| ta.allocator.free(k);
+        for (all) |k| {
+            ta.allocator.free(k);
+        }
         ta.allocator.free(all);
     }
     try ta.expectEqual(@as(usize, 2), all.len);

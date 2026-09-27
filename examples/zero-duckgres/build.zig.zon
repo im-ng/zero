@@ -1,0 +1,15 @@
+.{
+    .name = .zeroduckgres,
+    .version = "0.0.1",
+    .fingerprint = 0x4f3c28d5619d12ad,
+    .minimum_zig_version = "0.16.0",
+    .dependencies = .{
+        .zero = .{ .path = "../.." },
+    },
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "src",
+        "configs",
+    },
+}

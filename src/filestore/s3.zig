@@ -11,7 +11,6 @@ const constants = root.constants;
 /// `create(ctx, "avatars/1.png", ...)` -> `PUT /<bucket>/avatars/1.png`.
 pub const FileStoreS3 = struct {
     allocator: std.mem.Allocator,
-    client: zul.http.Client,
     endpoint: []const u8,
     host: []const u8,
     region: []const u8,
@@ -48,7 +47,6 @@ pub const FileStoreS3 = struct {
         const self = try allocator.create(FileStoreS3);
         self.* = .{
             .allocator = allocator,
-            .client = zul.http.Client.init(container.io, allocator),
             .endpoint = endpoint,
             .host = try hostOf(allocator, endpoint),
             .region = try allocator.dupe(u8, region),
@@ -57,6 +55,18 @@ pub const FileStoreS3 = struct {
             .secret_key = try allocator.dupe(u8, secret_key),
         };
         return self;
+    }
+
+    /// Frees the S3 client and all owned config strings allocated in `open`.
+    pub fn deinit(self: *FileStoreS3) void {
+        const allocator = self.allocator;
+        allocator.free(self.endpoint);
+        allocator.free(self.host);
+        allocator.free(self.region);
+        allocator.free(self.bucket);
+        allocator.free(self.access_key);
+        allocator.free(self.secret_key);
+        allocator.destroy(self);
     }
 
     fn objectUrl(self: *FileStoreS3, allocator: std.mem.Allocator, key: []const u8) ![]const u8 {
@@ -116,7 +126,9 @@ pub const FileStoreS3 = struct {
             ctx.allocator.free(h.content_sha256);
         }
 
-        var req = try self.client.allocRequest(ctx.allocator, url);
+        var client = zul.http.Client.init(ctx.io, ctx.allocator);
+        defer client.deinit();
+        var req = try client.allocRequest(ctx.allocator, url);
         defer req.deinit();
         req.method = .PUT;
         try req.header("x-amz-date", h.amz_date);
@@ -144,14 +156,16 @@ pub const FileStoreS3 = struct {
             ctx.allocator.free(h.content_sha256);
         }
 
-        var req = try self.client.allocRequest(ctx.allocator, url);
+        var client = zul.http.Client.init(ctx.io, ctx.allocator);
+        defer client.deinit();
+        var req = try client.allocRequest(ctx.allocator, url);
         defer req.deinit();
         req.method = .GET;
         try req.header("x-amz-date", h.amz_date);
         try req.header("x-amz-content-sha256", h.content_sha256);
         try req.header("authorization", h.authorization);
 
-                var res = try req.getResponse(.{});
+        var res = try req.getResponse(.{});
         if (res.status == 404) return null;
         if (res.status < 200 or res.status > 299) return error.S3GetFailed;
 
@@ -177,7 +191,9 @@ pub const FileStoreS3 = struct {
             ctx.allocator.free(h.content_sha256);
         }
 
-        var req = try self.client.allocRequest(ctx.allocator, url);
+        var client = zul.http.Client.init(ctx.io, ctx.allocator);
+        defer client.deinit();
+        var req = try client.allocRequest(ctx.allocator, url);
         defer req.deinit();
         req.method = .DELETE;
         try req.header("x-amz-date", h.amz_date);
@@ -206,14 +222,16 @@ pub const FileStoreS3 = struct {
             ctx.allocator.free(h.content_sha256);
         }
 
-        var req = try self.client.allocRequest(ctx.allocator, url);
+        var client = zul.http.Client.init(ctx.io, ctx.allocator);
+        defer client.deinit();
+        var req = try client.allocRequest(ctx.allocator, url);
         defer req.deinit();
         req.method = .GET;
         try req.header("x-amz-date", h.amz_date);
         try req.header("x-amz-content-sha256", h.content_sha256);
         try req.header("authorization", h.authorization);
 
-                var res = try req.getResponse(.{});
+        var res = try req.getResponse(.{});
         if (res.status < 200 or res.status > 299) return error.S3ListFailed;
 
         var sb = try res.allocBody(ctx.allocator, .{ .max_size = self.max_bytes });
@@ -226,7 +244,9 @@ pub const FileStoreS3 = struct {
         // S3 list returns an XML <Contents> element per object; pull <Key> values.
         var out = std.array_list.Managed([]const u8).init(ctx.allocator);
         errdefer {
-            for (out.items) |k| ctx.allocator.free(k);
+            for (out.items) |k| {
+                ctx.allocator.free(k);
+            }
             out.deinit();
         }
         var i: usize = 0;
@@ -275,7 +295,7 @@ fn encodePath(allocator: std.mem.Allocator, path: []const u8) ![]const u8 {
 
 /// Current UTC time in AWS `YYYYMMDDTHHMMSSZ` form.
 fn amzDate(allocator: std.mem.Allocator) ![]const u8 {
-    const epoch_seconds: u64 = @intCast(@divTrunc(utils.nowReal().nanoseconds, 1_000_000_000));
+    const epoch_seconds: u64 = @intCast(@divFloor(utils.nowReal().nanoseconds, 1_000_000_000));
     const es = std.time.epoch.EpochSeconds{ .secs = epoch_seconds };
     const ed = es.getEpochDay();
     const yd = ed.calculateYearDay();
@@ -346,7 +366,9 @@ fn signedHeadersString(allocator: std.mem.Allocator, signed: []const FileStoreS3
     var buf = std.array_list.Managed(u8).init(allocator);
     errdefer buf.deinit();
     for (signed, 0..) |h, i| {
-        if (i > 0) try buf.append(';');
+        if (i > 0) {
+            try buf.append(';');
+        }
         try buf.appendSlice(h.name);
     }
     return buf.toOwnedSlice();
@@ -397,9 +419,7 @@ pub fn signAuthorization(
     , .{ access_key, scope, sh, sig_hex });
 }
 
-
 // ===================== Tests =====================
-
 
 test "FileStoreS3: hmac-sha256 (RFC 4231 case 2)" {
     const key = [_]u8{0x0b} ** 20;

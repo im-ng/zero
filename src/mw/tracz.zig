@@ -11,11 +11,10 @@ provider: *otel.Provider,
 
 // Fast correlation-id generator. A per-thread PRNG is seeded once from the
 // monotonic clock plus this thread's address, so minting an id costs a few
-// arithmetic ops instead of the per-request CSPRNG syscall that
-// `zul.UUID.v4(utils.io)` paid. This mirrors how OpenTelemetry seeds its own
-// span/trace ID generator (otel.zig:78-86). The id is a 16-byte / 32-hex
-// W3C-trace-id-shaped value (version + variant bits set) so it stays usable as
-// an OpenTelemetry trace_id when no inbound traceparent is present.
+// arithmetic ops instead of the per-request CSPRNG syscall.
+// This mirrors how OpenTelemetry seeds its own span/trace ID generator.
+// The id is a 16-byte / 32-hex W3C-trace-id-shaped value (version + variant bits set)
+// so it stays usable as an OpenTelemetry trace_id when no inbound traceparent is present.
 threadlocal var tl_prng: std.Random.DefaultPrng = undefined;
 threadlocal var tl_prng_inited: bool = false;
 
@@ -96,21 +95,21 @@ pub fn execute(self: *const tracz, req: *httpz.Request, res: *httpz.Response, ex
 
     const result = executor.next();
 
-        if (server_span) |*sp| {
-            try sp.setAttribute("http.request.method", .{ .string = @tagName(req.method) });
-            try sp.setAttribute("url.path", .{ .string = req.url.path });
-            try sp.setAttribute("http.response.status_code", .{ .int = @as(i64, res.status) });
+    if (server_span) |*sp| {
+        try sp.setAttribute("http.request.method", .{ .string = @tagName(req.method) });
+        try sp.setAttribute("url.path", .{ .string = req.url.path });
+        try sp.setAttribute("http.response.status_code", .{ .int = @as(i64, res.status) });
 
-            if (res.status < 400) {
-                sp.setStatus(otel.Status.ok());
-            } else {
-                sp.setStatus(otel.Status.error_with_description(""));
-            }
-
-            self.provider.endSpan(sp);
-            sp.deinit();
-            otel.popSpan();
+        if (res.status < 400) {
+            sp.setStatus(otel.Status.ok());
+        } else {
+            sp.setStatus(otel.Status.error_with_description(""));
         }
+
+        self.provider.endSpan(sp);
+        sp.deinit();
+        otel.popSpan();
+    }
 
     return result;
 }
@@ -120,9 +119,7 @@ pub const Config = struct {
     provider: *otel.Provider,
 };
 
-
 // ===================== Tests =====================
-
 
 test "tracz Config struct can be initialized" {
     const allocator = std.testing.allocator;

@@ -40,6 +40,16 @@ fn sqlHealthCheck(c: *container) anyerror!void {
     return error.DatasourceUnavailable;
 }
 
+/// Probes ClickHouse connectivity for the health endpoint via a trivial
+/// `SELECT 1` over HTTP. Fails the check if the server is unreachable.
+fn clickhouseHealthCheck(c: *container) anyerror!void {
+    if (c.ClickHouse) |ch| {
+        _ = try ch.runRaw(c.allocator, "SELECT 1");
+        return;
+    }
+    return error.DatasourceUnavailable;
+}
+
 /// Probes Redis connectivity for the health endpoint via a PING round-trip.
 fn redisHealthCheck(c: *container) anyerror!void {
     if (c.redis) |*r| {
@@ -120,6 +130,14 @@ datasource: root.Datasource = undefined,
 // In-process OLAP SQL engine (DuckDB). Linked via libs/libduckdb.so.
 DuckDB: ?*root.DuckDB = null,
 
+// Wired (network) DuckDB client. Speaks the Postgres wire protocol to a
+// DuckDB PG-wire front-end (e.g. duckgres / PostDuck); no duckdb C library
+// linked. Selected via DB_DIALECT=duckgres and exposed on ctx.SQL.
+DuckGres: ?*root.DuckGres = null,
+
+// Columnar OLAP SQL engine (ClickHouse) over HTTP. No native driver / C lib.
+ClickHouse: ?*root.ClickHouse = null,
+
 // Specialized datasources (Round 1: time-series / search).
 Timeseries: ?*root.Timeseries = null,
 Search: ?*root.Search = null,
@@ -195,8 +213,16 @@ pub fn create(self: Self) anyerror!*container {
     // initialize duckdb (in-process OLAP SQL) when configured
     try c.loadDuckDB();
 
+    // initialize duckgres (wired DuckDB over the Postgres wire protocol) when
+    // DB_DIALECT=duckgres is set; shares the DB_* connection configuration.
+    // try c.loadDuckGres();
+
+    // initialize clickhouse (columnar OLAP SQL over HTTP) when configured
+    try c.loadClickhouse();
+
     // initialize specialized datasources (time-series / search) when configured
     try c.loadTimeseries();
+
     try c.loadSearch();
 
     // initialize nosql datasource (document / wide-column) when configured
@@ -205,36 +231,94 @@ pub fn create(self: Self) anyerror!*container {
     // initilize message queues
     try c.loadPubSub();
 
-    const msg: []const u8 = "container is created";
-    c.log.info(msg);
+    c.log.info("container is created");
 
     return c;
 }
 
 pub fn destroy(self: *Self) void {
-    // recursively call internal sub containers to destroy themselves
+    const allocator = self.allocator;
 
-    // self.allocator.destroy(metricz);
+    // Metric registry: frees every built-in vec (and its duped label strings) plus
+    // the custom metric list. The metrics server thread is already stopped/joined
+    // by the time `App.run` reaches this point, so no concurrent access is possible.
+    self.metricz.deinit(allocator);
 
-    // if (self.sql.* != null) {
-    //     self.sql.deinit();
-    // }
-    // if (self.SQL) |sql| {
-    //     self.allocator.destroy(sql);
-    // }
+    // File stores: both the type-erased wrapper and its backend impl are allocated
+    // from the general allocator. The `fileStores` map struct itself lives in the
+    // bootstrap arena and is freed by `App.deinit`.
+    var fs_it = self.fileStores.iterator();
+    while (fs_it.next()) |entry| {
+        entry.value_ptr.*.deinit(allocator);
+    }
 
-    // if (self.redis != null) {
-    //     self.allocator.destroy(&self.redis);
-    // }
+    // KV stores: same ownership model as file stores.
+    var kv_it = self.kvStores.iterator();
+    while (kv_it.next()) |entry| {
+        entry.value_ptr.*.deinit(allocator);
+    }
 
-    // if (self.pubsub != null) {
-    //     self.allocator.destroy(self.pubsub.?);
-    // }
+    // Outbound HTTP service clients.
+    if (self.services) |*svcs| {
+        var svc_it = svcs.iterator();
+        while (svc_it.next()) |entry| {
+            entry.value_ptr.*.deinit();
+        }
+    }
 
-    // self.allocator.destroy(&self.log);
+    // Config and logger only wrap borrowed pointers (the env map / io), so freeing
+    // the structs is sufficient.
+    self.config.deinit();
+    self.log.deinit();
 
-    const alloctor = self.allocator;
-    alloctor.destroy(self);
+    // Shared SQL datasource: closes the pg connection pool, then frees the struct.
+    if (self.SQL) |sql| {
+        sql.deinit();
+        allocator.destroy(sql);
+    }
+
+    // In-process OLAP engine (DuckDB): closes the C database/connection and the
+    // struct allocated by `create` / `addDuckDB`.
+    if (self.DuckDB) |db| {
+        db.deinit(allocator);
+    }
+
+    // Wired (network) DuckDB client: closes the pgz pool, then frees the struct
+    // allocated by `loadDuckGres` / `DuckGres.create`.
+    if (self.DuckGres) |db| {
+        db.deinit();
+        allocator.destroy(db);
+    }
+
+    // Columnar OLAP engine (ClickHouse): frees the HTTP client and the struct.
+    if (self.ClickHouse) |ch| {
+        ch.deinit(allocator);
+    }
+
+    // Time-series backend (InfluxDB/Couchbase/mock): frees the client and handle.
+    if (self.Timeseries) |ts| {
+        ts.deinit(allocator);
+    }
+
+    // NoSQL backend (Cassandra/Couchbase/mock): frees the type-erased handle and
+    // the backend implementation it wraps (connection + any duped config strings).
+    if (self.NoSQL) |n| {
+        n.deinit(allocator);
+    }
+
+    // Search backend (Solr/mock): frees the type-erased handle and the backend
+    // implementation it wraps (HTTP client + duped url/collection strings).
+    if (self.Search) |s| {
+        s.deinit(allocator);
+    }
+
+    // Redis datasource: closes the connection and frees the wrapper struct.
+    if (self.rdz) |rdz| {
+        rdz.close();
+        allocator.destroy(rdz);
+    }
+
+    allocator.destroy(self);
 }
 
 fn loadPubSub(self: *Self) !void {
@@ -293,170 +377,61 @@ fn loadKafkaPubSub(self: *Self) !void {
 
     const config: ?*rdkafka.struct_rd_kafka_conf_s = rdkafka.rd_kafka_conf_new();
 
-    if (std.mem.eql(u8, servers, "") == true) {
-        buffer = try std.fmt.bufPrint(buffer, "connection to kafka failed: kafka broker is empty.", .{});
-        self.log.err(buffer);
-        return;
-    }
-
-    if (rdkafka.rd_kafka_conf_set(
-        config,
-        "bootstrap.servers",
-        @constCast(servers.ptr),
-        &error_message,
-        error_message.len,
-    ) != rdkafka.RD_KAFKA_CONF_OK) {
-        buffer = try std.fmt.bufPrint(buffer, "connection to kafka failed: error occurred {s}", .{error_message});
-        self.log.err(buffer);
-        return;
+    if (self.kafkaConfSet(buffer, config, "bootstrap.servers", servers, &error_message)) {
+        return error.KafkaConfigError;
     }
 
     if (std.mem.eql(u8, consumerID, "") == false) {
         mode = rdkafka.RD_KAFKA_CONSUMER;
 
-        if (rdkafka.rd_kafka_conf_set(
-            config,
-            "group.id",
-            @constCast(consumerID.ptr),
-            &error_message,
-            error_message.len,
-        ) != rdkafka.RD_KAFKA_CONF_OK) {
-            buffer = try std.fmt.bufPrint(buffer, "connection to kafka failed: error occurred {s}", .{error_message});
-            self.log.err(buffer);
-            return;
+        if (self.kafkaConfSet(buffer, config, "group.id", consumerID, &error_message)) {
+            return error.KafkaConfigError;
         }
     }
 
-    if (mode == rdkafka.RD_KAFKA_PRODUCER and
-        rdkafka.rd_kafka_conf_set(
-            config,
-            "batch.num.messages",
-            @constCast(batchSize.ptr),
-            &error_message,
-            error_message.len,
-        ) != rdkafka.RD_KAFKA_CONF_OK)
-    {
-        buffer = try std.fmt.bufPrint(buffer, "connection to kafka failed: error occurred {s}", .{error_message});
-        self.log.err(buffer);
+    if (mode == rdkafka.RD_KAFKA_PRODUCER) {
+        _ = self.kafkaConfSet(buffer, config, "batch.num.messages", batchSize, &error_message);
     }
 
-    if (mode == rdkafka.RD_KAFKA_PRODUCER and
-        rdkafka.rd_kafka_conf_set(
-            config,
-            "request.timeout.ms",
-            @constCast(batchTimeout.ptr),
-            &error_message,
-            error_message.len,
-        ) != rdkafka.RD_KAFKA_CONF_OK)
-    {
-        buffer = try std.fmt.bufPrint(buffer, "connection to kafka failed: error occurred {s}", .{error_message});
-        self.log.err(buffer);
+    if (mode == rdkafka.RD_KAFKA_PRODUCER) {
+        _ = self.kafkaConfSet(buffer, config, "request.timeout.ms", batchTimeout, &error_message);
     }
 
-    if (mode == rdkafka.RD_KAFKA_PRODUCER and
-        rdkafka.rd_kafka_conf_set(
-            config,
-            "batch.size",
-            @constCast(batchBytes.ptr),
-            &error_message,
-            error_message.len,
-        ) != rdkafka.RD_KAFKA_CONF_OK)
-    {
-        buffer = try std.fmt.bufPrint(buffer, "connection to kafka failed: error occurred {s}", .{error_message});
-        self.log.err(buffer);
+    if (mode == rdkafka.RD_KAFKA_PRODUCER) {
+        _ = self.kafkaConfSet(buffer, config, "batch.size", batchBytes, &error_message);
     }
 
-    if (std.mem.eql(u8, saslProtocol, "") == false and rdkafka.rd_kafka_conf_set(
-        config,
-        "security.protocol",
-        @constCast(saslProtocol.ptr),
-        &error_message,
-        error_message.len,
-    ) != rdkafka.RD_KAFKA_CONF_OK) {
-        buffer = try std.fmt.bufPrint(buffer, "connection to kafka failed: error occurred {s}", .{error_message});
-        self.log.err(buffer);
+    if (saslProtocol.len > 0) {
+        _ = self.kafkaConfSet(buffer, config, "security.protocol", saslProtocol, &error_message);
     }
 
-    if (std.mem.eql(u8, saslMechanism, "") == false and rdkafka.rd_kafka_conf_set(
-        config,
-        "sasl.mechanism",
-        @constCast(saslMechanism.ptr),
-        &error_message,
-        error_message.len,
-    ) != rdkafka.RD_KAFKA_CONF_OK) {
-        buffer = try std.fmt.bufPrint(buffer, "connection to kafka failed: error occurred {s}", .{error_message});
-        self.log.err(buffer);
+    if (saslMechanism.len > 0) {
+        _ = self.kafkaConfSet(buffer, config, "sasl.mechanism", saslMechanism, &error_message);
     }
 
-    if (std.mem.eql(u8, saslUsername, "") == false and rdkafka.rd_kafka_conf_set(
-        config,
-        "sasl.username",
-        @constCast(saslUsername.ptr),
-        &error_message,
-        error_message.len,
-    ) != rdkafka.RD_KAFKA_CONF_OK) {
-        buffer = try std.fmt.bufPrint(buffer, "connection to kafka failed: error occurred {s}", .{error_message});
-        self.log.err(buffer);
+    if (saslUsername.len > 0) {
+        _ = self.kafkaConfSet(buffer, config, "sasl.username", saslUsername, &error_message);
     }
 
-    if (std.mem.eql(u8, saslPassword, "") == false and rdkafka.rd_kafka_conf_set(
-        config,
-        "sasl.password",
-        @constCast(saslPassword.ptr),
-        &error_message,
-        error_message.len,
-    ) != rdkafka.RD_KAFKA_CONF_OK) {
-        buffer = try std.fmt.bufPrint(buffer, "connection to kafka failed: error occurred {s}", .{error_message});
-        self.log.err(buffer);
+    if (saslPassword.len > 0) {
+        _ = self.kafkaConfSet(buffer, config, "sasl.password", saslPassword, &error_message);
     }
 
-    if (std.mem.eql(u8, kafkaTlsKeyFile, "") == false and rdkafka.rd_kafka_conf_set(
-        config,
-        "ssl.key.location",
-        @constCast(kafkaTlsKeyFile.ptr),
-        &error_message,
-        error_message.len,
-    ) != rdkafka.RD_KAFKA_CONF_OK) {
-        buffer = try std.fmt.bufPrint(buffer, "connection to kafka failed: error occurred {s}", .{error_message});
-        self.log.err(buffer);
+    if (kafkaTlsKeyFile.len > 0) {
+        _ = self.kafkaConfSet(buffer, config, "ssl.key.location", kafkaTlsKeyFile, &error_message);
     }
 
-    if (std.mem.eql(u8, kafkaTlsCertFile, "") == false and rdkafka.rd_kafka_conf_set(
-        config,
-        "ssl.certificate.location",
-        @constCast(kafkaTlsCertFile.ptr),
-        &error_message,
-        error_message.len,
-    ) != rdkafka.RD_KAFKA_CONF_OK) {
-        buffer = try std.fmt.bufPrint(buffer, "connection to kafka failed: error occurred {s}", .{error_message});
-        self.log.err(buffer);
+    if (kafkaTlsCertFile.len > 0) {
+        _ = self.kafkaConfSet(buffer, config, "ssl.certificate.location", kafkaTlsCertFile, &error_message);
     }
 
-    if (std.mem.eql(u8, kafkaTlsCACertFile, "") == false and rdkafka.rd_kafka_conf_set(
-        config,
-        "ssl.ca.location",
-        @constCast(kafkaTlsCACertFile.ptr),
-        &error_message,
-        error_message.len,
-    ) != rdkafka.RD_KAFKA_CONF_OK) {
-        buffer = try std.fmt.bufPrint(buffer, "connection to kafka failed: error occurred {s}", .{error_message});
-        self.log.err(buffer);
+    if (kafkaTlsCACertFile.len > 0) {
+        _ = self.kafkaConfSet(buffer, config, "ssl.ca.location", kafkaTlsCACertFile, &error_message);
     }
 
-    if (rdkafka.rd_kafka_conf_set(
-        config,
-        "enable.ssl.certificate.verification",
-        @constCast(kafkaTlsSkipVerify.ptr),
-        &error_message,
-        error_message.len,
-    ) != rdkafka.RD_KAFKA_CONF_OK) {
-        buffer = try std.fmt.bufPrint(buffer, "connection to kafka failed: error occurred {s}", .{error_message});
-        self.log.err(buffer);
-    }
+    _ = self.kafkaConfSet(buffer, config, "enable.ssl.certificate.verification", kafkaTlsSkipVerify, &error_message);
 
-    buffer = try self.bootstrap.alloc(u8, 256);
-    buffer = try std.fmt.bufPrint(buffer, "connecting to kafka at '{s}'", .{servers});
-    self.log.info(buffer);
+    self.log.info(try std.fmt.bufPrint(buffer, "connecting to kafka at '{s}'", .{servers}));
 
     self.Kakfa = kafka.create(self, config, null, mode) catch |err| {
         buffer = try self.bootstrap.alloc(u8, 1024);
@@ -466,9 +441,7 @@ fn loadKafkaPubSub(self: *Self) !void {
         return;
     };
 
-    buffer = try self.bootstrap.alloc(u8, 256);
-    buffer = try std.fmt.bufPrint(buffer, "connected to kafka at '{s}'", .{servers});
-    self.log.info(buffer);
+    self.log.info(try std.fmt.bufPrint(buffer, "connected to kafka at '{s}'", .{servers}));
 
     switch (mode) {
         rdkafka.RD_KAFKA_PRODUCER => {
@@ -486,6 +459,48 @@ fn loadKafkaPubSub(self: *Self) !void {
     const ps = try self.allocator.create(root.PubSub);
     ps.* = .{ .ptr = @ptrCast(@alignCast(self.Kakfa)), .vtable = &root.kafka.vtable };
     self.pubSub = ps;
+}
+
+/// Set one rdkafka config option. Returns true if rdkafka rejected it, so the
+/// caller can decide whether to abort (fatal) or continue (best-effort). Logs
+/// the rdkafka-provided error into `log_buf`.
+fn kafkaConfSet(
+    self: *Self,
+    log_buf: []u8,
+    config: ?*rdkafka.struct_rd_kafka_conf_s,
+    key: []const u8,
+    value: []const u8,
+    err_buf: *[512]u8,
+) bool {
+    if (rdkafka.rd_kafka_conf_set(config, key.ptr, value.ptr, err_buf, err_buf.len) != rdkafka.RD_KAFKA_CONF_OK) {
+        _ = std.fmt.bufPrint(log_buf, "connection to kafka failed: error occurred {s}", .{err_buf.*}) catch |err| {
+            self.log.any(err);
+            return true;
+        };
+
+        self.log.err(log_buf);
+        return true;
+    }
+    return false;
+}
+
+/// Wire a datasource pointer into the container with an optional circuit breaker.
+/// Shared by every `load*` backend so the breaker-conditional isn't duplicated.
+fn wireDatasource(self: *Self, ptr: anytype, dialect: anytype) void {
+    self.datasource = root.Datasource.init(
+        ptr,
+        dialect,
+        if (self.config.getAsBool("SQL_CIRCUIT_BREAKER_ENABLE"))
+            root.circuit_breaker.CircuitBreaker.init(.{})
+        else
+            null,
+        self.metricz,
+    );
+}
+
+/// Register the shared SQL health probe used by postgres/sqlite/duckdb.
+fn registerSqlHealth(self: *Self) !void {
+    try self.healthChecks.append(.{ .name = "sql", .check = sqlHealthCheck });
 }
 
 fn loadMqttPubSub(self: *Self) !void {
@@ -715,13 +730,17 @@ fn loadRedis(self: *Self) !void {
     const addr = try std.Io.net.IpAddress.parseIp4(hostname, portInt);
 
     const connection = try addr.connect(utils.io, .{ .mode = .stream });
-    defer connection.close(utils.io);
 
     self.rdz = try rdzDatasource.create(self.allocator);
-    var reader = connection.reader(utils.io, &self.rdz.?.rbuf);
-    var writer = connection.writer(utils.io, &self.rdz.?.wbuf);
+    // Keep the connection and its reader/writer inside the heap-allocated `rdz` for
+    // the app's lifetime. `rdzClient.init` borrows `&rdz.reader.interface` /
+    // `&rdz.writer.interface`; stack-local copies would be freed before first use
+    // and the client would write through a dangling vtable (general-protection fault).
+    self.rdz.?.conn = connection;
+    self.rdz.?.reader = connection.reader(utils.io, &self.rdz.?.rbuf);
+    self.rdz.?.writer = connection.writer(utils.io, &self.rdz.?.wbuf);
 
-    self.redis = rdzClient.init(utils.io, &reader.interface, &writer.interface, .{
+    self.redis = rdzClient.init(utils.io, &self.rdz.?.reader.interface, &self.rdz.?.writer.interface, .{
         .user = null,
         .pass = password,
     }) catch |err| {
@@ -751,7 +770,9 @@ fn loadRedis(self: *Self) !void {
     // expose Redis through the unified KV store interface (default store)
     const redisStore = try root.kvstore.build(self, .redis, .{});
     try self.kvStores.put("cache", redisStore);
-    if (self.defaultKV == null) self.defaultKV = redisStore;
+    if (self.defaultKV == null) {
+        self.defaultKV = redisStore;
+    }
 }
 
 fn loadSQL(self: *Self) !void {
@@ -767,6 +788,11 @@ fn loadSQL(self: *Self) !void {
 
     if (std.mem.eql(u8, dialect, "sqlite") == true) {
         try self.loadSQLite();
+        return;
+    }
+
+    if (std.mem.eql(u8, dialect, "duckgres") == true) {
+        try self.loadDuckGres();
         return;
     }
 
@@ -878,14 +904,7 @@ fn loadSQL(self: *Self) !void {
     // reference metricz
     self.SQL.?.metricz = self.metricz;
 
-    self.datasource = root.Datasource.init(
-        self.SQL,
-        .postgres,
-        if (self.config.getAsBool("SQL_CIRCUIT_BREAKER_ENABLE"))
-            root.circuit_breaker.CircuitBreaker.init(.{})
-        else
-            null,
-    );
+    self.wireDatasource(self.SQL, .postgres);
 
     buffer = try std.fmt.bufPrint(buffer, "generating database connection string for {s}", .{dialect});
     self.log.info(buffer);
@@ -896,7 +915,7 @@ fn loadSQL(self: *Self) !void {
 
     // Auto-register a SQL dependency health probe so /.well-known/health reflects
     // DB availability without the user adding a manual check.
-    try self.healthChecks.append(.{ .name = "sql", .check = sqlHealthCheck });
+    try self.registerSqlHealth();
 }
 
 fn loadSQLite(self: *Self) !void {
@@ -933,20 +952,13 @@ fn loadSQLite(self: *Self) !void {
         self.metricz,
     );
 
-    self.datasource = root.Datasource.init(
-        self.SQLite,
-        .sqlite,
-        if (self.config.getAsBool("SQL_CIRCUIT_BREAKER_ENABLE"))
-            root.circuit_breaker.CircuitBreaker.init(.{})
-        else
-            null,
-    );
+    self.wireDatasource(self.SQLite, .sqlite);
 
     buffer = try std.fmt.bufPrint(buffer, "connected to sqlite at '{s}'", .{dbPath});
     self.log.info(buffer);
 
     // Auto-register a SQL (sqlite) dependency health probe.
-    try self.healthChecks.append(.{ .name = "sql", .check = sqlHealthCheck });
+    try self.registerSqlHealth();
 }
 
 // Auto-wire the in-process OLAP SQL engine (DuckDB) when DUCKDB_PATH is set.
@@ -959,25 +971,136 @@ fn loadDuckDB(self: *Self) !void {
 
     const db = try root.DuckDB.create(self.allocator, path);
     self.DuckDB = db;
-    self.datasource = root.Datasource.init(
-        db,
-        .duckdb,
-        if (self.config.getAsBool("SQL_CIRCUIT_BREAKER_ENABLE"))
-            root.circuit_breaker.CircuitBreaker.init(.{})
-        else
-            null,
-    );
+    self.wireDatasource(db, .duckdb);
 
     const msg = try std.fmt.allocPrint(self.bootstrap, "connected to duckdb at '{s}'", .{if (path.len == 0) ":memory:" else path});
     defer self.bootstrap.free(msg);
     self.log.info(msg);
 
     // Auto-register a SQL (duckdb) dependency health probe.
-    try self.healthChecks.append(.{ .name = "sql", .check = sqlHealthCheck });
+    try self.registerSqlHealth();
 }
 
-// Auto-wire the time-series datasource when INFLUXDB_URL is set. The org/bucket
-// are required; token is optional (auth disabled / 1.x auth).
+// Auto-wire the wired (network) DuckDB client when DB_DIALECT=duckgres is set.
+// It reuses the shared DB_* connection configuration (host/port/user/password/
+// database/TLS) and speaks the Postgres wire protocol to a DuckDB PG-wire
+// front-end (e.g. duckgres / PostDuck), so the duckdb C library stays out of the
+// link. SQL is sent verbatim in the DuckDB dialect; `pgz` is dialect-agnostic at
+// the protocol layer. Exposed on the request context as `ctx.SQL` via the
+// `duckgres` dialect. Disabled (returns early) when the dialect is unset, so a
+// default startup with no dialect is unaffected.
+fn loadDuckGres(self: *Self) !void {
+    if (self.DuckGres != null) return;
+
+    var buffer: []u8 = undefined;
+    buffer = try self.bootstrap.alloc(u8, 512);
+
+    const hostname = self.config.get("DB_HOST");
+    if (std.mem.eql(u8, hostname, "") == true) {
+        buffer = try std.fmt.bufPrint(buffer, "connection to duckgres failed: host name is empty.", .{});
+        self.log.err(buffer);
+        return;
+    }
+    const port = self.config.get("DB_PORT");
+    if (std.mem.eql(u8, port, "") == true) {
+        buffer = try std.fmt.bufPrint(buffer, "connection to duckgres failed: database port is empty.", .{});
+        self.log.err(buffer);
+        return;
+    }
+    // DuckDB PG-wire front-ends (e.g. duckgres / PostDuck) typically require no
+    // password and accept any username/database, so these are optional and
+    // defaulted rather than hard-failing the wiring. Only host/port are required.
+    const user = if (std.mem.eql(u8, self.config.get("DB_USER"), "")) "duckdb" else self.config.get("DB_USER");
+    const password = self.config.get("DB_PASSWORD");
+    const db = if (std.mem.eql(u8, self.config.get("DB_NAME"), "")) "main" else self.config.get("DB_NAME");
+
+    const portInt = try self.config.getAsInt("DB_PORT");
+    const dbPort: u16 = @intCast(portInt);
+
+    const sslMode = self.config.getOrDefault("DB_SSL_MODE", "disable");
+    var tlsMode: pgz.Conn.Opts.TLS = .off;
+    if (std.mem.eql(u8, sslMode, "require")) {
+        tlsMode = .require;
+    } else if (std.mem.eql(u8, sslMode, "verify-ca") or
+        std.mem.eql(u8, sslMode, "verify-full") or
+        std.mem.eql(u8, sslMode, "verifyca") or
+        std.mem.eql(u8, sslMode, "verifyfull"))
+    {
+        const rootCa = self.config.get("DB_TLS_ROOT_CA");
+        if (std.mem.eql(u8, rootCa, "")) {
+            tlsMode = .{ .verify_full = null };
+        } else {
+            tlsMode = .{ .verify_full = rootCa };
+        }
+    }
+
+    const pool_size: u16 = @intCast(blk: {
+        const v = self.config.getAsInt("PG_POOL_SIZE") catch 0;
+        break :blk if (v == 0) constants.DEFAULT_PG_POOL_SIZE else @as(u32, v);
+    });
+    const acquire_timeout_ms: u32 = blk: {
+        const v = self.config.getAsInt("PG_POOL_ACQUIRE_TIMEOUT_MS") catch 0;
+        break :blk if (v == 0) constants.DEFAULT_PG_POOL_ACQUIRE_TIMEOUT_MS else @as(u32, v);
+    };
+    const options: pgz.Pool.Opts = .{
+        .size = pool_size,
+        .connect = .{
+            .host = hostname,
+            .port = dbPort,
+            .tls = tlsMode,
+        },
+        .auth = .{
+            .application_name = self.config.get("APP_NAME"),
+            .username = user,
+            .password = password,
+            .database = db,
+            .timeout = acquire_timeout_ms,
+        },
+    };
+
+    const dg = root.DuckGres.create(self.allocator, options, self.log, self.metricz) catch |err| {
+        buffer = try std.fmt.bufPrint(buffer, "Failed to connect: {}", .{err});
+        self.log.err(buffer);
+        std.process.exit(1);
+    };
+    self.DuckGres = dg;
+    self.wireDatasource(dg, .duckgres);
+
+    buffer = try std.fmt.bufPrint(buffer, "connected to duckgres (wired) user to {s} database at '{s}:{s}'", .{ user, hostname, port });
+    self.log.info(buffer);
+
+    try self.registerSqlHealth();
+}
+
+// Auto-wire the columnar OLAP SQL engine (ClickHouse) over HTTP when
+// CLICKHOUSE_URL is set. No native driver / C library is required; every
+// query travels over the framework's `zul` HTTP client.
+fn loadClickhouse(self: *Self) !void {
+    const url = self.config.get("CLICKHOUSE_URL");
+    if (std.mem.eql(u8, url, "")) {
+        self.log.debug("clickhouse is disabled, as CLICKHOUSE_URL is not provided.");
+        return;
+    }
+
+    const db = try root.ClickHouse.create(self.allocator, .{
+        .url = url,
+        .database = self.config.get("CLICKHOUSE_DB"),
+        .user = if (std.mem.eql(u8, self.config.get("CLICKHOUSE_USER"), "")) null else self.config.get("CLICKHOUSE_USER"),
+        .password = if (std.mem.eql(u8, self.config.get("CLICKHOUSE_PASSWORD"), "")) null else self.config.get("CLICKHOUSE_PASSWORD"),
+    });
+    self.ClickHouse = db;
+    self.wireDatasource(db, .clickhouse);
+
+    const msg = try std.fmt.allocPrint(self.bootstrap, "connected to clickhouse at '{s}' (db '{s}')", .{ url, self.config.get("CLICKHOUSE_DB") });
+    defer self.bootstrap.free(msg);
+    self.log.info(msg);
+
+    // Auto-register a SQL (clickhouse) dependency health probe.
+    try self.healthChecks.append(.{ .name = "sql", .check = clickhouseHealthCheck });
+}
+
+// Auto-wire the time-series datasource when INFLUXDB_URL is set. The database
+// (`bucket`) is required; token is optional (auth disabled).
 fn loadTimeseries(self: *Self) !void {
     const url = self.config.get("INFLUXDB_URL");
     if (std.mem.eql(u8, url, "")) {
@@ -985,21 +1108,27 @@ fn loadTimeseries(self: *Self) !void {
         return;
     }
 
-    const org = self.config.get("INFLUXDB_ORG");
     const bucket = self.config.get("INFLUXDB_BUCKET");
-    if (std.mem.eql(u8, org, "") or std.mem.eql(u8, bucket, "")) {
-        self.log.err("time-series connection failed: INFLUXDB_ORG and INFLUXDB_BUCKET must be set.");
+    if (std.mem.eql(u8, bucket, "")) {
+        self.log.err("time-series connection failed: INFLUXDB_BUCKET must be set.");
+        return;
+    }
+
+    const token = self.config.get("INFLUXDB_TOKEN");
+    if (std.mem.eql(u8, token, "")) {
+        self.log.err("time-series connection failed: INFLUXDB_TOKEN must be set.");
         return;
     }
 
     const handle = try root.Timeseries.build(self, .influxdb, .{
         .url = url,
-        .org = org,
         .bucket = bucket,
-        .token = if (std.mem.eql(u8, self.config.get("INFLUXDB_TOKEN"), "")) null else self.config.get("INFLUXDB_TOKEN"),
+        .token = token,
     });
+
     self.Timeseries = handle;
-    self.log.info(try std.fmt.allocPrint(self.bootstrap, "connected to influxdb at '{s}' (org '{s}', bucket '{s}')", .{ url, org, bucket }));
+
+    self.log.info(try std.fmt.allocPrint(self.bootstrap, "connected to influxdb at '{s}' (db '{s}')", .{ url, bucket }));
 }
 
 // Auto-wire the search datasource when SOLR_URL is set.
@@ -1026,30 +1155,84 @@ fn loadSearch(self: *Self) !void {
     self.log.info(try std.fmt.allocPrint(self.bootstrap, "connected to solr at '{s}' (default collection '{s}')", .{ url, collection }));
 }
 
-// Auto-wire the NoSQL datasource when CASSANDRA_CONTACT_POINTS is set.
+// Auto-wire the NoSQL datasource when CASSANDRA_CONTACT_POINTS or
+// COUCHBASE_CONTACT_POINTS is set.
 fn loadNoSQL(self: *Self) !void {
-    const contact_points = self.config.get("CASSANDRA_CONTACT_POINTS");
-    if (std.mem.eql(u8, contact_points, "")) {
-        self.log.debug("nosql is disabled, as CASSANDRA_CONTACT_POINTS is not provided.");
+    const cassandra_cp = self.config.get("CASSANDRA_CONTACT_POINTS");
+    if (!std.mem.eql(u8, cassandra_cp, "")) {
+        const keyspace = self.config.get("CASSANDRA_KEYSPACE");
+        if (std.mem.eql(u8, keyspace, "")) {
+            self.log.err("nosql connection failed: CASSANDRA_KEYSPACE must be set.");
+            return;
+        }
+        const user_val = self.config.get("CASSANDRA_USER");
+        const pass_val = self.config.get("CASSANDRA_PASSWORD");
+        const handle = try root.NoSQL.build(self, .cassandra, .{
+            .contact_points = cassandra_cp,
+            .keyspace = keyspace,
+            .user = if (std.mem.eql(u8, user_val, "")) null else user_val,
+            .password = if (std.mem.eql(u8, pass_val, "")) null else pass_val,
+        });
+        self.NoSQL = handle;
+        self.log.info(try std.fmt.allocPrint(self.bootstrap, "connected to cassandra at '{s}' (keyspace '{s}')", .{ cassandra_cp, keyspace }));
         return;
     }
 
-    const keyspace = self.config.get("CASSANDRA_KEYSPACE");
-    if (std.mem.eql(u8, keyspace, "")) {
-        self.log.err("nosql connection failed: CASSANDRA_KEYSPACE must be set.");
+    const couchbase_cp = self.config.get("COUCHBASE_CONTACT_POINTS");
+    if (!std.mem.eql(u8, couchbase_cp, "")) {
+        const bucket = self.config.get("COUCHBASE_BUCKET");
+        if (std.mem.eql(u8, bucket, "")) {
+            self.log.err("nosql connection failed: COUCHBASE_BUCKET must be set.");
+            return;
+        }
+        const user_val = self.config.get("COUCHBASE_USER");
+        const pass_val = self.config.get("COUCHBASE_PASSWORD");
+        const handle = try root.NoSQL.build(self, .couchbase, .{
+            .contact_points = couchbase_cp,
+            .keyspace = bucket,
+            .user = if (std.mem.eql(u8, user_val, "")) null else user_val,
+            .password = if (std.mem.eql(u8, pass_val, "")) null else pass_val,
+        });
+        self.NoSQL = handle;
+        self.log.info(try std.fmt.allocPrint(self.bootstrap, "connected to couchbase at '{s}' (bucket '{s}') via N1QL/HTTP", .{ couchbase_cp, bucket }));
         return;
     }
 
-    const user_val = self.config.get("CASSANDRA_USER");
-    const pass_val = self.config.get("CASSANDRA_PASSWORD");
-    const handle = try root.NoSQL.build(self, .cassandra, .{
-        .contact_points = contact_points,
-        .keyspace = keyspace,
-        .user = if (std.mem.eql(u8, user_val, "")) null else user_val,
-        .password = if (std.mem.eql(u8, pass_val, "")) null else pass_val,
-    });
-    self.NoSQL = handle;
-    self.log.info(try std.fmt.allocPrint(self.bootstrap, "connected to cassandra at '{s}' (keyspace '{s}')", .{ contact_points, keyspace }));
+    const mongo_cp = self.config.get("MONGODB_CONTACT_POINTS");
+    if (!std.mem.eql(u8, mongo_cp, "")) {
+        const mongo_db = self.config.get("MONGODB_DB");
+        if (std.mem.eql(u8, mongo_db, "")) {
+            self.log.err("nosql connection failed: MONGODB_DB must be set.");
+            return;
+        }
+        const mongo_user = self.config.get("MONGODB_USER");
+        const mongo_pass = self.config.get("MONGODB_PASSWORD");
+        const mongo_tls = std.mem.eql(u8, self.config.get("MONGODB_TLS"), "true");
+        const mongo_verify = std.mem.eql(u8, self.config.get("MONGODB_TLS_VERIFY"), "true");
+        const mongo_ca = self.config.get("MONGODB_TLS_CA");
+        const mongo_auth = self.config.get("MONGODB_AUTH_SOURCE");
+        const m = root.MongoDB.create(self.allocator, .{
+            .contact_points = mongo_cp,
+            .user = if (std.mem.eql(u8, mongo_user, "")) "" else mongo_user,
+            .pass = if (std.mem.eql(u8, mongo_pass, "")) "" else mongo_pass,
+            .auth_source = if (std.mem.eql(u8, mongo_auth, "")) "admin" else mongo_auth,
+            .db = mongo_db,
+            .tls_enabled = mongo_tls,
+            .tls_verify = mongo_verify,
+            .tls_ca_path = if (std.mem.eql(u8, mongo_ca, "")) null else mongo_ca,
+        }) catch |err| {
+            self.log.err("could not initialize mongodb backend");
+            self.log.any(err);
+            return;
+        };
+        const handle = try self.allocator.create(root.NoSQL);
+        handle.* = root.NoSQL.init(m, .mongodb, null, self.metricz);
+        self.NoSQL = handle;
+        self.log.info(try std.fmt.allocPrint(self.bootstrap, "connected to mongodb at '{s}' (db '{s}'){s}", .{ mongo_cp, mongo_db, if (mongo_tls) " (tls)" else "" }));
+        return;
+    }
+
+    self.log.debug("nosql is disabled, as CASSANDRA_CONTACT_POINTS / COUCHBASE_CONTACT_POINTS / MONGODB_CONTACT_POINTS are not provided.");
 }
 
 pub fn registerZeroClient(self: *Self, service: *zeroClient) !void {
@@ -1066,7 +1249,9 @@ fn loadFileStore(self: *Self) !void {
             return;
         };
         try self.fileStores.put("s3", store);
-        if (self.defaultFileStore == null) self.defaultFileStore = store;
+        if (self.defaultFileStore == null) {
+            self.defaultFileStore = store;
+        }
         self.log.info("connected to s3 file store");
         return;
     }
@@ -1084,7 +1269,9 @@ fn loadFileStore(self: *Self) !void {
     };
 
     try self.fileStores.put("local", store);
-    if (self.defaultFileStore == null) self.defaultFileStore = store;
+    if (self.defaultFileStore == null) {
+        self.defaultFileStore = store;
+    }
 
     self.log.info("connected to local file store");
 }

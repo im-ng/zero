@@ -36,6 +36,12 @@ pub fn create(self: Self) !*config {
     return c;
 }
 
+/// Frees the `config` struct. The wrapped `environments` map is the process-global
+/// `std.process.environ` and is not owned here, so only the struct itself is freed.
+pub fn deinit(self: *Self) void {
+    self.allocator.destroy(self);
+}
+
 fn isFileRWExist(fn_dir: std.fs.Dir, fn_file_name: []const u8) !bool {
     fn_dir.access(fn_file_name, .{ .mode = .read_only }) catch |err| switch (err) {
         error.FileNotFound => return false,
@@ -49,27 +55,31 @@ fn isFileRWExist(fn_dir: std.fs.Dir, fn_file_name: []const u8) !bool {
 
 fn loadDefaultEnv(self: *Self) !void {
     try dotenv.loadFrom(self.allocator, utils.io, self.environments, defaultFile, .{});
-    const msg = try utils.combine(self.allocator, "Loaded config from file: {s}", .{defaultFile});
+    var buf: [256]u8 = undefined;
+    const msg = try std.fmt.bufPrint(&buf, "Loaded config from file: {s}", .{defaultFile});
     self.log.Info(self.allocator, msg);
 }
 
 fn loadEnvironmentOverrides(self: *Self) !void {
+    var env_buf: [256]u8 = undefined;
     var finalEnvFile: []const u8 = undefined;
 
     const env = self.get(constants.APP_ENVIRONMENT);
     if (env.len != 0) {
-        finalEnvFile = try utils.combine(self.allocator, "{s}/.{s}.env", .{ defaultPath, env });
+        finalEnvFile = try std.fmt.bufPrint(&env_buf, "{s}/.{s}.env", .{ defaultPath, env });
     } else {
         finalEnvFile = defaultFile;
     }
 
     dotenv.loadFrom(self.allocator, utils.io, self.environments, finalEnvFile, .{ .override = true }) catch |err| switch (err) {
         error.FileNotFound => {
-            const msg = try utils.combine(self.allocator, "config overriden {s} file not found.", .{finalEnvFile});
+            var msg_buf: [256]u8 = undefined;
+            const msg = try std.fmt.bufPrint(&msg_buf, "config overriden {s} file not found.", .{finalEnvFile});
             self.log.info(msg);
         },
         else => {
-            const msg = try utils.combine(self.allocator, "config overriden from: {s}", .{finalEnvFile});
+            var msg_buf: [256]u8 = undefined;
+            const msg = try std.fmt.bufPrint(&msg_buf, "config overriden from: {s}", .{finalEnvFile});
             self.log.info(msg);
         },
     };

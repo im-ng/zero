@@ -13,11 +13,11 @@ const Headers = std.http.Client.Request.Headers;
 const ClientError = root.Error.ClientError;
 const zul = root.zul;
 
-const CircuitBreaker = @import("circuit_breaker.zig").CircuitBreaker;
-const CircuitBreakerConfig = @import("circuit_breaker.zig").CircuitBreakerConfig;
+const CircuitBreaker = @import("circuitBreaker.zig").CircuitBreaker;
+const CircuitBreakerConfig = @import("circuitBreaker.zig").CircuitBreakerConfig;
 pub const RateLimiter = @import("rateLimiter.zig").RateLimiter;
 pub const RateLimiterConfig = @import("rateLimiter.zig").RateLimiterConfig;
-const outbound_auth = @import("outbound_auth.zig");
+const outbound_auth = @import("outboundAuth.zig");
 const otel = root.otel;
 
 pub const OutboundAuth = outbound_auth.OutboundAuth;
@@ -46,7 +46,6 @@ pub const ServiceOptions = struct {
 
 container: *root.container = undefined,
 client: zul.http.Client,
-arena: *std.heap.ArenaAllocator,
 url: ?[]const u8 = undefined,
 name: []const u8 = undefined,
 
@@ -56,21 +55,21 @@ auth: ?OutboundAuth = null,
 breaker: ?CircuitBreaker = null,
 /// Per-service fixed-window rate limiter (null = disabled).
 limiter: ?RateLimiter = null,
-    /// Optional connect timeout (ms) applied to outbound requests to this service.
-    timeout_ms: ?u64 = null,
-    /// Max additional attempts for transient failures (network errors + 5xx).
-    max_retries: ?u32 = null,
-    /// Base backoff (ms) between retries; delay = base * attempt (linear).
-    retry_base_ms: ?i64 = null,
+/// Optional connect timeout (ms) applied to outbound requests to this service.
+timeout_ms: ?u64 = null,
+/// Max additional attempts for transient failures (network errors + 5xx).
+max_retries: ?u32 = null,
+/// Base backoff (ms) between retries; delay = base * attempt (linear).
+retry_base_ms: ?i64 = null,
 
 /// OAuth token cache (runtime, managed by `ensureOAuthToken`).
 oauth_token: ?[]const u8 = null,
 oauth_expires_at: i128 = 0,
 oauth_mutex: std.Io.Mutex = .init,
-    oauth_client: ?zul.http.Client = null,
-    /// Circuit breaker guarding the OAuth token endpoint (separate from the
-    /// downstream breaker so a flapping IdP can't pin every outbound call).
-    oauth_breaker: ?CircuitBreaker = null,
+oauth_client: ?zul.http.Client = null,
+/// Circuit breaker guarding the OAuth token endpoint (separate from the
+/// downstream breaker so a flapping IdP can't pin every outbound call).
+oauth_breaker: ?CircuitBreaker = null,
 
 pub fn create(
     ct: *root.container,
@@ -93,24 +92,24 @@ pub fn createWithConfig(
 ) !*Client {
     const c = try ct.allocator.create(Client);
 
-    c.client = zul.http.Client.init(ct.io, ct.allocator);
-    c.name = service_name;
-    c.container = ct;
-    c.url = _url;
-    c.auth = opts.auth;
-    c.timeout_ms = opts.timeout_ms;
-    c.max_retries = opts.max_retries;
-    c.retry_base_ms = opts.retry_base_ms;
-
-    if (opts.circuitBreaker) |cb| {
-        c.breaker = CircuitBreaker.init(cb);
-    }
-
-    if (opts.rateLimiter) |rl| {
-        c.limiter = RateLimiter.init(rl);
-    }
-
-    c.oauth_breaker = CircuitBreaker.init(CircuitBreakerConfig{});
+    // `allocator.create` returns uninitialized memory, so assign the full
+    // struct literal. This applies every field default (notably
+    // `oauth_token = null`, `oauth_client = null`, `oauth_mutex = .init`) —
+    // without this, those fields are garbage and `deinit`'s `free(token)`
+    // frees a dangling pointer and crashes at shutdown.
+    c.* = .{
+        .container = ct,
+        .client = zul.http.Client.init(ct.io, ct.allocator),
+        .name = service_name,
+        .url = _url,
+        .auth = opts.auth,
+        .timeout_ms = opts.timeout_ms,
+        .max_retries = opts.max_retries,
+        .retry_base_ms = opts.retry_base_ms,
+        .breaker = if (opts.circuitBreaker) |cb| CircuitBreaker.init(cb) else null,
+        .limiter = if (opts.rateLimiter) |rl| RateLimiter.init(rl) else null,
+        .oauth_breaker = CircuitBreaker.init(CircuitBreakerConfig{}),
+    };
 
     return c;
 }
@@ -118,6 +117,7 @@ pub fn createWithConfig(
 pub fn deinit(self: *Self) void {
     if (self.oauth_token) |token| {
         self.container.allocator.free(token);
+        self.oauth_token = null;
     }
 
     if (self.oauth_client) |*c| {
@@ -293,10 +293,10 @@ pub fn log(
     ctx.info(buffer);
 }
 
-    fn retryBackoffMs(self: *Self, attempt: u32) i64 {
-        const base = self.retry_base_ms orelse constants.DEFAULT_SERVICE_RETRY_BASE_MS;
-        return @as(i64, base) * @as(i64, attempt);
-    }
+fn retryBackoffMs(self: *Self, attempt: u32) i64 {
+    const base = self.retry_base_ms orelse constants.DEFAULT_SERVICE_RETRY_BASE_MS;
+    return @as(i64, base) * @as(i64, attempt);
+}
 
 pub fn get(
     self: *Self,
@@ -377,6 +377,26 @@ pub fn delete(
     );
 }
 
+/// Copy query params and headers from the options maps onto the outbound request.
+fn applyRequestMaps(
+    req: *zul.http.Request,
+    queryParams: ?std.StringHashMap([]const u8),
+    headers: ?std.StringHashMap([]const u8),
+) !void {
+    if (queryParams) |params| {
+        var iterator = params.iterator();
+        while (iterator.next()) |param| {
+            try req.query(param.key_ptr.*, param.value_ptr.*);
+        }
+    }
+    if (headers) |custom_headers| {
+        var iterator = custom_headers.iterator();
+        while (iterator.next()) |header| {
+            try req.header(header.key_ptr.*, header.value_ptr.*);
+        }
+    }
+}
+
 fn createAndSendRequest(
     self: *Self,
     ctx: *Context,
@@ -409,7 +429,9 @@ fn createAndSendRequest(
     const max_attempts = self.max_retries orelse 0;
 
     while (true) {
-        if (req_owned) req.deinit();
+        if (req_owned) {
+            req.deinit();
+        }
         req_owned = false;
         req = try self.client.allocRequest(ctx.allocator, absoluteURL);
         req_owned = true;
@@ -418,8 +440,10 @@ fn createAndSendRequest(
 
         // Propagate the inbound correlation id onto the outbound request so the
         // call chain stays traceable across services. No-op when none is present.
-        if (ctx.request.header("X-Correlation-ID")) |cid| {
-            try req.header("X-Correlation-ID", cid);
+        if (ctx.request) |r| {
+            if (r.header("X-Correlation-ID")) |cid| {
+                try req.header("X-Correlation-ID", cid);
+            }
         }
 
         // Propagate the active OpenTelemetry trace via W3C traceparent (continues
@@ -430,19 +454,7 @@ fn createAndSendRequest(
             try req.header("traceparent", tp);
         }
 
-        if (queryParams) |params| {
-            var iterator = params.iterator();
-            while (iterator.next()) |param| {
-                try req.query(param.key_ptr.*, param.value_ptr.*);
-            }
-        }
-
-        if (headers) |custom_headers| {
-            var iterator = custom_headers.iterator();
-            while (iterator.next()) |header| {
-                try req.header(header.key_ptr.*, header.value_ptr.*);
-            }
-        }
+        try applyRequestMaps(&req, queryParams, headers);
 
         if (payload) |body| {
             req.body(body);
@@ -470,7 +482,9 @@ fn createAndSendRequest(
         const start = utils.nowMonotonic();
 
         res = req.getResponse(.{}) catch |e| {
-            if (self.breaker) |*b| b.recordFailure();
+            if (self.breaker) |*b| {
+                b.recordFailure();
+            }
             if (attempt < max_attempts) {
                 attempt += 1;
                 const backoff = self.retryBackoffMs(attempt);
@@ -487,7 +501,9 @@ fn createAndSendRequest(
                 return ClientError.EntityNotFound;
             },
             500...600 => {
-                if (self.breaker) |*b| b.recordFailure();
+                if (self.breaker) |*b| {
+                    b.recordFailure();
+                }
                 if (attempt < max_attempts) {
                     attempt += 1;
                     const backoff = self.retryBackoffMs(attempt);
@@ -497,15 +513,22 @@ fn createAndSendRequest(
                 return ClientError.ServiceNotReachable;
             },
             else => {
-                if (self.breaker) |*b| b.recordSuccess();
+                if (self.breaker) |*b| {
+                    b.recordSuccess();
+                }
             },
         }
 
         // OAuth token may have expired mid-flight: force a refresh and replay once.
         if (res.status == 401 and self.auth != null and self.auth.?.mode == .oauth and !replayed) {
             replayed = true;
+            if (self.oauth_token) |old| {
+                self.container.allocator.free(old);
+            }
             self.oauth_token = null;
-            if (self.breaker) |*b| b.recordFailure();
+            if (self.breaker) |*b| {
+                b.recordFailure();
+            }
             const backoff = self.retryBackoffMs(attempt + 1);
             std.Io.sleep(self.container.io, std.Io.Duration.fromMilliseconds(backoff), .awake) catch {};
             continue;
@@ -650,20 +673,26 @@ fn ensureOAuthToken(self: *Self) ![]const u8 {
     var res = req.getResponse(.{}) catch |e| {
         // Network failure: fall back to the last cached token if we have one,
         // otherwise surface the error.
-        if (self.oauth_breaker) |*b| b.recordFailure();
+        if (self.oauth_breaker) |*b| {
+            b.recordFailure();
+        }
         if (self.oauth_token) |token| return token;
         return e;
     };
 
     if (res.status < 200 or res.status > 299) {
-        if (self.oauth_breaker) |*b| b.recordFailure();
+        if (self.oauth_breaker) |*b| {
+            b.recordFailure();
+        }
         // Refresh failed: reuse the previously cached token (stale is better than
         // hard-failing the outbound call) if one is available.
         if (self.oauth_token) |token| return token;
         return error.OAuthTokenFetchFailed;
     }
 
-    if (self.oauth_breaker) |*b| b.recordSuccess();
+    if (self.oauth_breaker) |*b| {
+        b.recordSuccess();
+    }
 
     const TokenResponse = struct {
         access_token: []const u8,
@@ -698,9 +727,7 @@ fn getResponseTraceIDBuffer(_: *Self, allocator: std.mem.Allocator) ![]const u8 
     return try std.fmt.allocPrint(allocator, "{s:>36}", .{" "});
 }
 
-
 // ===================== Tests =====================
-
 
 test "client: downstream rate limiter is created from options and trips" {
     // Allocate everything in an arena and free the arena afterwards: a full
