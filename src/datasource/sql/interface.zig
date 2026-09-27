@@ -1,5 +1,5 @@
 const std = @import("std");
-const root = @import("../zero.zig");
+const root = @import("../../zero.zig");
 
 const SQLite = root.SQLite;
 const SQL = root.SQL;
@@ -14,16 +14,16 @@ pub const Dialect = enum {
     sqlite,
     postgres,
     /// In-process OLAP SQL engine (DuckDB). Reuses this relational interface;
-    /// backed by `src/datasource/DuckDB.zig` (links `libs/libduckdb.so`).
+    /// backed by `src/datasource/sql/duckdb.zig` (links `libs/libduckdb.so`).
     duckdb,
     /// Columnar OLAP SQL engine (ClickHouse) over HTTP. Reuses this relational
-    /// interface; backed by `src/datasource/ClickHouse.zig` (HTTP via `zul`,
+    /// interface; backed by `src/datasource/sql/clickhouse.zig` (HTTP via `zul`,
     /// no native driver). Transactions/lastInsertRowID are no-ops (eventually
     /// consistent).
     clickhouse,
     /// Wired (network) DuckDB over the Postgres wire protocol (PG-wire front-end
     /// such as duckgres / PostDuck). Reuses this relational interface; backed by
-    /// `src/datasource/duckgres.zig` (the pure-Zig `pgz` client, no duckdb C lib).
+    /// `src/datasource/sql/duckgres.zig` (the pure-Zig `pgz` client, no duckdb C lib).
     duckgres,
     /// Test-only dialect backed by `MockBackend`. Lets the `Interface` dispatch
     /// be exercised without loading a real database driver (keeps the

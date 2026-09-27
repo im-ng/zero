@@ -113,6 +113,7 @@ pub fn execute(self: *const authz, req: *httpz.Request, res: *httpz.Response, ex
 fn deny(self: *const authz, res: *httpz.Response, arena: std.mem.Allocator, comptime msg: []const u8) void {
     const buffer = utils.combine(arena, msg, .{}) catch "auth denied";
     self.container.?.log.Info(arena, buffer);
+
     res.setStatus(.unauthorized);
 }
 

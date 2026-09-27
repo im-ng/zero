@@ -1,5 +1,5 @@
 const std = @import("std");
-const utils = @import("../utils.zig");
+const utils = @import("../../utils.zig");
 
 const Io = std.Io;
 const net = Io.net;

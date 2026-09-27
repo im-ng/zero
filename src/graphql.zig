@@ -163,7 +163,9 @@ fn findOperation(doc: ast.DocumentNode, operation_name: ?[]const u8) ?ast.Operat
             }
         } else {
             if (op.name == null) return op;
-            if (fallback == null) fallback = op;
+            if (fallback == null) {
+                fallback = op;
+            }
         }
     }
 
@@ -297,9 +299,13 @@ fn resolveList(comptime T: type, list: T, ss: ast.SelectionSetNode, ec: anytype)
     const ti = @typeInfo(T);
 
     if (ti == .pointer) {
-        for (list) |item| try arr.append(try resolveValue(item, ss, ec));
+        for (list) |item| {
+            try arr.append(try resolveValue(item, ss, ec));
+        }
     } else if (ti == .array) {
-        for (list) |item| try arr.append(try resolveValue(item, ss, ec));
+        for (list) |item| {
+            try arr.append(try resolveValue(item, ss, ec));
+        }
     }
 
     return .{ .array = arr };
@@ -308,7 +314,9 @@ fn resolveList(comptime T: type, list: T, ss: ast.SelectionSetNode, ec: anytype)
 fn sliceToJson(comptime T: type, list: T, alloc: std.mem.Allocator) !std.json.Value {
     var arr = std.json.Array.init(alloc);
 
-    for (list) |item| try arr.append(try primitiveToJson(item, alloc));
+    for (list) |item| {
+        try arr.append(try primitiveToJson(item, alloc));
+    }
 
     return .{
         .array = arr,
@@ -353,7 +361,9 @@ fn primitiveToJson(value: anytype, alloc: std.mem.Allocator) !std.json.Value {
         .array => {
             var arr = std.json.Array.init(alloc);
 
-            for (value) |item| try arr.append(try primitiveToJson(item, alloc));
+            for (value) |item| {
+                try arr.append(try primitiveToJson(item, alloc));
+            }
 
             return .{
                 .array = arr,
@@ -512,7 +522,9 @@ fn valueNodeToJsonValue(node: ast.ValueNode, alloc: std.mem.Allocator) anyerror!
         .Variable => .null,
         .List => blk: {
             var arr = std.json.Array.init(alloc);
-            for (node.List.values) |v| try arr.append(try valueNodeToJsonValue(v, alloc));
+            for (node.List.values) |v| {
+                try arr.append(try valueNodeToJsonValue(v, alloc));
+            }
             break :blk .{ .array = arr };
         },
         .Object => try valueNodeToJson(node.Object, alloc),
@@ -524,7 +536,9 @@ fn listToT(comptime T: type, list: ast.ListValueNode, ec: anytype) !T {
     if (ti == .pointer and ti.pointer.size == .slice and ti.pointer.child != u8) {
         const Elem = ti.pointer.child;
         var items = std.array_list.Managed(Elem).init(ec.alloc);
-        for (list.values) |v| try items.append(try coerceValue(v, Elem, ec));
+        for (list.values) |v| {
+            try items.append(try coerceValue(v, Elem, ec));
+        }
         return items.items;
     }
     if (ti == .array) {

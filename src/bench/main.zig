@@ -2,7 +2,7 @@ const std = @import("std");
 const zero = @import("zero");
 const zul = @import("zul");
 const protobuf = @import("zero").protobuf;
-const alloc_probe = @import("alloc_probe.zig");
+const alloc_probe = @import("allocProbe.zig");
 
 const App = zero.App;
 const Context = zero.Context;
@@ -59,17 +59,27 @@ const Histogram = struct {
         }
         self.total += 1;
         self.sum_ns += ns;
-        if (ns < self.min_ns) self.min_ns = ns;
-        if (ns > self.max_ns) self.max_ns = ns;
+        if (ns < self.min_ns) {
+            self.min_ns = ns;
+        }
+        if (ns > self.max_ns) {
+            self.max_ns = ns;
+        }
     }
 
     fn merge(self: *Histogram, other: *const Histogram) void {
         var i: usize = 0;
-        while (i < BucketUpperNs.len) : (i += 1) self.counts[i] += other.counts[i];
+        while (i < BucketUpperNs.len) : (i += 1) {
+            self.counts[i] += other.counts[i];
+        }
         self.total += other.total;
         self.sum_ns += other.sum_ns;
-        if (other.min_ns < self.min_ns) self.min_ns = other.min_ns;
-        if (other.max_ns > self.max_ns) self.max_ns = other.max_ns;
+        if (other.min_ns < self.min_ns) {
+            self.min_ns = other.min_ns;
+        }
+        if (other.max_ns > self.max_ns) {
+            self.max_ns = other.max_ns;
+        }
     }
 
     fn percentile(self: *const Histogram, p: f64) u64 {
@@ -138,7 +148,9 @@ fn fire(client: *zul.http.Client, req: Req) bool {
         return false;
     };
     r.method = req.method;
-    if (req.body) |b| r.body(b);
+    if (req.body) |b| {
+        r.body(b);
+    }
     if (req.content_type) |ct| r.header("content-type", ct) catch {};
     if (req.accept) |a| r.header("Accept", a) catch {};
     res.* = r.getResponse(.{}) catch |e| {
@@ -544,7 +556,9 @@ fn runScenario(
         }
 
         const t0 = nowNs();
-        for (threads) |t| t.join();
+        for (threads) |t| {
+            t.join();
+        }
         const elapsed_ns = nowNs() - t0;
 
         var global = Histogram{};
@@ -562,7 +576,9 @@ fn runScenario(
         const max_us = global.max_ns / 1000;
 
         const rss1 = readRss();
-        if (rss1 > scenario_peak) scenario_peak = rss1;
+        if (rss1 > scenario_peak) {
+            scenario_peak = rss1;
+        }
         const rss_mib = @as(f64, @floatFromInt(rss1)) / (1024 * 1024);
         const drss_kib = @as(f64, @floatFromInt(rss1 -% rss_start)) / 1024;
 
@@ -587,7 +603,9 @@ fn runScenario(
     if (leak) {
         std.debug.print("⚠ {s}: possible leak (peak RSS grew {d:.1} MiB)\n", .{ name, drss_kib / 1024 });
     }
-    if (scenario_peak > peak_rss.*) peak_rss.* = scenario_peak;
+    if (scenario_peak > peak_rss.*) {
+        peak_rss.* = scenario_peak;
+    }
 
     return .{ .name = name, .peak_rss_mib = peak_mib, .drss_kib = drss_kib, .leak = leak };
 }
@@ -715,7 +733,9 @@ pub fn main(init: std.process.Init) !void {
             for (ramp) |v| {
                 var seen = false;
                 for (levels[0..level_count]) |existing| {
-                    if (existing == v) seen = true;
+                    if (existing == v) {
+                        seen = true;
+                    }
                 }
                 if (!seen) {
                     levels[level_count] = v;
@@ -769,7 +789,9 @@ pub fn main(init: std.process.Init) !void {
         waitReady(init.io, health_url);
     } else {
         const app = try App.new(allocator, init.io, init.environ_map);
-        if (quiet) app.log.logLevel = 99;
+        if (quiet) {
+            app.log.logLevel = 99;
+        }
 
         // Register the zero-basic workload so the suite/k6 can exercise resource
         // endpoints (index/html, text, json, keys, db, proto get+post, graphql get+post,

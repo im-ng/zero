@@ -1,1 +1,95 @@
-{"scenarios":[{"name":"health","peak_rss_mib":244.87109375,"drss_kib":6008,"leak":false},{"name":"health-json","peak_rss_mib":244.9453125,"drss_kib":112,"leak":false},{"name":"health-html","peak_rss_mib":244.96875,"drss_kib":64,"leak":false},{"name":"startup","peak_rss_mib":244.99609375,"drss_kib":68,"leak":false},{"name":"index","peak_rss_mib":245.01171875,"drss_kib":56,"leak":false},{"name":"text","peak_rss_mib":245.0390625,"drss_kib":68,"leak":false},{"name":"json","peak_rss_mib":245.06640625,"drss_kib":68,"leak":false},{"name":"keys","peak_rss_mib":245.09375,"drss_kib":68,"leak":false},{"name":"db","peak_rss_mib":245.125,"drss_kib":72,"leak":false},{"name":"duckdb-query","peak_rss_mib":254.8046875,"drss_kib":9952,"leak":false},{"name":"proto-get","peak_rss_mib":254.8359375,"drss_kib":72,"leak":false},{"name":"proto","peak_rss_mib":254.86328125,"drss_kib":68,"leak":false},{"name":"graphql-get","peak_rss_mib":255.57421875,"drss_kib":768,"leak":false},{"name":"graphql","peak_rss_mib":255.6015625,"drss_kib":68,"leak":false},{"name":"filestore-get","peak_rss_mib":255.6328125,"drss_kib":72,"leak":false},{"name":"filestore","peak_rss_mib":255.66015625,"drss_kib":68,"leak":false}]}
+{
+  "scenarios": [
+    {
+      "name": "health",
+      "peak_rss_mib": 244.87109375,
+      "drss_kib": 6008,
+      "leak": false
+    },
+    {
+      "name": "health-json",
+      "peak_rss_mib": 244.9453125,
+      "drss_kib": 112,
+      "leak": false
+    },
+    {
+      "name": "health-html",
+      "peak_rss_mib": 244.96875,
+      "drss_kib": 64,
+      "leak": false
+    },
+    {
+      "name": "startup",
+      "peak_rss_mib": 244.99609375,
+      "drss_kib": 68,
+      "leak": false
+    },
+    {
+      "name": "index",
+      "peak_rss_mib": 245.01171875,
+      "drss_kib": 56,
+      "leak": false
+    },
+    {
+      "name": "text",
+      "peak_rss_mib": 245.0390625,
+      "drss_kib": 68,
+      "leak": false
+    },
+    {
+      "name": "json",
+      "peak_rss_mib": 245.06640625,
+      "drss_kib": 68,
+      "leak": false
+    },
+    {
+      "name": "keys",
+      "peak_rss_mib": 245.09375,
+      "drss_kib": 68,
+      "leak": false
+    },
+    { "name": "db", "peak_rss_mib": 245.125, "drss_kib": 72, "leak": false },
+    {
+      "name": "duckdb-query",
+      "peak_rss_mib": 254.8046875,
+      "drss_kib": 9952,
+      "leak": false
+    },
+    {
+      "name": "proto-get",
+      "peak_rss_mib": 254.8359375,
+      "drss_kib": 72,
+      "leak": false
+    },
+    {
+      "name": "proto",
+      "peak_rss_mib": 254.86328125,
+      "drss_kib": 68,
+      "leak": false
+    },
+    {
+      "name": "graphql-get",
+      "peak_rss_mib": 255.57421875,
+      "drss_kib": 768,
+      "leak": false
+    },
+    {
+      "name": "graphql",
+      "peak_rss_mib": 255.6015625,
+      "drss_kib": 68,
+      "leak": false
+    },
+    {
+      "name": "filestore-get",
+      "peak_rss_mib": 255.6328125,
+      "drss_kib": 72,
+      "leak": false
+    },
+    {
+      "name": "filestore",
+      "peak_rss_mib": 255.66015625,
+      "drss_kib": 68,
+      "leak": false
+    }
+  ]
+}

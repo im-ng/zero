@@ -13,11 +13,11 @@ const Headers = std.http.Client.Request.Headers;
 const ClientError = root.Error.ClientError;
 const zul = root.zul;
 
-const CircuitBreaker = @import("circuit_breaker.zig").CircuitBreaker;
-const CircuitBreakerConfig = @import("circuit_breaker.zig").CircuitBreakerConfig;
+const CircuitBreaker = @import("circuitBreaker.zig").CircuitBreaker;
+const CircuitBreakerConfig = @import("circuitBreaker.zig").CircuitBreakerConfig;
 pub const RateLimiter = @import("rateLimiter.zig").RateLimiter;
 pub const RateLimiterConfig = @import("rateLimiter.zig").RateLimiterConfig;
-const outbound_auth = @import("outbound_auth.zig");
+const outbound_auth = @import("outboundAuth.zig");
 const otel = root.otel;
 
 pub const OutboundAuth = outbound_auth.OutboundAuth;
@@ -429,7 +429,9 @@ fn createAndSendRequest(
     const max_attempts = self.max_retries orelse 0;
 
     while (true) {
-        if (req_owned) req.deinit();
+        if (req_owned) {
+            req.deinit();
+        }
         req_owned = false;
         req = try self.client.allocRequest(ctx.allocator, absoluteURL);
         req_owned = true;
@@ -478,7 +480,9 @@ fn createAndSendRequest(
         const start = utils.nowMonotonic();
 
         res = req.getResponse(.{}) catch |e| {
-            if (self.breaker) |*b| b.recordFailure();
+            if (self.breaker) |*b| {
+                b.recordFailure();
+            }
             if (attempt < max_attempts) {
                 attempt += 1;
                 const backoff = self.retryBackoffMs(attempt);
@@ -495,7 +499,9 @@ fn createAndSendRequest(
                 return ClientError.EntityNotFound;
             },
             500...600 => {
-                if (self.breaker) |*b| b.recordFailure();
+                if (self.breaker) |*b| {
+                    b.recordFailure();
+                }
                 if (attempt < max_attempts) {
                     attempt += 1;
                     const backoff = self.retryBackoffMs(attempt);
@@ -505,7 +511,9 @@ fn createAndSendRequest(
                 return ClientError.ServiceNotReachable;
             },
             else => {
-                if (self.breaker) |*b| b.recordSuccess();
+                if (self.breaker) |*b| {
+                    b.recordSuccess();
+                }
             },
         }
 
@@ -516,7 +524,9 @@ fn createAndSendRequest(
                 self.container.allocator.free(old);
             }
             self.oauth_token = null;
-            if (self.breaker) |*b| b.recordFailure();
+            if (self.breaker) |*b| {
+                b.recordFailure();
+            }
             const backoff = self.retryBackoffMs(attempt + 1);
             std.Io.sleep(self.container.io, std.Io.Duration.fromMilliseconds(backoff), .awake) catch {};
             continue;
@@ -661,20 +671,26 @@ fn ensureOAuthToken(self: *Self) ![]const u8 {
     var res = req.getResponse(.{}) catch |e| {
         // Network failure: fall back to the last cached token if we have one,
         // otherwise surface the error.
-        if (self.oauth_breaker) |*b| b.recordFailure();
+        if (self.oauth_breaker) |*b| {
+            b.recordFailure();
+        }
         if (self.oauth_token) |token| return token;
         return e;
     };
 
     if (res.status < 200 or res.status > 299) {
-        if (self.oauth_breaker) |*b| b.recordFailure();
+        if (self.oauth_breaker) |*b| {
+            b.recordFailure();
+        }
         // Refresh failed: reuse the previously cached token (stale is better than
         // hard-failing the outbound call) if one is available.
         if (self.oauth_token) |token| return token;
         return error.OAuthTokenFetchFailed;
     }
 
-    if (self.oauth_breaker) |*b| b.recordSuccess();
+    if (self.oauth_breaker) |*b| {
+        b.recordSuccess();
+    }
 
     const TokenResponse = struct {
         access_token: []const u8,

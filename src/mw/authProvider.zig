@@ -71,34 +71,12 @@ const codecs = std.base64.standard;
 const Decoder = codecs.Decoder;
 const ClientResponse = root.zul.http.client;
 
-/// Constant-time equality for two byte slices (content; length must match).
-/// Avoids leaking the secret via timing side-channels.
-fn constTimeEql(a: []const u8, b: []const u8) bool {
-    if (a.len != b.len) return false;
-    var diff: u8 = 0;
-    for (a, b) |x, y| diff |= x ^ y;
-    return diff == 0;
-}
-
-/// Extract the credential token from an auth header.
-fn authToken(header: []const u8) ?[]const u8 {
-    var token: ?[]const u8 = null;
-    var parts = std.mem.splitAny(u8, header, " \t");
-    while (parts.next()) |value| {
-        if (value.len > 0) {
-            token = value;
-        }
-    }
-    return token;
-}
-
 mode: AuthMode,
 container: *root.container,
 keys: std.StringHashMap([]const u8) = undefined,
 pubKeys: std.StringHashMap(publiKey) = undefined,
 refreshThread: std.Thread = undefined,
 mutex: std.Io.Mutex = undefined,
-
 refreshInterval: i16 = 60, // seconds
 pathUrl: []const u8 = undefined,
 
@@ -114,6 +92,33 @@ pub fn create(c: *root.container, m: AuthMode) anyerror!*AuthProvider {
     errdefer c.allocator.destroy(c);
     auth.* = .{ .container = c, .mode = m };
     return auth;
+}
+
+/// Constant-time equality for two byte slices (content; length must match).
+/// Avoids leaking the secret via timing side-channels.
+fn constTimeEql(a: []const u8, b: []const u8) bool {
+    if (a.len != b.len) {
+        return false;
+    }
+
+    var diff: u8 = 0;
+    for (a, b) |x, y| {
+        diff |= x ^ y;
+    }
+
+    return diff == 0;
+}
+
+/// Extract the credential token from an auth header.
+fn authToken(header: []const u8) ?[]const u8 {
+    var token: ?[]const u8 = null;
+    var parts = std.mem.splitAny(u8, header, " \t");
+    while (parts.next()) |value| {
+        if (value.len > 0) {
+            token = value;
+        }
+    }
+    return token;
 }
 
 pub fn validateBasicAuth(self: *Self, allocator: std.mem.Allocator, authHeader: []const u8) AuthError!void {
@@ -263,8 +268,6 @@ pub fn retrieveUserName(_: *Self, allocator: std.mem.Allocator, authHeader: []co
         break;
     }
 
-    // Return an owned copy: `decoded` is freed on return, so the username must
-    // outlive this call for the caller to serialize it (use-after-free otherwise).
     return try allocator.dupe(u8, headerKey);
 }
 

@@ -56,6 +56,7 @@ pub fn create(container: *root.container, config: *const natsConfig) !*NATS {
         var subjects_buf: [8][]const u8 = undefined;
         var it = std.mem.splitScalar(u8, config.subjects, ',');
         var count: usize = 0;
+
         while (it.next()) |s| {
             const trimmed = std.mem.trim(u8, s, " \t");
             if (trimmed.len == 0) continue;
@@ -63,6 +64,7 @@ pub fn create(container: *root.container, config: *const natsConfig) !*NATS {
             subjects_buf[count] = trimmed;
             count += 1;
         }
+
         const subjects = subjects_buf[0..count];
 
         _ = c.js.?.createStream(.{ .name = config.stream, .subjects = subjects }) catch |err| {

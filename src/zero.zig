@@ -58,37 +58,37 @@ pub const jwtClaims = AuthProvider.jwtClaims;
 pub const rbac = @import("mw/rbac.zig");
 
 pub const rdz = @import("datasource/rdz.zig");
-pub const SQL = @import("datasource/SQL.zig");
+pub const SQL = @import("datasource/sql/SQL.zig");
 
-pub const SQLite = @import("datasource/SQLite.zig");
+pub const SQLite = @import("datasource/sql/sqlite.zig");
 
-pub const DuckDB = @import("datasource/DuckDB.zig").DuckDB;
-pub const DuckGres = @import("datasource/duckgres.zig").DuckGres;
-pub const ClickHouse = @import("datasource/ClickHouse.zig").ClickHouse;
-pub const datasourceInterface = @import("datasource/interface.zig");
+pub const DuckDB = @import("datasource/sql/duckdb.zig").DuckDB;
+pub const DuckGres = @import("datasource/sql/duckgres.zig").DuckGres;
+pub const ClickHouse = @import("datasource/sql/clickhouse.zig").ClickHouse;
+pub const datasourceInterface = @import("datasource/sql/interface.zig");
 pub const Datasource = datasourceInterface.Interface;
 
 pub const migration = @import("migration/migration.zig");
 pub const migrate = @import("migration/migrate.zig");
 
 // Specialized datasources (time-series / search)
-pub const timeseriesInterface = @import("datasource/specialized/timeseriesInterface.zig");
+pub const timeseriesInterface = @import("datasource/timeseries/timeseriesInterface.zig");
 pub const Timeseries = timeseriesInterface.Timeseries;
-pub const InfluxDB = @import("datasource/specialized/influxdb.zig").InfluxDB;
+pub const InfluxDB = @import("datasource/timeseries/influxdb.zig").InfluxDB;
 
-pub const searchInterface = @import("datasource/specialized/searchInterface.zig");
+pub const searchInterface = @import("datasource/search/searchInterface.zig");
 pub const Search = searchInterface.Search;
-pub const Solr = @import("datasource/specialized/solr.zig").Solr;
+pub const Solr = @import("datasource/search/solr.zig").Solr;
 
 // NoSQL datasource (document / wide-column)
-pub const nosqlInterface = @import("datasource/nosqlInterface.zig");
+pub const nosqlInterface = @import("datasource/nosql/nosqlInterface.zig");
 pub const NoSQL = nosqlInterface.NoSQL;
-pub const Couchbase = @import("datasource/couchbase.zig").Couchbase;
-pub const NoSQLBackend = @import("datasource/nosql.zig").NoSQL;
-pub const MongoDB = @import("datasource/mongodb.zig").MongoDB;
+pub const Couchbase = @import("datasource/nosql/couchbase.zig").Couchbase;
+pub const NoSQLBackend = @import("datasource/nosql/cassandra.zig").NoSQL;
+pub const MongoDB = @import("datasource/nosql/mongodb.zig").MongoDB;
 
 pub const client = @import("service/client.zig");
-pub const circuit_breaker = @import("service/circuit_breaker.zig");
+pub const circuit_breaker = @import("service/circuitBreaker.zig");
 pub const Error = @import("http/errors.zig");
 
 pub const scheduler = @import("cronz/scheduler.zig");

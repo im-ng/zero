@@ -1,5 +1,5 @@
 const std = @import("std");
-const root = @import("../zero.zig");
+const root = @import("../../zero.zig");
 
 const SQLite = @This();
 

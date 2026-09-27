@@ -67,6 +67,7 @@ pub fn writePoint(ctx: *Context) !void {
         // The backend takes one line-protocol statement, so assemble it here. A
         // leading comma on `tags` is optional.
         const sep = if (p.tags.len > 0 and p.tags[0] != ',') "," else "";
+
         const base = if (p.tags.len > 0)
             try std.fmt.allocPrint(ctx.allocator, "{s}{s}{s} {s}", .{ p.measurement, sep, p.tags, p.fields })
         else
@@ -75,7 +76,10 @@ pub fn writePoint(ctx: *Context) !void {
             try std.fmt.allocPrint(ctx.allocator, "{s} {d}", .{ base, tsv })
         else
             base;
-        if (p.ts != null) ctx.allocator.free(base);
+
+        if (p.ts != null) {
+            ctx.allocator.free(base);
+        }
         defer ctx.allocator.free(line);
 
         ts.write(ctx, line) catch |e| {
@@ -152,9 +156,19 @@ fn timeseriesUpstreamError(ctx: *Context, err: anyerror) bool {
 fn ensureBucket(ctx: *Context) !void {
     if (ctx.Timeseries) |ts| {
         const bucket = ctx.container.config.get("INFLUXDB_BUCKET");
-        if (std.mem.eql(u8, bucket, "")) return;
+
+        if (std.mem.eql(u8, bucket, "")) {
+            return;
+        }
+
         ts.createDatabase(ctx, bucket) catch |e| {
-            std.log.warn("timeseries: could not ensure bucket '{s}': {s}", .{ bucket, @errorName(e) });
+            const msg = try std.fmt.allocPrint(
+                ctx.allocator,
+                "timeseries: could not ensure bucket '{s}': {s}",
+                .{ bucket, @errorName(e) },
+            );
+            defer ctx.allocator.free(msg);
+            ctx.warn(msg);
         };
     }
 }

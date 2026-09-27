@@ -58,10 +58,14 @@ pub const KVStore = struct {
             .memory => @as(*memory.KVMemory, @ptrCast(@alignCast(self.ptr))).get(ctx, key),
             .sqlite => @as(*sqlite.KVSQLite, @ptrCast(@alignCast(self.ptr))).get(ctx, key),
         } catch |e| {
-            if (self.breaker) |*b| b.recordFailure();
+            if (self.breaker) |*b| {
+                b.recordFailure();
+            }
             return e;
         };
-        if (self.breaker) |*b| b.recordSuccess();
+        if (self.breaker) |*b| {
+            b.recordSuccess();
+        }
         return r;
     }
 
@@ -73,10 +77,14 @@ pub const KVStore = struct {
             .memory => @as(*memory.KVMemory, @ptrCast(@alignCast(self.ptr))).set(ctx, key, value),
             .sqlite => @as(*sqlite.KVSQLite, @ptrCast(@alignCast(self.ptr))).set(ctx, key, value),
         }) catch |e| {
-            if (self.breaker) |*b| b.recordFailure();
+            if (self.breaker) |*b| {
+                b.recordFailure();
+            }
             return e;
         };
-        if (self.breaker) |*b| b.recordSuccess();
+        if (self.breaker) |*b| {
+            b.recordSuccess();
+        }
     }
 
     pub fn delete(self: *KVStore, ctx: *root.Context, key: []const u8) !void {
@@ -87,10 +95,14 @@ pub const KVStore = struct {
             .memory => @as(*memory.KVMemory, @ptrCast(@alignCast(self.ptr))).delete(ctx, key),
             .sqlite => @as(*sqlite.KVSQLite, @ptrCast(@alignCast(self.ptr))).delete(ctx, key),
         }) catch |e| {
-            if (self.breaker) |*b| b.recordFailure();
+            if (self.breaker) |*b| {
+                b.recordFailure();
+            }
             return e;
         };
-        if (self.breaker) |*b| b.recordSuccess();
+        if (self.breaker) |*b| {
+            b.recordSuccess();
+        }
     }
 
     pub fn exists(self: *KVStore, ctx: *root.Context, key: []const u8) !bool {
@@ -101,10 +113,14 @@ pub const KVStore = struct {
             .memory => @as(*memory.KVMemory, @ptrCast(@alignCast(self.ptr))).exists(ctx, key),
             .sqlite => @as(*sqlite.KVSQLite, @ptrCast(@alignCast(self.ptr))).exists(ctx, key),
         } catch |e| {
-            if (self.breaker) |*b| b.recordFailure();
+            if (self.breaker) |*b| {
+                b.recordFailure();
+            }
             return e;
         };
-        if (self.breaker) |*b| b.recordSuccess();
+        if (self.breaker) |*b| {
+            b.recordSuccess();
+        }
         return r;
     }
 
@@ -116,10 +132,14 @@ pub const KVStore = struct {
             .memory => @as(*memory.KVMemory, @ptrCast(@alignCast(self.ptr))).expire(ctx, key, ms),
             .sqlite => @as(*sqlite.KVSQLite, @ptrCast(@alignCast(self.ptr))).expire(ctx, key, ms),
         }) catch |e| {
-            if (self.breaker) |*b| b.recordFailure();
+            if (self.breaker) |*b| {
+                b.recordFailure();
+            }
             return e;
         };
-        if (self.breaker) |*b| b.recordSuccess();
+        if (self.breaker) |*b| {
+            b.recordSuccess();
+        }
     }
 };
 

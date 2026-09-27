@@ -50,9 +50,9 @@ pub fn classifyHttpStatus(status: u16) ErrorKind {
 }
 
 /// Map a non-HTTP Zig error (e.g. the MongoDB driver) to an `ErrorKind`. There
-/// is no HTTP status to classify, so connection-level failures win.
-pub fn classifyAnyError(err: anyerror) ErrorKind {
-    _ = err;
+/// is no HTTP status to classify, so connection-level failures win. The error is
+/// only used by the caller for control flow; the kind is fixed to `connection`.
+pub fn classifyAnyError() ErrorKind {
     return .connection;
 }
 

@@ -119,15 +119,23 @@ fn regenerateAll(allocator: std.mem.Allocator, io: std.Io, cwd: std.Io.Dir, dir:
 
     var list = std.ArrayList([]const u8).empty;
     defer {
-        for (list.items) |it| allocator.free(it);
+        for (list.items) |it| {
+            allocator.free(it);
+        }
         list.deinit(allocator);
     }
 
     var it = d.iterate();
     while (try it.next(io)) |entry| {
-        if (entry.kind != .file) continue;
-        if (!std.mem.endsWith(u8, entry.name, ".zig")) continue;
-        if (std.mem.eql(u8, entry.name, all_file)) continue;
+        if (entry.kind != .file) {
+            continue;
+        }
+        if (!std.mem.endsWith(u8, entry.name, ".zig")) {
+            continue;
+        }
+        if (std.mem.eql(u8, entry.name, all_file)) {
+            continue;
+        }
         const owned = try allocator.dupe(u8, entry.name[0 .. entry.name.len - ".zig".len]);
         try list.append(allocator, owned);
     }
@@ -191,7 +199,8 @@ fn printReminders(allocator: std.mem.Allocator, file_path: []const u8, epoch: i6
     out.writeStreamingAll(utils.io, "Updated: ") catch {};
     out.writeStreamingAll(utils.io, all_path) catch {};
     out.writeStreamingAll(utils.io,
-        \\
+        \\# Import added/updated all.zig
+        \\const migrations = @import("migrations/all.zig");
         \\
         \\# Make sure to invoke the all migrations.
         \\try migrations.all(app);

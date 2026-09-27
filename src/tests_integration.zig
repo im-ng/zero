@@ -8,17 +8,17 @@ const std = @import("std");
 // Couchbase, InfluxDB, Solr) and the `FakeServer` self-test. They drive the
 // `zul` client over loopback through `FakeServer`, which aborts/hangs under
 // kcov's ptrace and would blank the whole coverage report. The outbound-auth
-// header tests are kept here too, since `outbound_auth.zig` is reachable from
+// header tests are kept here too, since `outboundAuth.zig` is reachable from
 // the unit build (via `client.zig`) and its test blocks would otherwise run
 // under the traced `unit_tests` artifact. Keeping all of these in this
 // non-coverage build lets them run without poisoning `zig build -Dcoverage test`.
 pub const integration = @import("datasource/integration_test.zig");
-pub const clickhouse = @import("datasource/clickhouse_test.zig");
-pub const couchbase = @import("datasource/couchbase_test.zig");
+pub const clickhouse = @import("datasource/sql/clickhouse_test.zig");
+pub const couchbase = @import("datasource/nosql/couchbase_tests.zig");
 pub const fakeserver = @import("datasource/fakeserver.zig");
-pub const influxdb = @import("datasource/specialized/influxdb_test.zig");
-pub const solr = @import("datasource/specialized/solr_test.zig");
-pub const outboundAuth = @import("service/outbound_auth.zig");
+pub const influxdb = @import("datasource/timeseries/influxdb_test.zig");
+pub const solr = @import("datasource/search/solr_test.zig");
+pub const outboundAuth = @import("service/outboundAuth.zig");
 
 comptime {
     _ = integration;

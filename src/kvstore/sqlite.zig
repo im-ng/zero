@@ -50,7 +50,9 @@ pub const KVSQLite = struct {
     pub fn exists(self: *KVSQLite, ctx: *root.Context, key: []const u8) !bool {
         const v = try self.get(ctx, key);
         const found = v != null;
-        if (v) |s| ctx.allocator.free(s);
+        if (v) |s| {
+            ctx.allocator.free(s);
+        }
         return found;
     }
 

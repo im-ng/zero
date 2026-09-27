@@ -242,7 +242,9 @@ fn subscriptions(self: *Self) !void {
     // start the rest, so only the first topic would ever be serviced.
     var threads = try std.ArrayList(std.Thread).initCapacity(self.container.allocator, 0);
     defer {
-        for (threads.items) |t| t.join();
+        for (threads.items) |t| {
+            t.join();
+        }
     }
 
     for (self.subscriber.items) |client| {

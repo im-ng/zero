@@ -109,7 +109,9 @@ pub const FileStoreLocal = struct {
     pub fn list(self: *FileStoreLocal, ctx: *root.Context, prefix: []const u8) ![][]const u8 {
         var out = std.ArrayList([]const u8).init(ctx.allocator);
         errdefer {
-            for (out.items) |k| ctx.allocator.free(k);
+            for (out.items) |k| {
+                ctx.allocator.free(k);
+            }
             out.deinit();
         }
         try self.walk(ctx.allocator, self.root_dir, prefix, &out, 0);
@@ -174,7 +176,9 @@ test "FileStoreLocal: create/get/delete/list + path-traversal guard" {
 
     const list = try store.list(&ctx, "avatars/");
     defer {
-        for (list) |k| ta.allocator.free(k);
+        for (list) |k| {
+            ta.allocator.free(k);
+        }
         ta.allocator.free(list);
     }
     try ta.expectEqual(@as(usize, 1), list.len);
@@ -182,7 +186,9 @@ test "FileStoreLocal: create/get/delete/list + path-traversal guard" {
 
     const all = try store.list(&ctx, "");
     defer {
-        for (all) |k| ta.allocator.free(k);
+        for (all) |k| {
+            ta.allocator.free(k);
+        }
         ta.allocator.free(all);
     }
     try ta.expectEqual(@as(usize, 2), all.len);

@@ -18,13 +18,12 @@ pub fn build(b: *std.Build) void {
     module.addImport("opentelemetry-sdk", opentelemetry.module("sdk"));
 
     // Cross-platform system-info (zf) powers the zsutil cpu/host/memory wrappers
-    // so examples like zero-stream work on macOS without reading /proc.
     const zf = b.dependency("zf", .{});
     module.addImport("zf", zf.module("zf"));
 
-    // // `protobuf` is re-exported by `zero` (the generated `*.pb.zig` structs do
-    // // `@import("zero").protobuf`). It must be wired into the module so the
-    // // `zero-proto` (and any protobuf) example compiles.
+    // protobuf` is re-exported by `zero` (the generated `*.pb.zig` structs do
+    // `@import("zero").protobuf`). It must be wired into the module so the
+    // `zero-proto` (and any protobuf) example compiles.
     const protobuf = b.dependency("protobuf", .{});
     module.addImport("protobuf", protobuf.module("protobuf"));
 
@@ -61,26 +60,14 @@ pub fn build(b: *std.Build) void {
     const nats = b.dependency("nats", .{});
     module.addImport("nats", nats.module("nats"));
 
-    // const protobuf = b.dependency("protobuf", .{});
-    // module.addImport("protobuf", protobuf.module("protobuf"));
-
     const graphql = b.dependency("graphql", .{});
     module.addImport("graphql", graphql.module("graphql"));
 
-    // if (b.option(
-    //     bool,
-    //     "kafka",
-    //     "attach kafka dependencies",
-    // ) orelse false) {
-    //     module.linkSystemLibrary("rdkafka", .{ .weak = true });
-    // }
     if (builtin.os.tag == .macos) {
         module.addIncludePath(.{ .cwd_relative = "/usr/local/Cellar/librdkafka/2.13.0/include" });
         module.addLibraryPath(.{ .cwd_relative = "/usr/local/Cellar/librdkafka/2.13.0/lib" });
     }
-    module.linkSystemLibrary("rdkafka", .{
-        .weak = true,
-    });
+    module.linkSystemLibrary("rdkafka", .{ .weak = true });
 
     module.addLibraryPath(.{ .cwd_relative = "/usr/local/lib" });
     module.addRPath(.{ .cwd_relative = "/usr/local/lib" });
@@ -280,13 +267,11 @@ pub fn build(b: *std.Build) void {
         test_step.dependOn(&run_exe_tests.step);
     }
 
-    const binary = b.addExecutable(.{
-        .name = "zero",
-        .root_module = module,
-    });
+    const binary = b.addExecutable(.{ .name = "zero", .root_module = module });
     const install_zero = b.addInstallArtifact(binary, .{});
     const zero_step = b.step("zero", "Build the zero CLI (./zig-out/bin/zero)");
     zero_step.dependOn(&install_zero.step);
+
     // `zig build` (the default step) also produces the zero CLI.
     b.getInstallStep().dependOn(&install_zero.step);
 

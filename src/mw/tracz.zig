@@ -11,11 +11,10 @@ provider: *otel.Provider,
 
 // Fast correlation-id generator. A per-thread PRNG is seeded once from the
 // monotonic clock plus this thread's address, so minting an id costs a few
-// arithmetic ops instead of the per-request CSPRNG syscall that
-// `zul.UUID.v4(utils.io)` paid. This mirrors how OpenTelemetry seeds its own
-// span/trace ID generator (otel.zig:78-86). The id is a 16-byte / 32-hex
-// W3C-trace-id-shaped value (version + variant bits set) so it stays usable as
-// an OpenTelemetry trace_id when no inbound traceparent is present.
+// arithmetic ops instead of the per-request CSPRNG syscall.
+// This mirrors how OpenTelemetry seeds its own span/trace ID generator.
+// The id is a 16-byte / 32-hex W3C-trace-id-shaped value (version + variant bits set)
+// so it stays usable as an OpenTelemetry trace_id when no inbound traceparent is present.
 threadlocal var tl_prng: std.Random.DefaultPrng = undefined;
 threadlocal var tl_prng_inited: bool = false;
 

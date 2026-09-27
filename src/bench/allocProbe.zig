@@ -8,10 +8,10 @@ const httpz = zero.httpz;
 const Allocator = std.mem.Allocator;
 const Io = std.Io;
 
-/// The byte-counting allocator (canonical definition in `alloc_count.zig`). It
+/// The byte-counting allocator (canonical definition in `allocCount.zig`). It
 /// records per-call counts/bytes and attributes every allocation to its
 /// call-site, so the probe can break the hot path down by source location.
-pub const CountingAllocator = @import("alloc_count.zig").CountingAllocator;
+pub const CountingAllocator = @import("allocCount.zig").CountingAllocator;
 
 /// Internal httpz types we need to hand-build a Request/Response without the
 /// (test-only) `httpz.testing` harness. Pulled off the public Request/Response
@@ -302,7 +302,9 @@ pub fn run(page: Allocator, io: Io, env: *std.process.Environ.Map, opts: ProbeOp
     // Bulk-reclaim everything still live (proves the arena-equivalent reset
     // returns all per-request memory). Anything left outstanding is a leak.
     ca.reset();
-    if (opts.backing != .heap) backing_arena.deinit();
+    if (opts.backing != .heap) {
+        backing_arena.deinit();
+    }
 
     const latency_total_ns = t_end - t_start;
     const per_req_allocs = @as(f64, @floatFromInt(ca.alloc_count)) / @as(f64, @floatFromInt(opts.iterations));

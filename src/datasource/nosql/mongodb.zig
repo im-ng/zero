@@ -1,8 +1,8 @@
 const std = @import("std");
-const root = @import("../zero.zig");
-const client = @import("mongodb_client.zig");
+const root = @import("../../zero.zig");
+const client = @import("mongodbClient.zig");
 
-/// MongoDB document backend over the pure-Zig `mongodb_client.zig` wire protocol
+/// MongoDB document backend over the pure-Zig `mongodbClient.zig` wire protocol
 /// (OP_MSG + SCRAM-SHA-256, optional TLS). Exposes the same `get`/`put`/`delete`/
 /// `query` surface as the Cassandra backend; `statement` is a JSON MongoDB command
 /// (the caller supplies the full command, matching the NoSQL full-statement model).
@@ -52,16 +52,16 @@ pub const MongoDB = struct {
         self.last_kind.store(@intFromEnum(root.Error.ErrorKind.none), .monotonic);
     }
 
-    fn setErr(self: *MongoDB, err: anyerror) !void {
+    fn setErr(self: *MongoDB) !void {
         self.clearErr();
         self.last_status.store(0, .monotonic);
-        self.last_kind.store(@intFromEnum(root.Error.classifyAnyError(err)), .monotonic);
+        self.last_kind.store(@intFromEnum(root.Error.classifyAnyError()), .monotonic);
     }
 
     fn run(self: *MongoDB, ctx: *root.Context, statement: []const u8) ![]const u8 {
         self.clearErr();
         return self.conn.runCommand(ctx.allocator, self.db, statement) catch |e| {
-            self.setErr(e) catch {};
+            self.setErr() catch {};
             return e;
         };
     }

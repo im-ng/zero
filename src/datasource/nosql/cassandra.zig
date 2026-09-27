@@ -1,9 +1,9 @@
 const std = @import("std");
-const root = @import("../zero.zig");
-const client = @import("cassandra_client.zig");
+const root = @import("../../zero.zig");
+const client = @import("cassandraClient.zig");
 
 /// NoSQL wide-column backend. Talks the native CQL binary protocol v4 via the
-/// self-contained `cassandra_client.zig` (no external driver dependency).
+/// self-contained `cassandraClient.zig` (no external driver dependency).
 ///
 /// Unlike `SQL`, this backend does not build statements. Callers pass a full
 /// CQL string to `get`/`put`/`delete`/`query`, so the query lives with the

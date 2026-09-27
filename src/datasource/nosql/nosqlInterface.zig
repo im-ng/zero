@@ -1,5 +1,5 @@
 const std = @import("std");
-const root = @import("../zero.zig");
+const root = @import("../../zero.zig");
 const service = root.circuit_breaker;
 const utils = root.utils;
 
@@ -9,10 +9,10 @@ const utils = root.utils;
 pub const Backend = enum {
     cassandra,
     /// Document backend over N1QL/HTTP (no `libcouchbase` C link). Backed by
-    /// `src/datasource/couchbase.zig` (HTTP via `zul`).
+    /// `src/datasource/nosql/couchbase.zig` (HTTP via `zul`).
     couchbase,
     /// Document backend over the pure-Zig OP_MSG wire protocol (no `mongo-c-driver`
-    /// C link). Backed by `src/datasource/mongodb.zig`.
+    /// C link). Backed by `src/datasource/nosql/mongodb.zig`.
     mongodb,
     /// Test-only backend backed by `MockBackend`. Lets the `NoSQL` dispatch be
     /// exercised without a running database.

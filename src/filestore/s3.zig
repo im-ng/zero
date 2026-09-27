@@ -9,7 +9,7 @@ const constants = root.constants;
 /// Requests are signed with AWS Signature Version 4 over the existing `zul`
 /// HTTP client. Object keys map directly to S3 keys under `bucket`:
 /// `create(ctx, "avatars/1.png", ...)` -> `PUT /<bucket>/avatars/1.png`.
-    pub const FileStoreS3 = struct {
+pub const FileStoreS3 = struct {
     allocator: std.mem.Allocator,
     endpoint: []const u8,
     host: []const u8,
@@ -244,7 +244,9 @@ const constants = root.constants;
         // S3 list returns an XML <Contents> element per object; pull <Key> values.
         var out = std.array_list.Managed([]const u8).init(ctx.allocator);
         errdefer {
-            for (out.items) |k| ctx.allocator.free(k);
+            for (out.items) |k| {
+                ctx.allocator.free(k);
+            }
             out.deinit();
         }
         var i: usize = 0;
@@ -364,7 +366,9 @@ fn signedHeadersString(allocator: std.mem.Allocator, signed: []const FileStoreS3
     var buf = std.array_list.Managed(u8).init(allocator);
     errdefer buf.deinit();
     for (signed, 0..) |h, i| {
-        if (i > 0) try buf.append(';');
+        if (i > 0) {
+            try buf.append(';');
+        }
         try buf.appendSlice(h.name);
     }
     return buf.toOwnedSlice();

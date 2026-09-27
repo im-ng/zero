@@ -818,7 +818,9 @@ fn staticDirectory(ctx: *Context) !void {
     if (ctx.container.staticMounts.items.len > 0) {
         if (root.container.staticResolve(ctx.container.staticMounts.items, ctx.request.url.path)) |hit| {
             var rel = hit.rel;
-            if (rel.len == 0) rel = "/";
+            if (rel.len == 0) {
+                rel = "/";
+            }
             const fname = if (rel.len > 0 and rel[0] == '/') rel[1..] else rel;
             const name = if (fname.len == 0) "index.html" else fname;
 
@@ -1058,7 +1060,9 @@ pub fn addSubscription(self: *Self, topic: []const u8, hook: fn (*root.Context) 
 pub fn addKVStore(self: *Self, name: []const u8, backend: root.kvstore.Backend, opts: root.kvstore.Options) !void {
     const store = try root.kvstore.build(self.container, backend, opts);
     try self.container.kvStores.put(name, store);
-    if (self.container.defaultKV == null) self.container.defaultKV = store;
+    if (self.container.defaultKV == null) {
+        self.container.defaultKV = store;
+    }
 }
 
 pub fn addFileStore(self: *Self, name: []const u8, backend: root.filestore.Backend, opts: root.filestore.Options) !void {
@@ -1067,7 +1071,9 @@ pub fn addFileStore(self: *Self, name: []const u8, backend: root.filestore.Backe
         old.value.deinit(self.container.allocator);
     }
     try self.container.fileStores.put(name, store);
-    if (self.container.defaultFileStore == null) self.container.defaultFileStore = store;
+    if (self.container.defaultFileStore == null) {
+        self.container.defaultFileStore = store;
+    }
 }
 
 /// Register the time-series datasource backend (influxdb). Exposed on the request

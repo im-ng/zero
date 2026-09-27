@@ -1,6 +1,6 @@
 const std = @import("std");
-const root = @import("../zero.zig");
-const c = @import("cduckdb.zig");
+const root = @import("../../zero.zig");
+const c = @import("duckdbC.zig");
 
 /// DuckDB in-process OLAP backend (relational SQL). Wraps the DuckDB C API
 /// (`libs/libduckdb.so`) and maps result columns onto caller struct fields by

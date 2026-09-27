@@ -1,6 +1,6 @@
 const std = @import("std");
-const root = @import("../zero.zig");
-const fakeserver = @import("./fakeserver.zig");
+const root = @import("../../zero.zig");
+const fakeserver = @import("../fakeserver.zig");
 
 fn ctxWith(alloc: std.mem.Allocator) root.Context {
     var c: root.Context = undefined;

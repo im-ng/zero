@@ -97,11 +97,15 @@ pub const Timeseries = struct {
             .influxdb => @as(*root.InfluxDB, @ptrCast(@alignCast(self.ptr))).write(ctx, statement),
             .mock => @as(*MockBackend, @ptrCast(@alignCast(self.ptr))).write(ctx, statement),
         } catch |e| {
-            if (self.breaker) |*b| b.recordFailure();
+            if (self.breaker) |*b| {
+                b.recordFailure();
+            }
             self.dsError("write");
             return e;
         };
-        if (self.breaker) |*b| b.recordSuccess();
+        if (self.breaker) |*b| {
+            b.recordSuccess();
+        }
         self.dsOk("write", start);
         return r;
     }
@@ -115,11 +119,15 @@ pub const Timeseries = struct {
             .influxdb => @as(*root.InfluxDB, @ptrCast(@alignCast(self.ptr))).query(ctx, q),
             .mock => @as(*MockBackend, @ptrCast(@alignCast(self.ptr))).query(ctx, q),
         } catch |e| {
-            if (self.breaker) |*b| b.recordFailure();
+            if (self.breaker) |*b| {
+                b.recordFailure();
+            }
             self.dsError("query");
             return e;
         };
-        if (self.breaker) |*b| b.recordSuccess();
+        if (self.breaker) |*b| {
+            b.recordSuccess();
+        }
         self.dsOk("query", start);
         return r;
     }
@@ -133,11 +141,15 @@ pub const Timeseries = struct {
             .influxdb => @as(*root.InfluxDB, @ptrCast(@alignCast(self.ptr))).createDatabase(ctx, name),
             .mock => {},
         } catch |e| {
-            if (self.breaker) |*b| b.recordFailure();
+            if (self.breaker) |*b| {
+                b.recordFailure();
+            }
             self.dsError("createDatabase");
             return e;
         };
-        if (self.breaker) |*b| b.recordSuccess();
+        if (self.breaker) |*b| {
+            b.recordSuccess();
+        }
         self.dsOk("createDatabase", start);
         return r;
     }

@@ -91,7 +91,9 @@ pub const CountingAllocator = struct {
         self.total_allocated += len;
         self.alloc_count += 1;
         const out = self.total_allocated - self.total_freed;
-        if (out > self.high_water) self.high_water = out;
+        if (out > self.high_water) {
+            self.high_water = out;
+        }
         if (self.by_site.getPtr(ret_addr)) |s| {
             s.count += 1;
             s.bytes += len;

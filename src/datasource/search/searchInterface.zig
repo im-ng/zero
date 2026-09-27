@@ -109,11 +109,15 @@ pub const Search = struct {
             .solr => @as(*root.Solr, @ptrCast(@alignCast(self.ptr))).index(ctx, collection, doc_json),
             .mock => @as(*MockBackend, @ptrCast(@alignCast(self.ptr))).index(ctx, collection, doc_json),
         } catch |e| {
-            if (self.breaker) |*b| b.recordFailure();
+            if (self.breaker) |*b| {
+                b.recordFailure();
+            }
             self.dsError("index");
             return e;
         };
-        if (self.breaker) |*b| b.recordSuccess();
+        if (self.breaker) |*b| {
+            b.recordSuccess();
+        }
         self.dsOk("index", start);
         return r;
     }
@@ -127,11 +131,15 @@ pub const Search = struct {
             .solr => @as(*root.Solr, @ptrCast(@alignCast(self.ptr))).query(ctx, collection, q),
             .mock => @as(*MockBackend, @ptrCast(@alignCast(self.ptr))).query(ctx, collection, q),
         } catch |e| {
-            if (self.breaker) |*b| b.recordFailure();
+            if (self.breaker) |*b| {
+                b.recordFailure();
+            }
             self.dsError("query");
             return e;
         };
-        if (self.breaker) |*b| b.recordSuccess();
+        if (self.breaker) |*b| {
+            b.recordSuccess();
+        }
         self.dsOk("query", start);
         return r;
     }
@@ -145,11 +153,15 @@ pub const Search = struct {
             .solr => @as(*root.Solr, @ptrCast(@alignCast(self.ptr))).get(ctx, collection, id),
             .mock => @as(*MockBackend, @ptrCast(@alignCast(self.ptr))).get(ctx, collection, id),
         } catch |e| {
-            if (self.breaker) |*b| b.recordFailure();
+            if (self.breaker) |*b| {
+                b.recordFailure();
+            }
             self.dsError("get");
             return e;
         };
-        if (self.breaker) |*b| b.recordSuccess();
+        if (self.breaker) |*b| {
+            b.recordSuccess();
+        }
         self.dsOk("get", start);
         return r;
     }
@@ -162,11 +174,15 @@ pub const Search = struct {
             .solr => @as(*root.Solr, @ptrCast(@alignCast(self.ptr))).delete(ctx, collection, id),
             .mock => @as(*MockBackend, @ptrCast(@alignCast(self.ptr))).delete(ctx, collection, id),
         } catch |e| {
-            if (self.breaker) |*b| b.recordFailure();
+            if (self.breaker) |*b| {
+                b.recordFailure();
+            }
             self.dsError("delete");
             return e;
         };
-        if (self.breaker) |*b| b.recordSuccess();
+        if (self.breaker) |*b| {
+            b.recordSuccess();
+        }
         self.dsOk("delete", start);
         return r;
     }

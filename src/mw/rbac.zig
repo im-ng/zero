@@ -82,13 +82,22 @@ pub const RBAC = struct {
         switch (parsed.value) {
             .array => |rules| {
                 for (rules.items) |item| {
-                    if (item != .object) return error.InvalidRbacConfig;
-                    if (item.object.get("permissions") == null) return error.InvalidRbacConfig;
+                    if (item != .object) {
+                        return error.InvalidRbacConfig;
+                    }
+
+                    if (item.object.get("permissions") == null) {
+                        return error.InvalidRbacConfig;
+                    }
+
                     try self.addEndpointRule(allocator, item);
                 }
             },
             .object => |obj| {
-                if (obj.get("permissions") == null) return error.InvalidRbacConfig;
+                if (obj.get("permissions") == null) {
+                    return error.InvalidRbacConfig;
+                }
+
                 try self.addEndpointRule(allocator, parsed.value);
             },
             else => return error.InvalidRbacConfig,
@@ -101,23 +110,41 @@ pub const RBAC = struct {
     /// `exempt` flag (defaults to false).
     fn addEndpointRule(self: *RBAC, allocator: std.mem.Allocator, item: std.json.Value) !void {
         const obj = item.object;
+
         const perms = obj.get("permissions") orelse return error.InvalidRbacConfig;
-        if (perms != .array) return error.InvalidRbacConfig;
+        if (perms != .array) {
+            return error.InvalidRbacConfig;
+        }
+
         const endpoint = obj.get("endpoint") orelse return error.InvalidRbacConfig;
-        if (endpoint != .string) return error.InvalidRbacConfig;
+        if (endpoint != .string) {
+            return error.InvalidRbacConfig;
+        }
+
         const methods = obj.get("methods") orelse return error.InvalidRbacConfig;
-        if (methods != .array) return error.InvalidRbacConfig;
+        if (methods != .array) {
+            return error.InvalidRbacConfig;
+        }
 
         var exempt = false;
         if (obj.get("exempt")) |e| {
-            if (e != .bool) return error.InvalidRbacConfig;
+            if (e != .bool) {
+                return error.InvalidRbacConfig;
+            }
+
             exempt = e.bool;
         }
 
         for (perms.array.items) |p| {
-            if (p != .string) return error.InvalidRbacConfig;
+            if (p != .string) {
+                return error.InvalidRbacConfig;
+            }
+
             for (methods.array.items) |m| {
-                if (m != .string) return error.InvalidRbacConfig;
+                if (m != .string) {
+                    return error.InvalidRbacConfig;
+                }
+
                 const role = try allocator.dupe(u8, p.string);
                 const method = try allocator.dupe(u8, m.string);
                 const path = try allocator.dupe(u8, endpoint.string);
@@ -136,16 +163,23 @@ pub const RbacError = error{
 };
 
 fn methodMatches(rule_method: []const u8, req_method: []const u8) bool {
-    if (std.mem.eql(u8, rule_method, "*")) return true;
+    if (std.mem.eql(u8, rule_method, "*")) {
+        return true;
+    }
+
     return std.ascii.eqlIgnoreCase(rule_method, req_method);
 }
 
 fn pathMatches(rule_path: []const u8, req_path: []const u8) bool {
-    if (std.mem.eql(u8, rule_path, req_path)) return true;
+    if (std.mem.eql(u8, rule_path, req_path)) {
+        return true;
+    }
+
     if (std.mem.endsWith(u8, rule_path, "*")) {
         const prefix = rule_path[0 .. rule_path.len - 1];
         return std.mem.startsWith(u8, req_path, prefix);
     }
+
     return false;
 }
 
@@ -188,16 +222,32 @@ pub fn execute(self: *const rbac, req: *httpz.Request, res: *httpz.Response, exe
 /// there is no auth header or the token carries no role (e.g. Basic/API key).
 fn roleFor(self: *const rbac, req: *httpz.Request) ?[]const u8 {
     const header = req.header(constants.AUTH_HEADER) orelse return null;
+
     const claims = self.container.?.authProvider.retrieveClaims(req.arena, header) catch return null;
-    if (claims.role.len == 0) return null;
+    if (claims.role.len == 0) {
+        return null;
+    }
+
     return claims.role;
 }
 
 fn isWellKnownPath(_: *const rbac, req: *httpz.Request) bool {
-    if (std.mem.eql(u8, req.url.path, constants.HEALTH_PATH)) return true;
-    if (std.mem.eql(u8, req.url.path, constants.LIVE_PATH)) return true;
-    if (std.mem.startsWith(u8, req.url.path, constants.WELL_KNOWN)) return true;
-    if (std.mem.eql(u8, req.url.path, constants.METRICS_PATH)) return true;
+    if (std.mem.eql(u8, req.url.path, constants.HEALTH_PATH)) {
+        return true;
+    }
+
+    if (std.mem.eql(u8, req.url.path, constants.LIVE_PATH)) {
+        return true;
+    }
+
+    if (std.mem.startsWith(u8, req.url.path, constants.WELL_KNOWN)) {
+        return true;
+    }
+
+    if (std.mem.eql(u8, req.url.path, constants.METRICS_PATH)) {
+        return true;
+    }
+
     return false;
 }
 
