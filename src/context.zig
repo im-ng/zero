@@ -15,7 +15,9 @@ const kafkaMessage = root.kafkaMessage;
 const gql = @import("graphql.zig");
 
 pub const Context = struct {
-    request: *httpz.Request = undefined,
+    // Null outside an HTTP request (cron jobs, pub/sub message handlers, CLI).
+    // Code that reads it must guard on null instead of assuming a request.
+    request: ?*httpz.Request = null,
     response: *httpz.Response = undefined,
     allocator: std.mem.Allocator = undefined,
     container: *root.container = undefined,
@@ -50,7 +52,7 @@ pub const Context = struct {
     pub fn init(
         allocator: std.mem.Allocator,
         container: *root.container,
-        req: *httpz.Request,
+        req: ?*httpz.Request,
         res: *httpz.Response,
     ) !Context {
         var c = Context{
@@ -222,12 +224,18 @@ pub const Context = struct {
 
     /// returns traceID of the service request
     pub fn trace(self: *Context) ?[]const u8 {
-        return self.request.headers.get("X-Correlation-ID");
+        if (self.request) |r| {
+            return r.headers.get("X-Correlation-ID");
+        }
+        return null;
     }
 
     /// returns correlationID of the request
     pub fn getCorrelationID(self: *Context) ?[]const u8 {
-        return self.request.headers.get("X-Correlation-ID");
+        if (self.request) |r| {
+            return r.headers.get("X-Correlation-ID");
+        }
+        return null;
     }
 
     /// Returns the active OpenTelemetry span handle for this request, or null when
@@ -250,11 +258,13 @@ pub const Context = struct {
 
     /// returns basic auth username claim
     pub fn getUsername(self: *Context) !?[]const u8 {
-        if (self.request.header(constants.AUTH_HEADER)) |header| {
-            return try self.container.authProvider.retrieveUserName(
-                self.allocator,
-                header,
-            );
+        if (self.request) |r| {
+            if (r.header(constants.AUTH_HEADER)) |header| {
+                return try self.container.authProvider.retrieveUserName(
+                    self.allocator,
+                    header,
+                );
+            }
         }
 
         return "";
@@ -264,14 +274,16 @@ pub const Context = struct {
     pub fn getAuthClaims(self: *Context) !?jwtClaims {
         return try self.container.authProvider.retrieveClaims(
             self.allocator,
-            self.request.header(constants.AUTH_HEADER).?,
+            (self.request.?.header(constants.AUTH_HEADER)).?,
         );
     }
 
     /// returns api key claim
     pub fn getAuthKey(self: *Context) !?[]const u8 {
-        if (self.request.header(constants.APIKEY_HEADER)) |header| {
-            return header;
+        if (self.request) |r| {
+            if (r.header(constants.APIKEY_HEADER)) |header| {
+                return header;
+            }
         }
 
         return "";
@@ -299,7 +311,7 @@ pub const Context = struct {
     /// if no field with that name was submitted. The `data` slice is valid only
     /// for the lifetime of the request (arena-owned) — copy it to persist.
     pub fn GetFile(self: *Context, field: []const u8) !?root.UploadedFile {
-        const form = try self.request.multiFormData();
+        const form = try self.request.?.multiFormData();
         const f = form.get(field) orelse return null;
         return root.UploadedFile{
             .data = f.value,
@@ -434,7 +446,7 @@ pub const Context = struct {
 
     /// transforms incoming request json to comptime type
     pub fn bind(self: *Context, comptime T: type) !?T {
-        const b = self.request.body() orelse return null;
+        const b = self.request.?.body() orelse return null;
         return try std.json.parseFromSliceLeaky(T, self.allocator, b, .{ .ignore_unknown_fields = true });
     }
 
@@ -442,7 +454,7 @@ pub const Context = struct {
     /// the comptime type `T` (a generated protobuf message exposing `decode`).
     /// Decoding uses the per-request arena allocator, released at request end.
     pub fn bindProto(self: *Context, comptime T: type) !?T {
-        const b = self.request.body() orelse return null;
+        const b = self.request.?.body() orelse return null;
         var reader: std.Io.Reader = .fixed(b);
         return try T.decode(&reader, self.allocator);
     }
@@ -483,7 +495,7 @@ pub const Context = struct {
 
     /// returns if path param exist
     pub fn param(self: *Context, name: []const u8) []const u8 {
-        const value = self.request.param(name);
+        const value = self.request.?.param(name);
         if (value == null) {
             return "";
         }

@@ -249,7 +249,7 @@ fn runHook(self: *Self, hook: *const fn (*root.Context) anyerror!void, channel: 
         self.allocator.destroy(ca);
     }
 
-    var ctx = Context.init(ca.allocator(), self.container, @as(*httpz.Request, undefined), @as(*httpz.Response, undefined)) catch return;
+    var ctx = Context.init(ca.allocator(), self.container, null, @as(*httpz.Response, undefined)) catch return;
     const context = &ctx;
 
     var message = root.redisMessage{

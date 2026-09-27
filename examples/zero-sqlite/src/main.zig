@@ -81,7 +81,7 @@ pub fn index(ctx: *Context) !void {
 }
 
 pub fn createUser(ctx: *Context) !void {
-    const body = ctx.request.body() orelse {
+    const body = ctx.request.?.body() orelse {
         ctx.response.setStatus(.bad_request);
         try ctx.json(.{ .err = "Request body required" });
         return;
@@ -170,7 +170,7 @@ pub fn updateUser(ctx: *Context) !void {
         return;
     };
 
-    const body = ctx.request.body() orelse {
+    const body = ctx.request.?.body() orelse {
         ctx.response.setStatus(.bad_request);
         try ctx.json(.{ .err = "Request body required" });
         return;

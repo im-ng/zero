@@ -22,7 +22,7 @@ const Context = root.Context;
 const constants = root.constants;
 const httpz = root.httpz;
 
-const _req: *httpz.Request = undefined;
+const _req: ?*httpz.Request = null;
 const _res: *httpz.Response = undefined;
 
 thread: std.Thread = undefined,
@@ -151,7 +151,9 @@ pub fn publish(self: *Self, ctx: *Context, topic: *kafkaTopic, key: []const u8, 
     const key_ptr: ?*anyopaque = @constCast(key.ptr);
 
     // Propagate the inbound correlation id as a Kafka record header when present.
-    const cid = ctx.request.header("X-Correlation-ID");
+    // ctx.request is only set during an HTTP request; cron/pub-sub driven
+    // publishes have no request, so guard against a null request.
+    const cid = if (ctx.request) |r| r.header("X-Correlation-ID") else null;
 
     const err_code: c_int = blk: {
         if (cid) |id| {

@@ -50,7 +50,7 @@ fn cacheResponse(ctx: *Context) !void {
 }
 
 fn save(ctx: *Context) !void {
-    const body = ctx.request.body() orelse "";
+    const body = ctx.request.?.body() orelse "";
 
     try ctx.KV.?.set(ctx, "msg", body);
 

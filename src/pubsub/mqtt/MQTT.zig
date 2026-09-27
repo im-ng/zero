@@ -17,7 +17,7 @@ const Context = root.Context;
 const constants = root.constants;
 const httpz = root.httpz;
 
-const _req: *httpz.Request = undefined;
+const _req: ?*httpz.Request = null;
 const _res: *httpz.Response = undefined;
 
 thread: std.Thread = undefined,

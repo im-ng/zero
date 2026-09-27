@@ -53,7 +53,7 @@ pub fn run(self: *Self) anyerror!void {
     var context = try Context.init(
         self.container.allocator,
         self.container,
-        self.request,
+        null,
         self.response,
     );
     const ctx = &context;

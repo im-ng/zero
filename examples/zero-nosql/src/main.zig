@@ -89,7 +89,7 @@ pub fn listUsers(ctx: *Context) !void {
 
 pub fn getUser(ctx: *Context) !void {
     if (ctx.NoSQL) |n| {
-        const key = ctx.request.params.get("key") orelse {
+        const key = ctx.request.?.params.get("key") orelse {
             badRequest(ctx, "missing :key");
             return;
         };
@@ -113,11 +113,11 @@ pub fn getUser(ctx: *Context) !void {
 
 pub fn putUser(ctx: *Context) !void {
     if (ctx.NoSQL) |n| {
-        const key = ctx.request.params.get("key") orelse {
+        const key = ctx.request.?.params.get("key") orelse {
             badRequest(ctx, "missing :key");
             return;
         };
-        const value = ctx.request.body() orelse "";
+        const value = ctx.request.?.body() orelse "";
         const esc = try cqlLiteral(ctx.allocator, value);
         defer ctx.allocator.free(esc);
         const cql = try std.fmt.allocPrint(
@@ -138,7 +138,7 @@ pub fn putUser(ctx: *Context) !void {
 
 pub fn deleteUser(ctx: *Context) !void {
     if (ctx.NoSQL) |n| {
-        const key = ctx.request.params.get("key") orelse {
+        const key = ctx.request.?.params.get("key") orelse {
             badRequest(ctx, "missing :key");
             return;
         };
@@ -156,7 +156,7 @@ pub fn deleteUser(ctx: *Context) !void {
 
 pub fn runQuery(ctx: *Context) !void {
     if (ctx.NoSQL) |n| {
-        const cql = ctx.request.body() orelse "";
+        const cql = ctx.request.?.body() orelse "";
         const raw = n.query(ctx, cql) catch |e| {
             if (nosqlUpstreamError(ctx, e)) return;
             return e;

@@ -32,7 +32,7 @@ fn ExecCtx(comptime Ctx: type) type {
 }
 
 pub fn handle(ctx: anytype, comptime Query: type, comptime Mutation: ?type, query_root: *const Query, mutation_root: ?*const anyopaque) !void {
-    const body = ctx.request.body() orelse "";
+    const body = ctx.request.?.body() orelse "";
     var req: GraphQLRequest = .{};
     if (body.len > 0) {
         req = std.json.parseFromSliceLeaky(GraphQLRequest, ctx.allocator, body, .{ .ignore_unknown_fields = true }) catch blk: {
@@ -121,7 +121,7 @@ pub fn handle(ctx: anytype, comptime Query: type, comptime Mutation: ?type, quer
 /// Fallback request source: GraphQL-over-HTTP GET uses URL query params
 /// (?query=...&variables=...&operationName=...). Values are URL-decoded by httpz.
 fn readFromQueryString(ctx: anytype) !GraphQLRequest {
-    const qs = ctx.request.query() catch return GraphQLRequest{};
+    const qs = ctx.request.?.query() catch return GraphQLRequest{};
 
     const q = qs.get("query") orelse return GraphQLRequest{};
 

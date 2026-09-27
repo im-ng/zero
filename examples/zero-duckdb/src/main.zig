@@ -75,7 +75,7 @@ fn ensureSchema(ctx: *Context) !void {
 }
 
 fn parseId(ctx: *Context) ?i64 {
-    const raw = ctx.request.params.get("id") orelse return null;
+    const raw = ctx.request.?.params.get("id") orelse return null;
     return std.fmt.parseInt(i64, raw, 10) catch null;
 }
 

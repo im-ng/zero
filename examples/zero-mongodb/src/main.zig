@@ -112,7 +112,7 @@ pub fn listUsers(ctx: *Context) !void {
 
 pub fn getUser(ctx: *Context) !void {
     if (ctx.NoSQL) |n| {
-        const key = ctx.request.params.get("key") orelse {
+        const key = ctx.request.?.params.get("key") orelse {
             badRequest(ctx, "missing :key");
             return;
         };
@@ -149,7 +149,7 @@ pub fn getUser(ctx: *Context) !void {
 
 pub fn createUser(ctx: *Context) !void {
     if (ctx.NoSQL) |n| {
-        const value = ctx.request.body() orelse "{}";
+        const value = ctx.request.?.body() orelse "{}";
         var cmd = std.array_list.Managed(u8).init(ctx.allocator);
         defer cmd.deinit();
         try cmd.appendSlice("{\"insert\":\"users\",\"documents\":[");
@@ -171,13 +171,13 @@ pub fn createUser(ctx: *Context) !void {
 
 pub fn putUser(ctx: *Context) !void {
     if (ctx.NoSQL) |n| {
-        const key = ctx.request.params.get("key") orelse {
+        const key = ctx.request.?.params.get("key") orelse {
             badRequest(ctx, "missing :key");
             return;
         };
         const key_json = try jsonString(ctx.allocator, key);
         defer ctx.allocator.free(key_json);
-        const value = ctx.request.body() orelse "{}";
+        const value = ctx.request.?.body() orelse "{}";
         var cmd = std.array_list.Managed(u8).init(ctx.allocator);
         defer cmd.deinit();
         try cmd.appendSlice("{\"update\":\"users\",\"updates\":[{\"q\":{\"_id\":");
@@ -199,7 +199,7 @@ pub fn putUser(ctx: *Context) !void {
 
 pub fn deleteUser(ctx: *Context) !void {
     if (ctx.NoSQL) |n| {
-        const key = ctx.request.params.get("key") orelse {
+        const key = ctx.request.?.params.get("key") orelse {
             badRequest(ctx, "missing :key");
             return;
         };
@@ -224,7 +224,7 @@ pub fn deleteUser(ctx: *Context) !void {
 
 pub fn runQuery(ctx: *Context) !void {
     if (ctx.NoSQL) |n| {
-        const cmd = ctx.request.body() orelse "";
+        const cmd = ctx.request.?.body() orelse "";
         const raw = n.query(ctx, cmd) catch |e| {
             if (nosqlUpstreamError(ctx)) return;
             return e;

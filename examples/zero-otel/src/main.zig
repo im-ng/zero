@@ -54,7 +54,7 @@ fn index(ctx: *Context) !void {
 // Returns the incoming traceparent so a caller can confirm it propagated. JSON so
 // the outbound client (which deserializes the response) can read it back.
 fn echo(ctx: *Context) !void {
-    const tp = ctx.request.header("traceparent") orelse "(none)";
+    const tp = ctx.request.?.header("traceparent") orelse "(none)";
     try ctx.json(.{ .traceparent = tp });
 }
 

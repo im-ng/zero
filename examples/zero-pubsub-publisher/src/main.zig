@@ -51,8 +51,8 @@ fn publish(ctx: *Context) !void {
         return;
     }
 
-    const body = ctx.request.body() orelse "";
-    const params = ctx.request.query() catch null;
+    const body = ctx.request.?.body() orelse "";
+    const params = ctx.request.?.query() catch null;
 
     const message = if (body.len > 0) body else if (params) |p| p.get("message") orelse "" else "";
     const topic = if (params) |p| p.get("topic") orelse default_topic else default_topic;

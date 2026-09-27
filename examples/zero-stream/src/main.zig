@@ -40,7 +40,7 @@ pub fn main(init: std.process.Init) !void {
 pub fn connect(ctx: *Context) !void {
     mutex.lock(utils.io) catch {};
     defer mutex.unlock(utils.io);
-    try connections.put(ctx.request.header("sec-websocket-key").?, ctx.wsClient);
+    try connections.put(ctx.request.?.header("sec-websocket-key").?, ctx.wsClient);
 }
 
 pub fn stream(ctx: *Context) !void {

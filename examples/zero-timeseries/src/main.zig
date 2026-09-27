@@ -51,7 +51,7 @@ pub fn index(ctx: *Context) !void {
 
 pub fn writePoint(ctx: *Context) !void {
     if (ctx.Timeseries) |ts| {
-        const body = ctx.request.body() orelse "";
+        const body = ctx.request.?.body() orelse "";
         const parsed = std.json.parseFromSlice(struct {
             measurement: []const u8,
             tags: []const u8 = "",
@@ -94,7 +94,7 @@ pub fn writePoint(ctx: *Context) !void {
 
 pub fn writeLine(ctx: *Context) !void {
     if (ctx.Timeseries) |ts| {
-        const line = ctx.request.body() orelse "";
+        const line = ctx.request.?.body() orelse "";
         if (line.len == 0) {
             badRequest(ctx, "empty line protocol");
             return;
@@ -112,8 +112,8 @@ pub fn writeLine(ctx: *Context) !void {
 pub fn queryFlux(ctx: *Context) !void {
     if (ctx.Timeseries) |ts| {
         const q: []const u8 = blk: {
-            if (ctx.request.method == .POST) break :blk ctx.request.body() orelse "";
-            const qs = ctx.request.query() catch break :blk "";
+            if (ctx.request.?.method == .POST) break :blk ctx.request.?.body() orelse "";
+            const qs = ctx.request.?.query() catch break :blk "";
             break :blk qs.get("q") orelse "";
         };
         const csv = ts.query(ctx, q) catch |e| {

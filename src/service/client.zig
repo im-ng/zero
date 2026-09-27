@@ -440,8 +440,10 @@ fn createAndSendRequest(
 
         // Propagate the inbound correlation id onto the outbound request so the
         // call chain stays traceable across services. No-op when none is present.
-        if (ctx.request.header("X-Correlation-ID")) |cid| {
-            try req.header("X-Correlation-ID", cid);
+        if (ctx.request) |r| {
+            if (r.header("X-Correlation-ID")) |cid| {
+                try req.header("X-Correlation-ID", cid);
+            }
         }
 
         // Propagate the active OpenTelemetry trace via W3C traceparent (continues

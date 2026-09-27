@@ -441,7 +441,7 @@ pub fn startRemoteLogLevel(self: *Self) !void {
 /// request. Returns the value subslice, or `null` when the parameter is absent.
 /// httpz parses the query string into a key/value map, so we read it via `.get`.
 fn queryParam(ctx: *root.Context, name: []const u8) ?[]const u8 {
-    const qs = ctx.request.query() catch return null;
+    const qs = ctx.request.?.query() catch return null;
     return qs.get(name);
 }
 
@@ -758,7 +758,7 @@ fn openAPIHandler(ctx: *Context) !void {
 }
 
 fn swaggerHandler(ctx: *Context) !void {
-    const path: []const u8 = ctx.request.url.path;
+    const path: []const u8 = ctx.request.?.url.path;
     if (std.mem.eql(u8, path, constants.indexCss)) {
         ctx.response.setStatus(.ok);
         ctx.response.content_type = .CSS;
@@ -805,7 +805,7 @@ fn swaggerHandler(ctx: *Context) !void {
 fn swaggerDirectory(ctx: *Context) !void {
     var urlPath: []u8 = undefined;
     urlPath = try ctx.allocator.alloc(u8, 100);
-    urlPath = try std.fmt.bufPrint(urlPath, "{s}/{s}", .{ constants.STATIC_DIR, ctx.request.url.path });
+    urlPath = try std.fmt.bufPrint(urlPath, "{s}/{s}", .{ constants.STATIC_DIR, ctx.request.?.url.path });
 
     const buffer = try readFile(ctx, urlPath);
 
@@ -816,7 +816,7 @@ fn swaggerDirectory(ctx: *Context) !void {
 fn staticDirectory(ctx: *Context) !void {
     // user-registered mounts take precedence over the embedded static dir
     if (ctx.container.staticMounts.items.len > 0) {
-        if (root.container.staticResolve(ctx.container.staticMounts.items, ctx.request.url.path)) |hit| {
+        if (root.container.staticResolve(ctx.container.staticMounts.items, ctx.request.?.url.path)) |hit| {
             var rel = hit.rel;
             if (rel.len == 0) {
                 rel = "/";
@@ -844,7 +844,7 @@ fn staticDirectory(ctx: *Context) !void {
 
     var urlPath: []u8 = undefined;
     urlPath = try ctx.allocator.alloc(u8, 100);
-    urlPath = try std.fmt.bufPrint(urlPath, "{s}/{s}", .{ constants.STATIC_DIR, ctx.request.url.path });
+    urlPath = try std.fmt.bufPrint(urlPath, "{s}/{s}", .{ constants.STATIC_DIR, ctx.request.?.url.path });
 
     const buffer = readFile(ctx, urlPath) catch {
         ctx.response.setStatus(.not_found);

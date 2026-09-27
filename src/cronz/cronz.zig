@@ -100,7 +100,7 @@ pub fn runSchedules(self: *Self, _: i128) void {
                     var ctx = Context.init(
                         ca.allocator(),
                         self.container,
-                        self.request,
+                        null,
                         self.response,
                     ) catch |err| {
                         self.container.log.any(err);

@@ -53,7 +53,7 @@ pub fn indexDoc(ctx: *Context) !void {
         return;
     }
 
-    const doc = ctx.request.body() orelse "";
+    const doc = ctx.request.?.body() orelse "";
     ctx.Search.?.index(ctx, COLLECTION, doc) catch |e| {
         if (searchUpstreamError(ctx, e)) return;
         return e;
@@ -68,7 +68,7 @@ pub fn getDoc(ctx: *Context) !void {
         return;
     }
 
-    const id = ctx.request.params.get("id") orelse {
+    const id = ctx.request.?.params.get("id") orelse {
         badRequest(ctx, "missing :id");
         return;
     };
@@ -94,7 +94,7 @@ pub fn deleteDoc(ctx: *Context) !void {
         return;
     }
 
-    const id = ctx.request.params.get("id") orelse {
+    const id = ctx.request.?.params.get("id") orelse {
         badRequest(ctx, "missing :id");
         return;
     };
@@ -113,8 +113,8 @@ pub fn search(ctx: *Context) !void {
     }
 
     const q: []const u8 = blk: {
-        if (ctx.request.method == .POST) break :blk ctx.request.body() orelse "";
-        const qs = ctx.request.query() catch break :blk "";
+        if (ctx.request.?.method == .POST) break :blk ctx.request.?.body() orelse "";
+        const qs = ctx.request.?.query() catch break :blk "";
         break :blk qs.get("q") orelse "";
     };
 

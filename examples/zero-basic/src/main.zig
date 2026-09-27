@@ -134,7 +134,7 @@ pub fn protoGet(ctx: *Context) !void {
 }
 
 pub fn protoPost(ctx: *Context) !void {
-    const body = ctx.request.body() orelse "";
+    const body = ctx.request.?.body() orelse "";
     ctx.response.header("content-type", "application/x-protobuf");
     ctx.response.setStatus(.ok);
     try ctx.response.writer().writeAll(body);
@@ -142,7 +142,7 @@ pub fn protoPost(ctx: *Context) !void {
 
 pub fn filestoreGet(ctx: *Context) !void {
     const key = blk: {
-        const qs = ctx.request.query() catch break :blk "seed";
+        const qs = ctx.request.?.query() catch break :blk "seed";
         break :blk qs.get("key") orelse "seed";
     };
     const got = (try ctx.GetFileFromStore("local", key)) orelse "";

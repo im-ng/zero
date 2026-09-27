@@ -309,7 +309,7 @@ var bench_fs_seq: std.atomic.Value(u64) = .init(0);
 
 fn filestoreGetHandler(ctx: *Context) !void {
     const key = blk: {
-        const qs = ctx.request.query() catch break :blk "bench-seed";
+        const qs = ctx.request.?.query() catch break :blk "bench-seed";
         break :blk qs.get("key") orelse "bench-seed";
     };
     const got = (try ctx.GetFileFromStore("bench", key)) orelse "";
