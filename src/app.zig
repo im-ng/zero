@@ -250,6 +250,47 @@ pub fn deinit(self: *Self) void {
     self.allocator.free(self.bootstrap_backing);
 }
 
+/// Full teardown of every framework subsystem and the container. Safe to call
+/// exactly once after the app stops serving (server) or after a CLI command
+/// finishes (`runCmd`). Frees the `App` struct itself, so do not touch `self`
+/// afterwards. Idempotent guards on optional subsystems mean it is also correct
+/// for the CLI path, where the HTTP/metrics servers and pub/sub threads were
+/// never started.
+pub fn destroy(self: *Self) void {
+    if (self.metriczThread) |mthread| {
+        self.metriczServer.stop();
+        mthread.join();
+        self.metriczServer.deinit();
+        self.allocator.destroy(self.metriczServer);
+    }
+    if (self.cronz) |cronz| {
+        cronz.destroy();
+    }
+    if (self.container.Nats) |n| {
+        n.destroy();
+    }
+    if (self.container.mqtt) |pb| {
+        pb.destroy();
+    }
+    if (self.container.Kakfa) |k| {
+        k.destroy();
+    }
+
+    self.migrations.deinit();
+    self.subcommands.deinit();
+    self.container.destroy();
+
+    // Flush any in-flight OpenTelemetry spans/metrics and stop its background
+    // exporters before the process exits. No-op when OTEL_EXPERIMENTAL is off.
+    self.otelProvider.shutdown();
+
+    // All framework subsystems are torn down; release the bootstrap arena.
+    self.deinit();
+
+    // Finally, free the `App` struct itself.
+    self.allocator.destroy(self);
+}
+
 fn getLogLevel(_: *Self, level: []const u8) u8 {
     if (std.mem.eql(u8, level, "debug")) {
         return 0;
@@ -304,6 +345,13 @@ pub fn SubCommand(self: *App, name: []const u8, handler: CliHandler, opts: SubCo
 /// `args` is typically `init.minimal.args` from a `std.process.Init` main
 /// parameter.
 pub fn runCmd(self: *App, args: std.process.Args) !void {
+    // Tear down the whole app (container, metricz, datasources, logger, config)
+    // on every exit path — including early `help`/`unknown command` returns — so
+    // the CLI does not leak the bootstrap-wired allocations. `destroy` frees the
+    // `App` struct itself, which is safe because nothing touches `self` after
+    // `runCmd` returns.
+    defer self.destroy();
+
     var it = std.process.Args.Iterator.init(args);
 
     // skip the program name (argv[0]).
@@ -561,37 +609,7 @@ pub fn run(self: *Self) !void {
     // from the signal handler itself, where joining threads or freeing client
     // state (while their background threads are still running) is UB/deadlock
     // and can leave the process hanging (e.g. the NATS io_task thread).
-    if (self.metriczThread) |mthread| {
-        self.metriczServer.stop();
-        mthread.join();
-        self.metriczServer.deinit();
-        self.allocator.destroy(self.metriczServer);
-    }
-    if (self.cronz) |cronz| {
-        cronz.destroy();
-    }
-    if (self.container.Nats) |n| {
-        n.destroy();
-    }
-    if (self.container.mqtt) |pb| {
-        pb.destroy();
-    }
-    if (self.container.Kakfa) |k| {
-        k.destroy();
-    }
-
-    self.migrations.deinit();
-    self.container.destroy();
-
-    // Flush any in-flight OpenTelemetry spans/metrics and stop its background
-    // exporters before the process exits. No-op when OTEL_EXPERIMENTAL is off.
-    self.otelProvider.shutdown();
-
-    // All framework subsystems are torn down; release the bootstrap arena.
-    self.deinit();
-
-    // Finally, free the `App` struct itself.
-    self.allocator.destroy(self);
+    self.destroy();
 }
 
 fn startPubSubSubscriptions(self: Self) !void {
