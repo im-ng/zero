@@ -77,8 +77,8 @@
             .hash = "opentelemetry-0.0.1-U_uKJ8NrIwD5nbZmmLowE41NMPGhiwKQ1sCb3K3L-0lV",
         },
         .zf = .{
-            .url = "git+https://github.com/im-ng/zf.git#d4eb03086ce4f68117b994eb90f625c268d7aa92",
-            .hash = "zf-0.1.2-_F0afypSAQAjnG_X5THdAVO79IJls-aHP-uu1MNLHe82",
+            .url = "git+https://github.com/im-ng/zf.git#85212158163801f63e169276893ab6b55e335991",
+            .hash = "zf-0.1.2-_F0af5NSAQCMCTXXUnk-wbhlaXFAnBjoeijnc3UQBauM",
         },
     },
     .paths = .{

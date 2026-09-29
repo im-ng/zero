@@ -168,7 +168,7 @@ fn regenerateAll(allocator: std.mem.Allocator, io: std.Io, cwd: std.Io.Dir, dir:
     for (list.items) |n| {
         const line = try std.fmt.allocPrint(
             allocator,
-            "    try app.addMigration(try Key(app, {s}._migrate), {s}._migrate);\n",
+            "    {{\n        const k = try Key(app, {s}._migrate);\n        try app.addMigration(k, {s}._migrate);\n        app.container.allocator.free(k);\n    }}\n",
             .{ n, n },
         );
         try sb.appendSlice(allocator, line);
@@ -177,7 +177,7 @@ fn regenerateAll(allocator: std.mem.Allocator, io: std.Io, cwd: std.Io.Dir, dir:
         \\}
         \\
         \\fn Key(app: *App, m: *const migrate) ![]const u8 {
-        \\    return try utils.toStringFromInt(app.container.allocator, "{d}", m.migrationNumber);
+        \\    return try std.fmt.allocPrint(app.container.allocator, "{d}", .{m.migrationNumber});
         \\}
     );
 
@@ -235,8 +235,12 @@ test "generator: scaffold migration and regenerate all.zig" {
 
     try ta.expect(std.mem.indexOf(u8, all_buf, "const create_user_table = @import(\"create_user_table.zig\");") != null);
     try ta.existing(std.mem.indexOf(u8, all_buf, "const add_entries = @import(\"add_entries.zig\");") != null);
-    try ta.expect(std.mem.indexOf(u8, all_buf, "try app.addMigration(try Key(app, create_user_table._migrate), create_user_table._migrate);") != null);
-    try ta.expect(std.mem.indexOf(u8, all_buf, "try app.addMigration(try Key(app, add_entries._migrate), add_entries._migrate);") != null);
+    try ta.expect(std.mem.indexOf(u8, all_buf, "const k = try Key(app, create_user_table._migrate);") != null);
+    try ta.expect(std.mem.indexOf(u8, all_buf, "try app.addMigration(k, create_user_table._migrate);") != null);
+    try ta.expect(std.mem.indexOf(u8, all_buf, "app.container.allocator.free(k);") != null);
+    try ta.expect(std.mem.indexOf(u8, all_buf, "const k = try Key(app, add_entries._migrate);") != null);
+    try ta.expect(std.mem.indexOf(u8, all_buf, "try app.addMigration(k, add_entries._migrate);") != null);
+    try ta.expect(std.mem.indexOf(u8, all_buf, "app.container.allocator.free(k);") != null);
 
     // Re-adding the same name must be rejected.
     try ta.expectError(error.MigrationAlreadyExists, addToDir(allocator, dir, "create-user-table"));

@@ -9,9 +9,13 @@ const utils = zero.utils;
 const create_schema_and_table = @import("create_schema_and_table.zig");
 
 pub fn all(app: *App) !void {
-    try app.addMigration(try Key(app, create_schema_and_table._migrate), create_schema_and_table._migrate);
+    {
+        const k = try Key(app, create_schema_and_table._migrate);
+        try app.addMigration(k, create_schema_and_table._migrate);
+        app.container.allocator.free(k);
+    }
 }
 
 fn Key(app: *App, m: *const migrate) ![]const u8 {
-    return try utils.toStringFromInt(app.container.allocator, "{d}", m.migrationNumber);
+    return try std.fmt.allocPrint(app.container.allocator, "{d}", .{m.migrationNumber});
 }
