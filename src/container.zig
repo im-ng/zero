@@ -791,6 +791,12 @@ fn loadSQL(self: *Self) !void {
         return;
     }
 
+    if (std.mem.eql(u8, dialect, "duckdb") == true) {
+        // In-process DuckDB is wired by `loadDuckDB` via `DUCKDB_PATH`, not the
+        // network Postgres path below, so skip the connection attempt here.
+        return;
+    }
+
     if (std.mem.eql(u8, dialect, "duckgres") == true) {
         try self.loadDuckGres();
         return;
@@ -973,7 +979,11 @@ fn loadDuckDB(self: *Self) !void {
     self.DuckDB = db;
     self.wireDatasource(db, .duckdb);
 
-    const msg = try std.fmt.allocPrint(self.bootstrap, "connected to duckdb at '{s}'", .{if (path.len == 0) ":memory:" else path});
+    const msg = try std.fmt.allocPrint(
+        self.bootstrap,
+        "connected to duckdb at '{s}'",
+        .{if (path.len == 0) ":memory:" else path},
+    );
     defer self.bootstrap.free(msg);
     self.log.info(msg);
 
@@ -1232,7 +1242,7 @@ fn loadNoSQL(self: *Self) !void {
         return;
     }
 
-    self.log.debug("nosql is disabled, as CASSANDRA_CONTACT_POINTS / COUCHBASE_CONTACT_POINTS / MONGODB_CONTACT_POINTS are not provided.");
+    self.log.debug("nosql is disabled, as CONTACT_POINTS are not provided.");
 }
 
 pub fn registerZeroClient(self: *Self, service: *zeroClient) !void {

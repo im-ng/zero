@@ -10,6 +10,8 @@ pub const std_options: std.Options = .{
     .logFn = zero.logger.custom,
 };
 
+// {"data":{"iss":"http://localhost:9990/realms/zero","iat":1790733012,"exp":1790734812,"aud":"account","sub":"302f9fbb-2082-4b85-93ee-ebb8c1ccd254","jti":"trrtcc:369b2d3a-cff3-4625-c5ab-d0b868b7629e","nbf":null,"role":""}
+
 pub const publicKey = struct {
     kid: []const u8,
     kty: []const u8,
@@ -23,8 +25,20 @@ pub const publicKeys = struct {
     keys: []publicKey,
 };
 
-pub fn main(init: std.process.Init) !void {
+const Claims = struct {
+    iss: ?[]const u8 = null,
+    iat: ?u64 = 0,
+    exp: ?u64 = 0,
+    aud: ?[]const u8 = null,
+    nbf: ?[]const u8 = null,
+    role: ?[]const u8 = null,
+};
 
+const Data = struct {
+    data: Claims,
+};
+
+pub fn main(init: std.process.Init) !void {
     var gpa: std.heap.DebugAllocator(.{}) = .init;
     const allocator = gpa.allocator();
     _ = gpa.detectLeaks();
@@ -34,7 +48,7 @@ pub fn main(init: std.process.Init) !void {
     // Per-service outbound config: auth + circuit breaker. Explicit values here
     // override any SERVICE_AUTHSERVICE_* env defaults resolved by addHttpService.
     var svc_opts: zero.client.ServiceOptions = .{};
-    svc_opts.circuitBreaker = .{ .failure_threshold = 5, .cooldown_ms = 30_000 };
+    // svc_opts.circuitBreaker = .{ .failure_threshold = 5, .cooldown_ms = 30_000 };
 
     const svc_key = app.config.getOrDefault("AUTH_API_KEY", "");
     if (svc_key.len > 0) {
@@ -71,7 +85,7 @@ fn serviceStatus(ctx: *Context) !void {
     const service = ctx.getService("auth-service");
 
     if (service) |basicSvc| {
-        const response = try basicSvc.get(ctx, publicKeys, "/keys", null, null);
+        const response = try basicSvc.get(ctx, Data, "/oauth", null, null);
         try ctx.json(response);
     }
 }

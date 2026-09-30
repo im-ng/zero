@@ -117,7 +117,7 @@ pub fn run(self: *Self) anyerror!void {
                 continue;
             }
 
-            const start = util.nowReal();
+            const start = utils.nowMonotonic();
 
             if (m.target == .relational) {
                 if (!relational_configured) {
@@ -141,7 +141,7 @@ pub fn run(self: *Self) anyerror!void {
                     continue;
                 };
 
-                const duration: u64 = @as(u64, @intCast(@divFloor(start.nanoseconds, 1_000_000)));
+                const duration: u64 = @as(u64, @intCast(@divFloor(utils.elapsedNanos(start), 1_000_000)));
 
                 _ = sqlMigrator.insertMigration(ctx, m, duration) catch |err| {
                     ctx.any(err);
@@ -170,7 +170,7 @@ pub fn run(self: *Self) anyerror!void {
                     continue;
                 };
 
-                const duration: u64 = @as(u64, @intCast(@divFloor(start.nanoseconds, 1_000_000)));
+                const duration: u64 = @as(u64, @intCast(@divFloor(utils.elapsedNanos(start), 1_000_000)));
 
                 nosqlMigrator.insertMigration(ctx, m, duration) catch |err| {
                     ctx.any(err);
