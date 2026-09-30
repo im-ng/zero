@@ -407,6 +407,16 @@ fn applyRequestMaps(
     }
 }
 
+// Connection-level errors that a fresh socket silently recovers from (a stale
+// idle keep-alive reset, a truncated response). These are not upstream faults
+// and must not count toward the circuit breaker — we reconnect and retry once.
+fn isConnectionError(e: anyerror) bool {
+    return switch (e) {
+        error.WriteFailed, error.UnexpectedEof, error.ConnectionResetByPeer => true,
+        else => false,
+    };
+}
+
 fn createAndSendRequest(
     self: *Self,
     ctx: *Context,
@@ -430,20 +440,40 @@ fn createAndSendRequest(
 
     var req: zul.http.Request = undefined;
     var req_owned = false;
-    defer if (req_owned) req.deinit();
 
     var res: zul.http.Response = undefined;
     var replayed: bool = false;
     var attempt: u32 = 0;
     var elapsed: f32 = 0;
     const max_attempts = self.max_retries orelse 0;
+    var conn_retry: u8 = 0;
+
+    // A fresh HTTP client per logical request. std.http's connection pool hands
+    // back a dead idle socket without any liveness check, so a single stale
+    // connection would poison every request that reuses it. A per-request client
+    // starts with an empty pool, so the first connection is always freshly
+    // established rather than a reused, possibly-reset one.
+    var call_client = zul.http.Client.init(self.container.io, self.container.allocator);
+    defer call_client.deinit();
+    // `req` must be released back to the pool before `call_client` is torn down.
+    defer if (req_owned) req.deinit();
+
+    // Circuit breaker: consulted once per logical request, before the retry loop,
+    // so it fails fast when already open and never gets tripped mid-flight.
+    // Transient (and auto-retried) connection errors are not counted.
+    if (self.breaker) |*b| {
+        b.before() catch {
+            self.container.metricz.circuitOpen(.{ .name = self.name }) catch {};
+            return ClientError.CircuitOpen;
+        };
+    }
 
     while (true) {
         if (req_owned) {
             req.deinit();
         }
         req_owned = false;
-        req = try self.client.allocRequest(ctx.allocator, absoluteURL);
+        req = try call_client.allocRequest(ctx.allocator, absoluteURL);
         req_owned = true;
 
         req.method = method;
@@ -470,14 +500,6 @@ fn createAndSendRequest(
             req.body(body);
         }
 
-        // circuit breaker: fail fast if open
-        if (self.breaker) |*b| {
-            b.before() catch {
-                self.container.metricz.circuitOpen(.{ .name = self.name }) catch {};
-                return ClientError.CircuitOpen;
-            };
-        }
-
         // downstream rate limiter: fail fast if the per-service window is exhausted
         if (self.limiter) |*rl| {
             rl.before() catch return ClientError.RateLimited;
@@ -492,6 +514,22 @@ fn createAndSendRequest(
         const start = utils.nowMonotonic();
 
         res = req.getResponse(.{}) catch |e| {
+            // A stale idle keep-alive socket resets on the first write after a
+            // quiet period. That is a connection-level blip, not an upstream
+            // fault: reconnect once and retry without counting it as a failure.
+            if (isConnectionError(e) and conn_retry < 1) {
+                conn_retry += 1;
+                // The dead socket is still sitting in this client's pool. Tear the
+                // client down and open a new one so the retry gets a live connection
+                // instead of reusing the same reset one.
+                if (req_owned) {
+                    req.deinit();
+                    req_owned = false;
+                }
+                call_client.deinit();
+                call_client = zul.http.Client.init(self.container.io, self.container.allocator);
+                continue;
+            }
             if (self.breaker) |*b| {
                 b.recordFailure();
             }
@@ -511,14 +549,15 @@ fn createAndSendRequest(
                 return ClientError.EntityNotFound;
             },
             500...600 => {
-                if (self.breaker) |*b| {
-                    b.recordFailure();
-                }
                 if (attempt < max_attempts) {
                     attempt += 1;
                     const backoff = self.retryBackoffMs(attempt);
                     std.Io.sleep(self.container.io, std.Io.Duration.fromMilliseconds(backoff), .awake) catch {};
                     continue;
+                }
+                // One failure per logical request, not one per retry attempt.
+                if (self.breaker) |*b| {
+                    b.recordFailure();
                 }
                 return ClientError.ServiceNotReachable;
             },
@@ -530,15 +569,14 @@ fn createAndSendRequest(
         }
 
         // OAuth token may have expired mid-flight: force a refresh and replay once.
+        // This is an auth-refresh event, not an upstream fault, so it must not
+        // count against the circuit breaker.
         if (res.status == 401 and self.auth != null and self.auth.?.mode == .oauth and !replayed) {
             replayed = true;
             if (self.oauth_token) |old| {
                 self.container.allocator.free(old);
             }
             self.oauth_token = null;
-            if (self.breaker) |*b| {
-                b.recordFailure();
-            }
             const backoff = self.retryBackoffMs(attempt + 1);
             std.Io.sleep(self.container.io, std.Io.Duration.fromMilliseconds(backoff), .awake) catch {};
             continue;
@@ -561,9 +599,6 @@ fn createAndSendRequest(
     // that a caller's struct doesn't declare. Parse with `ignore_unknown_fields`
     // and turn any failure into a clear `ResponseParseFailed` that logs the body.
     var body_sb = res.allocBody(ctx.allocator, .{ .max_size = 16 * 1024 * 1024 }) catch {
-        if (self.breaker) |*b| {
-            b.recordFailure();
-        }
         return ClientError.ResponseParseFailed;
     };
     defer body_sb.deinit();
@@ -579,9 +614,6 @@ fn createAndSendRequest(
             .parse_numbers = true,
         },
     ) catch |e| {
-        if (self.breaker) |*b| {
-            b.recordFailure();
-        }
         const cap = if (body_slice.len > 512) 512 else body_slice.len;
         const msg = std.fmt.allocPrint(
             ctx.allocator,
@@ -655,20 +687,11 @@ fn ensureOAuthToken(self: *Self) ![]const u8 {
         };
     }
 
-    if (self.oauth_client == null) {
-        self.oauth_client = zul.http.Client.init(self.container.io, self.container.allocator);
-    }
-    const token_client = &self.oauth_client.?;
-
-    var req = try token_client.allocRequest(
-        self.container.allocator,
-        cfg.tokenUrl,
-    );
-    defer req.deinit();
-
-    req.method = std.http.Method.POST;
-
-    try req.header("content-type", "application/x-www-form-urlencoded");
+    // A fresh HTTP client per token fetch. std.http's pool returns a dead idle
+    // socket without liveness checks, so a stale connection would poison every
+    // later fetch; a per-call client always opens a live connection.
+    var token_client = zul.http.Client.init(self.container.io, self.container.allocator);
+    defer token_client.deinit();
 
     var body = std.array_list.Managed(u8).init(self.container.allocator);
     defer body.deinit();
@@ -690,17 +713,51 @@ fn ensureOAuthToken(self: *Self) ![]const u8 {
         try body.appendSlice(a);
     }
 
-    req.body(body.items);
+    var req: zul.http.Request = undefined;
+    var req_owned = false;
+    defer if (req_owned) req.deinit();
 
-    var res = req.getResponse(.{}) catch |e| {
-        // Network failure: fall back to the last cached token if we have one,
-        // otherwise surface the error.
-        if (self.oauth_breaker) |*b| {
-            b.recordFailure();
+    var res: zul.http.Response = undefined;
+    var token_conn_retry: u8 = 0;
+
+    while (true) {
+        if (req_owned) {
+            req.deinit();
         }
-        if (self.oauth_token) |token| return token;
-        return e;
-    };
+        req_owned = false;
+        req = try token_client.allocRequest(
+            self.container.allocator,
+            cfg.tokenUrl,
+        );
+        req_owned = true;
+
+        req.method = std.http.Method.POST;
+        try req.header("content-type", "application/x-www-form-urlencoded");
+        req.body(body.items);
+
+        res = req.getResponse(.{}) catch |e| {
+            // A stale idle socket resets after a quiet period: reconnect once and
+            // retry without counting it as a breaker failure (it's not an IdP fault).
+            if (isConnectionError(e) and token_conn_retry < 1) {
+                token_conn_retry += 1;
+                // Drop the poisoned client and open a fresh one so the retry gets a
+                // live connection instead of reusing the same reset socket.
+                if (req_owned) {
+                    req.deinit();
+                    req_owned = false;
+                }
+                token_client.deinit();
+                token_client = zul.http.Client.init(self.container.io, self.container.allocator);
+                continue;
+            }
+            if (self.oauth_breaker) |*b| {
+                b.recordFailure();
+            }
+            if (self.oauth_token) |token| return token;
+            return e;
+        };
+        break;
+    }
 
     if (res.status < 200 or res.status > 299) {
         if (self.oauth_breaker) |*b| {
@@ -822,4 +879,15 @@ test "client: downstream rate limiter is created from options and trips" {
     // same gate used by createAndSendRequest (no network involved here).
     try cli.limiter.?.before();
     try std.testing.expectError(error.RateLimited, cli.limiter.?.before());
+}
+
+test "client: isConnectionError classifies transient socket resets" {
+    // A stale idle keep-alive socket surfaces as these on the first write/read
+    // after a quiet period. They must be retried, not counted as upstream faults.
+    try std.testing.expect(isConnectionError(error.WriteFailed));
+    try std.testing.expect(isConnectionError(error.UnexpectedEof));
+    try std.testing.expect(isConnectionError(error.ConnectionResetByPeer));
+
+    // Real upstream problems (timeout, DNS) must NOT be swallowed as retries.
+    try std.testing.expect(!isConnectionError(error.OutOfMemory));
 }
