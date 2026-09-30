@@ -43,13 +43,19 @@ pub const publicKeys = struct {
 };
 
 pub const jwtClaims = struct {
-    iss: []const u8,
-    iat: u64,
-    exp: u64,
-    aud: []const u8,
-    sub: []const u8,
-    jti: []const u8,
-    nbf: u64,
+    // Claims are made optional because real IdP tokens (Keycloak, Google, …)
+    // routinely omit some of them — Keycloak access tokens, for example, do not
+    // include `nbf`, and `jti`/`aud` vary by issuer. `getClaimsT` treats a
+    // missing non-optional field as a hard parse error, which surfaced as
+    // `TokenInvalidClaims` for every valid token. Optional fields default to
+    // null and the caller sees only the claims that were actually present.
+    iss: ?[]const u8 = null,
+    iat: ?u64 = null,
+    exp: ?u64 = null,
+    aud: ?[]const u8 = null,
+    sub: ?[]const u8 = null,
+    jti: ?[]const u8 = null,
+    nbf: ?u64 = null,
     /// optional RBAC role claim; absent in a token leaves this empty
     role: []const u8 = "",
 };
@@ -203,20 +209,19 @@ pub fn validateOAuthToken(self: *Self, allocator: std.mem.Allocator, authHeader:
     }
 
     if (kidFound == false) {
+        self.container.log.Err(self.container.allocator, "oauth validate: kid not found in pubKeys");
         return AuthError.TokenInvalidClaims;
     }
 
-    const claims = jwtTokenizer.getClaims() catch |err| switch (err) {
-        else => {
-            return AuthError.TokenInvalidClaims;
-        },
+    const claims = jwtTokenizer.getClaims() catch {
+        self.container.log.Err(self.container.allocator, "oauth validate: getClaims failed");
+        return AuthError.TokenInvalidClaims;
     };
     defer claims.deinit();
 
-    var validator = jwt.Validator.init(allocator, &jwtTokenizer) catch |err| switch (err) {
-        else => {
-            return AuthError.TokenInvalidClaims;
-        },
+    var validator = jwt.Validator.init(allocator, &jwtTokenizer) catch {
+        self.container.log.Err(self.container.allocator, "oauth validate: validator init failed");
+        return AuthError.TokenInvalidClaims;
     };
     defer validator.deinit();
 
@@ -316,7 +321,11 @@ pub fn refreshKeys(ctx: *Context) !void {
         },
     }
 
-    const parsed = try res.json(publicKeys, ctx.allocator, .{});
+    const parsed = try res.json(
+        publicKeys,
+        ctx.allocator,
+        .{ .ignore_unknown_fields = true },
+    );
     defer parsed.deinit();
 
     for (parsed.value.keys) |key| {

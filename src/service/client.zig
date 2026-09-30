@@ -44,6 +44,16 @@ pub const ServiceOptions = struct {
     retry_base_ms: ?i64 = null,
 };
 
+const TokenResponse = struct {
+    access_token: []const u8,
+    token_type: ?[]const u8 = null,
+    expires_in: ?u64 = null,
+    refresh_token: ?[]const u8 = null,
+    refresh_expires_in: ?u64 = 0,
+    not_before_policy: ?u64 = 0,
+    scope: ?[]const u8 = null,
+};
+
 container: *root.container = undefined,
 client: zul.http.Client,
 url: ?[]const u8 = undefined,
@@ -544,11 +554,43 @@ fn createAndSendRequest(
         traceID = _id;
     }
 
-    const parsed = try res.json(
+    // Read the response body once so we can both parse it and, on failure, log a
+    // snippet for diagnosis. The default `res.json` options reject unknown fields
+    // and surface only a bare `error.MissingField`/`UnknownField` with no body
+    // context — Keycloak's JWKS response, for example, carries `x5c`/`x5t`/etc.
+    // that a caller's struct doesn't declare. Parse with `ignore_unknown_fields`
+    // and turn any failure into a clear `ResponseParseFailed` that logs the body.
+    var body_sb = res.allocBody(ctx.allocator, .{ .max_size = 16 * 1024 * 1024 }) catch {
+        if (self.breaker) |*b| {
+            b.recordFailure();
+        }
+        return ClientError.ResponseParseFailed;
+    };
+    defer body_sb.deinit();
+    const body_slice = body_sb.string();
+
+    const parsed = std.json.parseFromSlice(
         response,
         ctx.allocator,
-        .{},
-    );
+        body_slice,
+        .{
+            .ignore_unknown_fields = true,
+            .allocate = .alloc_always,
+            .parse_numbers = true,
+        },
+    ) catch |e| {
+        if (self.breaker) |*b| {
+            b.recordFailure();
+        }
+        const cap = if (body_slice.len > 512) 512 else body_slice.len;
+        const msg = std.fmt.allocPrint(
+            ctx.allocator,
+            "service {s} response parse failed ({s}): {s}",
+            .{ self.name, @errorName(e), body_slice[0..cap] },
+        ) catch "service response parse failed";
+        ctx.err(msg);
+        return ClientError.ResponseParseFailed;
+    };
     defer parsed.deinit();
 
     try self.metric(
@@ -626,26 +668,6 @@ fn ensureOAuthToken(self: *Self) ![]const u8 {
 
     req.method = std.http.Method.POST;
 
-    const creds = try std.fmt.allocPrint(
-        self.container.allocator,
-        "{s}:{s}",
-        .{ cfg.clientId, cfg.clientSecret },
-    );
-    defer self.container.allocator.free(creds);
-
-    const creds_b64_len = std.base64.standard.Encoder.calcSize(creds.len);
-    const creds_b64 = try self.container.allocator.alloc(u8, creds_b64_len);
-    defer self.container.allocator.free(creds_b64);
-
-    _ = std.base64.standard.Encoder.encode(creds_b64, creds);
-    const authz = try std.fmt.allocPrint(
-        self.container.allocator,
-        "Basic {s}",
-        .{creds_b64},
-    );
-    defer self.container.allocator.free(authz);
-
-    try req.header("authorization", authz);
     try req.header("content-type", "application/x-www-form-urlencoded");
 
     var body = std.array_list.Managed(u8).init(self.container.allocator);
@@ -687,6 +709,31 @@ fn ensureOAuthToken(self: *Self) ![]const u8 {
         // Refresh failed: reuse the previously cached token (stale is better than
         // hard-failing the outbound call) if one is available.
         if (self.oauth_token) |token| return token;
+
+        const dbg = res.allocBody(
+            self.container.allocator,
+            .{ .max_size = 16 * 1024 * 1024 },
+        ) catch null;
+
+        if (dbg) |*b2| {
+            const slice = b2.string();
+            const cap = if (slice.len > 512) 512 else slice.len;
+            const msg = std.fmt.allocPrint(
+                self.container.allocator,
+                "oauth token fetch failed: status {d} body: {s}",
+                .{ res.status, slice[0..cap] },
+            ) catch "oauth token fetch failed";
+            self.container.log.Err(self.container.allocator, msg);
+            b2.deinit();
+        } else {
+            const msg = std.fmt.allocPrint(
+                self.container.allocator,
+                "oauth token fetch failed: status {d}",
+                .{res.status},
+            ) catch "oauth token fetch failed";
+            self.container.log.Err(self.container.allocator, msg);
+        }
+
         return error.OAuthTokenFetchFailed;
     }
 
@@ -694,19 +741,42 @@ fn ensureOAuthToken(self: *Self) ![]const u8 {
         b.recordSuccess();
     }
 
-    const TokenResponse = struct {
-        access_token: []const u8,
-        token_type: ?[]const u8,
-        expires_in: ?u64,
-        refresh_token: ?[]const u8,
-        scope: ?[]const u8,
-    };
-
-    const parsed = try res.json(
+    const parsed = res.json(
         TokenResponse,
         self.container.allocator,
-        .{},
-    );
+        .{
+            .ignore_unknown_fields = true,
+            .parse_numbers = true,
+        },
+    ) catch {
+        // The token endpoint returned a payload we can't shape into a token
+        // (e.g. an `{"error": ...}` body, or a missing `access_token`). Treat
+        // that as a fetch failure so the caller gets a meaningful client error
+        // rather than an internal `MissingField`. Fall back to a stale token if
+        // we have one, otherwise report the failure.
+        if (self.oauth_breaker) |*b| {
+            b.recordFailure();
+        }
+        const dbg = res.allocBody(
+            self.container.allocator,
+            .{ .max_size = 16 * 1024 * 1024 },
+        ) catch null;
+
+        if (dbg) |*b2| {
+            const slice = b2.string();
+            const cap = if (slice.len > 512) 512 else slice.len;
+            const msg = std.fmt.allocPrint(
+                self.container.allocator,
+                "oauth token fetch parse failed: status {d} body: {s}",
+                .{ res.status, slice[0..cap] },
+            ) catch "oauth token fetch parse failed";
+            self.container.log.Err(self.container.allocator, msg);
+            b2.deinit();
+        }
+        if (self.oauth_token) |token| return token;
+
+        return error.OAuthTokenFetchFailed;
+    };
     defer parsed.deinit();
 
     const token = parsed.value.access_token;

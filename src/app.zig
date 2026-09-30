@@ -1247,6 +1247,16 @@ pub fn addOAuthKeyRefresher(self: *Self) anyerror!void {
 
                 //register job to refresh
                 try self.addCronJob(schedule, "zero-jwks-refresher", AuthProvider.refreshKeys);
+
+                // Eager initial key load: populate `pubKeys` before the first
+                // request so tokens validate immediately instead of failing with
+                // `TokenInvalidClaims` until the first cron tick (which can be many
+                // seconds away). The cron above keeps the keys fresh afterwards.
+                var ctx = root.Context.initCli(self.container.allocator, self.container) catch |e| {
+                    self.container.log.any(e);
+                    return;
+                };
+                AuthProvider.refreshKeys(&ctx) catch |e| self.container.log.any(e);
             },
             else => {
                 // do nothing
