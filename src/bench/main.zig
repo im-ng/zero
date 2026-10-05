@@ -3,6 +3,7 @@ const zero = @import("zero");
 const zul = @import("zul");
 const protobuf = @import("zero").protobuf;
 const alloc_probe = @import("allocProbe.zig");
+const route_probe = @import("routeProbe.zig");
 
 const App = zero.App;
 const Context = zero.Context;
@@ -668,6 +669,8 @@ pub fn main(init: std.process.Init) !void {
     var alloc_probe_run = false;
     var alloc_probe_json = false;
     var alloc_probe_backing: []const u8 = "heap";
+    var route_probe_run = false;
+    var route_probe_routes: usize = 100;
 
     // Targeted-run options. `target_csv` selects scenario categories; `host`
     // switches to external-server mode (no embedded app is booted).
@@ -716,6 +719,13 @@ pub fn main(init: std.process.Init) !void {
             alloc_probe_json = true;
         } else if (std.mem.startsWith(u8, arg, "--alloc-probe-backing=")) {
             alloc_probe_backing = arg[22..];
+        } else if (std.mem.eql(u8, arg, "--route-probe")) {
+            route_probe_run = true;
+        } else if (std.mem.eql(u8, arg, "--route-probe-json")) {
+            route_probe_run = true;
+            json_report = true;
+        } else if (std.mem.startsWith(u8, arg, "--routes=")) {
+            route_probe_routes = std.fmt.parseInt(usize, arg[9..], 10) catch 100;
         }
     }
 
@@ -770,6 +780,17 @@ pub fn main(init: std.process.Init) !void {
         const rep = try alloc_probe.run(allocator, init.io, init.environ_map, probe_opts);
         alloc_probe.printReport(rep);
         if (json_report) alloc_probe.writeJson(allocator, init.io, rep) catch {};
+        std.process.exit(0);
+    }
+
+    // Route probe: build the real httpz router the framework uses, register a
+    // large set of literal static routes, and report the registration bytes plus
+    // the per-request routing (match) time. Boots its own App; no server needed.
+    if (route_probe_run) {
+        const probe_opts: route_probe.ProbeOpts = .{ .routes = route_probe_routes, .iterations = 20000 };
+        const rep = try route_probe.run(allocator, init.io, init.environ_map, probe_opts);
+        route_probe.printReport(rep);
+        if (json_report) route_probe.writeJson(allocator, init.io, rep) catch {};
         std.process.exit(0);
     }
 

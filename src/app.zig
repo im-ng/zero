@@ -1110,12 +1110,14 @@ pub fn addSearch(self: *Self, backend: root.searchInterface.Backend, opts: root.
 /// context as `ctx.NoSQL`.
 pub fn addNoSQL(self: *Self, backend: root.nosqlInterface.Backend, opts: root.nosqlInterface.Options) !void {
     self.container.NoSQL = try root.NoSQL.build(self.container, backend, opts);
+    self.container.nosql_backend = backend;
 }
 
 /// Register the Couchbase document backend over N1QL/HTTP and expose it on the
 /// request context as `ctx.NoSQL`. No `libcouchbase` C library required.
 pub fn addCouchbase(self: *Self, opts: root.nosqlInterface.Options) !void {
     self.container.NoSQL = try root.NoSQL.build(self.container, .couchbase, opts);
+    self.container.nosql_backend = .couchbase;
 }
 
 /// Register the in-process OLAP SQL engine (DuckDB). Exposed on the request

@@ -144,6 +144,7 @@ Search: ?*root.Search = null,
 
 // NoSQL datasource (Round 1: document / wide-column).
 NoSQL: ?*root.NoSQL = null,
+nosql_backend: ?root.nosqlInterface.Backend = null,
 services: ?std.StringHashMap(*zeroClient) = null,
 kvStores: std.StringHashMap(*root.KVStore) = undefined,
 defaultKV: ?*root.KVStore = null,
@@ -1184,6 +1185,7 @@ fn loadNoSQL(self: *Self) !void {
             .password = if (std.mem.eql(u8, pass_val, "")) null else pass_val,
         });
         self.NoSQL = handle;
+        self.nosql_backend = .cassandra;
         self.log.info(try std.fmt.allocPrint(self.bootstrap, "connected to cassandra at '{s}' (keyspace '{s}')", .{ cassandra_cp, keyspace }));
         return;
     }
@@ -1204,6 +1206,7 @@ fn loadNoSQL(self: *Self) !void {
             .password = if (std.mem.eql(u8, pass_val, "")) null else pass_val,
         });
         self.NoSQL = handle;
+        self.nosql_backend = .couchbase;
         self.log.info(try std.fmt.allocPrint(self.bootstrap, "connected to couchbase at '{s}' (bucket '{s}') via N1QL/HTTP", .{ couchbase_cp, bucket }));
         return;
     }
@@ -1238,6 +1241,7 @@ fn loadNoSQL(self: *Self) !void {
         const handle = try self.allocator.create(root.NoSQL);
         handle.* = root.NoSQL.init(m, .mongodb, null, self.metricz);
         self.NoSQL = handle;
+        self.nosql_backend = .mongodb;
         self.log.info(try std.fmt.allocPrint(self.bootstrap, "connected to mongodb at '{s}' (db '{s}'){s}", .{ mongo_cp, mongo_db, if (mongo_tls) " (tls)" else "" }));
         return;
     }

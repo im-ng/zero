@@ -1,0 +1,14 @@
+.{
+    .name = .kv,
+    .version = "0.0.1",
+    .fingerprint = 0x7eb6749a20355f11,
+    .minimum_zig_version = "0.16.0",
+    .dependencies = .{
+        .zero = .{ .path = "../../." },
+    },
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "src",
+    },
+}
