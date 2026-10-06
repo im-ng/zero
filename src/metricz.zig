@@ -237,7 +237,7 @@ pub fn appMemoryTotal(self: *Self, labels: AppMemoryTotalLabel, value: u64) !voi
     return self.MemoryTotal.set(labels, value);
 }
 
-pub fn response(self: *Self, labels: AppHttpResponseLatencyLabel, value: f32) !void {
+pub fn response(self: *Self, labels: AppHttpResponseLatencyLabel, value: f64) !void {
     return self.ResponseBucket.observe(labels, value);
 }
 
@@ -245,7 +245,7 @@ pub fn responseHits(self: *Self, labels: AppHttpResponseHitLabel, count: ?u64) !
     return self.ResponseBucketHits.incrBy(labels, count orelse 1);
 }
 
-pub fn clientResponse(self: *Self, labels: ServiceResponseLabel, value: f32) !void {
+pub fn clientResponse(self: *Self, labels: ServiceResponseLabel, value: f64) !void {
     return self.ServiceResponseBucket.observe(labels, value);
 }
 

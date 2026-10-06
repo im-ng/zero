@@ -276,7 +276,7 @@ fn optCfgGet(ct: *root.container, prefix: []const u8, suffix: []const u8) ?[]con
 
 pub fn metric(
     self: *Self,
-    duration: f32,
+    duration: f64,
     method: []const u8,
     status: u16,
     path: []const u8,
@@ -445,6 +445,7 @@ fn createAndSendRequest(
     var replayed: bool = false;
     var attempt: u32 = 0;
     var elapsed: f32 = 0;
+    var elapsed_s: f64 = 0;
     const max_attempts = self.max_retries orelse 0;
     var conn_retry: u8 = 0;
 
@@ -543,6 +544,7 @@ fn createAndSendRequest(
         };
 
         elapsed = utils.elapsedMs(start);
+        elapsed_s = utils.elapsedSeconds(start);
 
         switch (res.status) {
             404 => {
@@ -626,7 +628,7 @@ fn createAndSendRequest(
     defer parsed.deinit();
 
     try self.metric(
-        elapsed,
+        elapsed_s,
         @tagName(method),
         res.status,
         absoluteURL,
