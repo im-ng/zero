@@ -7,6 +7,8 @@ pub const Backend = enum {
     ftp,
     sftp,
     s3,
+    supabase,
+    gcs,
 };
 
 /// Options used when registering a store via `App.addFileStore`.
@@ -46,7 +48,8 @@ pub const FileStore = struct {
     pub fn deinit(self: *FileStore, allocator: std.mem.Allocator) void {
         switch (self.backend) {
             .local => @as(*local.FileStoreLocal, @ptrCast(@alignCast(self.ptr))).deinit(allocator),
-            .s3 => @as(*s3.FileStoreS3, @ptrCast(@alignCast(self.ptr))).deinit(),
+            .s3, .supabase => @as(*s3.FileStoreS3, @ptrCast(@alignCast(self.ptr))).deinit(),
+            .gcs => @as(*gcs.FileStoreGCS, @ptrCast(@alignCast(self.ptr))).deinit(),
             .ftp, .sftp => {},
         }
         allocator.destroy(self);
@@ -55,7 +58,8 @@ pub const FileStore = struct {
     pub fn get(self: *FileStore, ctx: *root.Context, key: []const u8) !?[]const u8 {
         return switch (self.backend) {
             .local => @as(*local.FileStoreLocal, @ptrCast(@alignCast(self.ptr))).get(ctx, key),
-            .s3 => @as(*s3.FileStoreS3, @ptrCast(@alignCast(self.ptr))).get(ctx, key),
+            .s3, .supabase => @as(*s3.FileStoreS3, @ptrCast(@alignCast(self.ptr))).get(ctx, key),
+            .gcs => @as(*gcs.FileStoreGCS, @ptrCast(@alignCast(self.ptr))).get(ctx, key),
             .ftp, .sftp => error.FileStoreBackendNotImplemented,
         };
     }
@@ -63,7 +67,8 @@ pub const FileStore = struct {
     pub fn create(self: *FileStore, ctx: *root.Context, key: []const u8, data: []const u8) !void {
         return switch (self.backend) {
             .local => @as(*local.FileStoreLocal, @ptrCast(@alignCast(self.ptr))).create(ctx, key, data),
-            .s3 => @as(*s3.FileStoreS3, @ptrCast(@alignCast(self.ptr))).create(ctx, key, data),
+            .s3, .supabase => @as(*s3.FileStoreS3, @ptrCast(@alignCast(self.ptr))).create(ctx, key, data),
+            .gcs => @as(*gcs.FileStoreGCS, @ptrCast(@alignCast(self.ptr))).create(ctx, key, data),
             .ftp, .sftp => error.FileStoreBackendNotImplemented,
         };
     }
@@ -71,7 +76,8 @@ pub const FileStore = struct {
     pub fn delete(self: *FileStore, ctx: *root.Context, key: []const u8) !void {
         return switch (self.backend) {
             .local => @as(*local.FileStoreLocal, @ptrCast(@alignCast(self.ptr))).delete(ctx, key),
-            .s3 => @as(*s3.FileStoreS3, @ptrCast(@alignCast(self.ptr))).delete(ctx, key),
+            .s3, .supabase => @as(*s3.FileStoreS3, @ptrCast(@alignCast(self.ptr))).delete(ctx, key),
+            .gcs => @as(*gcs.FileStoreGCS, @ptrCast(@alignCast(self.ptr))).delete(ctx, key),
             .ftp, .sftp => error.FileStoreBackendNotImplemented,
         };
     }
@@ -79,7 +85,8 @@ pub const FileStore = struct {
     pub fn list(self: *FileStore, ctx: *root.Context, prefix: []const u8) ![][]const u8 {
         return switch (self.backend) {
             .local => @as(*local.FileStoreLocal, @ptrCast(@alignCast(self.ptr))).list(ctx, prefix),
-            .s3 => @as(*s3.FileStoreS3, @ptrCast(@alignCast(self.ptr))).list(ctx, prefix),
+            .s3, .supabase => @as(*s3.FileStoreS3, @ptrCast(@alignCast(self.ptr))).list(ctx, prefix),
+            .gcs => @as(*gcs.FileStoreGCS, @ptrCast(@alignCast(self.ptr))).list(ctx, prefix),
             .ftp, .sftp => error.FileStoreBackendNotImplemented,
         };
     }
@@ -106,9 +113,18 @@ pub fn build(container: *root.container, backend: Backend, opts: Options) !*File
             const b = try s3.FileStoreS3.open(container.allocator, container);
             store.* = FileStore.init(b, .s3);
         },
+        .supabase => {
+            const b = try s3.FileStoreS3.openSupabase(container.allocator, container);
+            store.* = FileStore.init(b, .supabase);
+        },
+        .gcs => {
+            const b = try gcs.FileStoreGCS.open(container.allocator, container);
+            store.* = FileStore.init(b, .gcs);
+        },
     }
     return store;
 }
 
 pub const local = @import("local.zig");
 pub const s3 = @import("s3.zig");
+pub const gcs = @import("gcs.zig");

@@ -327,6 +327,30 @@ pub fn get(
     );
 }
 
+/// Lightweight health probe for a downstream service. Performs a single GET to
+/// `path` and returns the HTTP status code (transport failure becomes a 0). It
+/// deliberately bypasses the circuit breaker and retry loop so a health check
+/// can never trip the breaker guarding the real traffic to that service.
+pub fn ping(self: *Self, ctx: *Context, path: []const u8) !u16 {
+    var url: []const u8 = undefined;
+    url = try utils.combine(ctx.allocator, "{s}{s}", .{ self.url.?, path });
+
+    var client = zul.http.Client.init(self.container.io, self.container.allocator);
+    defer client.deinit();
+    var req = try client.allocRequest(ctx.allocator, url);
+    defer req.deinit();
+    req.method = .GET;
+
+    if (ctx.request) |r| {
+        if (r.header("X-Correlation-ID")) |cid| {
+            try req.header("X-Correlation-ID", cid);
+        }
+    }
+
+    const res = try req.getResponse(.{});
+    return res.status;
+}
+
 pub fn post(
     self: *Self,
     ctx: *Context,
@@ -493,6 +517,19 @@ fn createAndSendRequest(
             var tp_buf: [55]u8 = undefined;
             const tp = otel.formatTraceparent(&tp_buf, otel.spanContextFromActive(ctx.allocator, active));
             try req.header("traceparent", tp);
+        }
+
+        // Propagate the inbound W3C Baggage onto the downstream call so
+        // cross-service context (tenant, user, feature flags) survives the hop.
+        // Handlers may have mutated `ctx.baggage` before the call; we serialize
+        // the current members, dropping the update if it exceeds the scratch size.
+        if (ctx.baggage) |b| {
+            if (b.count() > 0) {
+                var bg_buf: [2048]u8 = undefined;
+                if (b.format(&bg_buf)) |bg| {
+                    try req.header("baggage", bg);
+                }
+            }
         }
 
         try applyRequestMaps(&req, queryParams, headers);

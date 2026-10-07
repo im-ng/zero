@@ -32,6 +32,7 @@ pub const logger = @import("logger.zig");
 pub const config = @import("config.zig");
 pub const metricz = @import("metricz.zig");
 pub const container = @import("container.zig");
+pub const vault = @import("vault.zig");
 pub const context = @import("context.zig");
 pub const Context = @import("context.zig").Context;
 pub const utils = @import("utils.zig");
@@ -40,6 +41,7 @@ pub const httpServer = @import("httpServer.zig");
 pub const handler = @import("handler.zig");
 pub const responder = @import("responder.zig");
 pub const tracz = @import("mw/tracz.zig");
+pub const baggage = @import("mw/baggage.zig");
 pub const otel = @import("otel.zig");
 pub const rateLimiter = @import("mw/rateLimiter.zig");
 pub const kvstore = @import("kvstore/interface.zig");
@@ -65,6 +67,7 @@ pub const SQLite = @import("datasource/sql/sqlite.zig");
 pub const DuckDB = @import("datasource/sql/duckdb.zig").DuckDB;
 pub const DuckGres = @import("datasource/sql/duckgres.zig").DuckGres;
 pub const ClickHouse = @import("datasource/sql/clickhouse.zig").ClickHouse;
+pub const MySQL = @import("datasource/sql/mysql.zig").MySQL;
 pub const datasourceInterface = @import("datasource/sql/interface.zig");
 pub const Datasource = datasourceInterface.Interface;
 
@@ -74,11 +77,18 @@ pub const migrate = @import("migration/migrate.zig");
 // Specialized datasources (time-series / search)
 pub const timeseriesInterface = @import("datasource/timeseries/timeseriesInterface.zig");
 pub const Timeseries = timeseriesInterface.Timeseries;
+pub const graphInterface = @import("datasource/graph/graphInterface.zig");
 pub const InfluxDB = @import("datasource/timeseries/influxdb.zig").InfluxDB;
+pub const OpenTSDB = @import("datasource/timeseries/opentsdb.zig").OpenTSDB;
 
 pub const searchInterface = @import("datasource/search/searchInterface.zig");
 pub const Search = searchInterface.Search;
 pub const Solr = @import("datasource/search/solr.zig").Solr;
+pub const Meili = @import("datasource/search/meili.zig").Meili;
+pub const meiliClient = @import("datasource/search/meiliClient.zig");
+pub const Graph = graphInterface.Graph;
+pub const Dgraph = @import("datasource/graph/dgraph.zig").Dgraph;
+pub const dgraphClient = @import("datasource/graph/dgraphClient.zig");
 
 // NoSQL datasource (document / wide-column)
 pub const nosqlInterface = @import("datasource/nosql/nosqlInterface.zig");
@@ -86,6 +96,7 @@ pub const NoSQL = nosqlInterface.NoSQL;
 pub const Couchbase = @import("datasource/nosql/couchbase.zig").Couchbase;
 pub const NoSQLBackend = @import("datasource/nosql/cassandra.zig").NoSQL;
 pub const MongoDB = @import("datasource/nosql/mongodb.zig").MongoDB;
+pub const ArangoDB = @import("datasource/nosql/arangodb.zig").ArangoDB;
 
 pub const client = @import("service/client.zig");
 pub const circuit_breaker = @import("service/circuitBreaker.zig");
@@ -112,6 +123,12 @@ pub const nats = @import("pubsub/nats/NATS.zig").NATS;
 
 pub const redisMessage = @import("pubsub/redis/message.zig").redisMessage;
 pub const redisPubSub = @import("pubsub/redis/Redis.zig").Redis;
+
+pub const sqsMessage = @import("pubsub/sqs.zig").Message;
+pub const sqs = @import("pubsub/sqs.zig").SQS;
+pub const gcpMessage = @import("pubsub/gcppubsub.zig").Message;
+pub const gcpPubSub = @import("pubsub/gcppubsub.zig").GCP;
+pub const gcp_oauth = @import("gcp/oauth.zig");
 
 pub const pubsubInterface = @import("pubsub/interface.zig");
 pub const PubSub = pubsubInterface.Interface;

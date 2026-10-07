@@ -9,6 +9,9 @@ const utils = root.utils;
 /// a case in the `switch` as they are implemented.
 pub const Backend = enum {
     influxdb,
+    /// OpenTSDB time-series backend over HTTP+JSON (`/_api/put`, `/_api/query`).
+    /// Backed by `src/datasource/timeseries/opentsdb.zig`.
+    opentsdb,
     /// Test-only backend backed by `MockBackend`. Lets the `Timeseries` dispatch
     /// be exercised without a running InfluxDB.
     mock,
@@ -48,6 +51,7 @@ pub const Timeseries = struct {
     fn backendName(b: Backend) []const u8 {
         return switch (b) {
             .influxdb => "influxdb",
+            .opentsdb => "opentsdb",
             .mock => "mock",
         };
     }
@@ -77,6 +81,13 @@ pub const Timeseries = struct {
                 });
                 break :blk @as(*anyopaque, c);
             },
+            .opentsdb => blk: {
+                const c = try root.OpenTSDB.create(container.allocator, .{
+                    .url = opts.url,
+                    .token = opts.token,
+                });
+                break :blk @as(*anyopaque, c);
+            },
             .mock => blk: {
                 const mb = try container.allocator.create(MockBackend);
                 mb.* = MockBackend{};
@@ -95,6 +106,7 @@ pub const Timeseries = struct {
         const start = utils.nowMonotonic();
         const r = switch (self.backend) {
             .influxdb => @as(*root.InfluxDB, @ptrCast(@alignCast(self.ptr))).write(ctx, statement),
+            .opentsdb => @as(*root.OpenTSDB, @ptrCast(@alignCast(self.ptr))).write(ctx, statement),
             .mock => @as(*MockBackend, @ptrCast(@alignCast(self.ptr))).write(ctx, statement),
         } catch |e| {
             if (self.breaker) |*b| {
@@ -117,6 +129,7 @@ pub const Timeseries = struct {
         const start = utils.nowMonotonic();
         const r = switch (self.backend) {
             .influxdb => @as(*root.InfluxDB, @ptrCast(@alignCast(self.ptr))).query(ctx, q),
+            .opentsdb => @as(*root.OpenTSDB, @ptrCast(@alignCast(self.ptr))).query(ctx, q),
             .mock => @as(*MockBackend, @ptrCast(@alignCast(self.ptr))).query(ctx, q),
         } catch |e| {
             if (self.breaker) |*b| {
@@ -139,6 +152,7 @@ pub const Timeseries = struct {
         const start = utils.nowMonotonic();
         const r = switch (self.backend) {
             .influxdb => @as(*root.InfluxDB, @ptrCast(@alignCast(self.ptr))).createDatabase(ctx, name),
+            .opentsdb => @as(*root.OpenTSDB, @ptrCast(@alignCast(self.ptr))).createDatabase(ctx, name),
             .mock => {},
         } catch |e| {
             if (self.breaker) |*b| {
@@ -161,6 +175,7 @@ pub const Timeseries = struct {
     pub fn lastError(self: *Timeseries) ?root.Error.DataSourceError {
         return switch (self.backend) {
             .influxdb => @as(*root.InfluxDB, @ptrCast(@alignCast(self.ptr))).lastError(),
+            .opentsdb => @as(*root.OpenTSDB, @ptrCast(@alignCast(self.ptr))).lastError(),
             .mock => null,
         };
     }
@@ -171,6 +186,7 @@ pub const Timeseries = struct {
     pub fn deinit(self: *Timeseries, allocator: std.mem.Allocator) void {
         switch (self.backend) {
             .influxdb => @as(*root.InfluxDB, @ptrCast(@alignCast(self.ptr))).deinit(allocator),
+            .opentsdb => @as(*root.OpenTSDB, @ptrCast(@alignCast(self.ptr))).deinit(allocator),
             .mock => allocator.destroy(@as(*MockBackend, @ptrCast(@alignCast(self.ptr)))),
         }
         allocator.destroy(self);

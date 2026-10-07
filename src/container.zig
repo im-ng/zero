@@ -124,6 +124,7 @@ rbac: ?*root.rbac.RBAC = null,
 redis: ?rediz.Client = null,
 rdz: ?*root.rdz = null,
 SQL: ?*root.SQL = null,
+MySQL: ?*root.MySQL = null,
 SQLite: ?*root.SQLite = null,
 datasource: root.Datasource = undefined,
 
@@ -145,6 +146,9 @@ Search: ?*root.Search = null,
 // NoSQL datasource (Round 1: document / wide-column).
 NoSQL: ?*root.NoSQL = null,
 nosql_backend: ?root.nosqlInterface.Backend = null,
+
+// Graph datasource (Round 3: Dgraph over its HTTP query/mutate API).
+Graph: ?*root.Graph = null,
 services: ?std.StringHashMap(*zeroClient) = null,
 kvStores: std.StringHashMap(*root.KVStore) = undefined,
 defaultKV: ?*root.KVStore = null,
@@ -154,6 +158,8 @@ mqtt: ?*root.MQTT = null,
 Kakfa: ?*root.kafka = null,
 Nats: ?*root.nats = null,
 Redis: ?*root.redisPubSub = null,
+Sqs: ?*root.sqs = null,
+Gcp: ?*root.gcpPubSub = null,
 pubSub: ?*root.PubSub = null,
 
 // user-registered static-file mounts (served by the staticDirectory catch-all)
@@ -223,11 +229,16 @@ pub fn create(self: Self) anyerror!*container {
 
     // initialize specialized datasources (time-series / search) when configured
     try c.loadTimeseries();
+    try c.loadTimeseriesOpenTSDB();
 
     try c.loadSearch();
 
     // initialize nosql datasource (document / wide-column) when configured
     try c.loadNoSQL();
+    try c.loadNoSQLArango();
+
+    // initialize graph datasource (Dgraph) when configured
+    try c.loadGraph();
 
     // initilize message queues
     try c.loadPubSub();
@@ -313,6 +324,12 @@ pub fn destroy(self: *Self) void {
         s.deinit(allocator);
     }
 
+    // Graph backend (Dgraph/mock): frees the type-erased handle and the backend
+    // implementation it wraps (HTTP client + duped url/key strings).
+    if (self.Graph) |g| {
+        g.deinit(allocator);
+    }
+
     // Redis datasource: closes the connection and frees the wrapper struct.
     if (self.rdz) |rdz| {
         rdz.close();
@@ -341,6 +358,10 @@ fn loadPubSub(self: *Self) !void {
         try self.loadNatsPubSub();
     } else if (std.mem.eql(u8, "REDIS", pubsub)) {
         try self.loadRedisPubSub();
+    } else if (std.mem.eql(u8, "SQS", pubsub)) {
+        try self.loadSqsPubSub();
+    } else if (std.mem.eql(u8, "GCP", pubsub) or std.mem.eql(u8, "GOOGLE", pubsub)) {
+        try self.loadGcpPubSub();
     } else {
         buffer = try std.fmt.bufPrint(buffer, "pubsub is disabled, as pubsub mode is not provided.", .{});
         self.log.debug(buffer);
@@ -663,6 +684,64 @@ fn loadRedisPubSub(self: *Self) !void {
     self.log.info(buffer);
 }
 
+fn loadSqsPubSub(self: *Self) !void {
+    var buffer: []u8 = undefined;
+    buffer = try self.bootstrap.alloc(u8, 256);
+
+    const queue_url = self.config.get("SQS_QUEUE_URL");
+    if (std.mem.eql(u8, queue_url, "") == true) {
+        buffer = try std.fmt.bufPrint(buffer, "sqs pubsub is disabled, as SQS_QUEUE_URL is not provided.", .{});
+        self.log.debug(buffer);
+        return;
+    }
+
+    self.Sqs = root.sqs.create(self) catch |err| {
+        buffer = try std.fmt.bufPrint(buffer, "could not initialize SQS pubsub", .{});
+        self.log.err(buffer);
+        self.log.any(err);
+        return;
+    };
+
+    const ps = try self.allocator.create(root.PubSub);
+    ps.* = .{ .ptr = @ptrCast(@alignCast(self.Sqs)), .vtable = &root.sqs.vtable };
+    self.pubSub = ps;
+
+    buffer = try std.fmt.bufPrint(buffer, "sqs pubsub enabled at '{s}'", .{queue_url});
+    self.log.info(buffer);
+}
+
+fn loadGcpPubSub(self: *Self) !void {
+    var buffer: []u8 = undefined;
+    buffer = try self.bootstrap.alloc(u8, 256);
+
+    const project = self.config.get("GCP_PROJECT");
+    if (std.mem.eql(u8, project, "") == true) {
+        buffer = try std.fmt.bufPrint(buffer, "gcp pubsub is disabled, as GCP_PROJECT is not provided.", .{});
+        self.log.debug(buffer);
+        return;
+    }
+    const subscription = self.config.get("GCP_SUBSCRIPTION");
+    if (std.mem.eql(u8, subscription, "") == true) {
+        buffer = try std.fmt.bufPrint(buffer, "gcp pubsub is disabled, as GCP_SUBSCRIPTION is not provided.", .{});
+        self.log.err(buffer);
+        return;
+    }
+
+    self.Gcp = root.gcpPubSub.create(self) catch |err| {
+        buffer = try std.fmt.bufPrint(buffer, "could not initialize GCP pubsub", .{});
+        self.log.err(buffer);
+        self.log.any(err);
+        return;
+    };
+
+    const ps = try self.allocator.create(root.PubSub);
+    ps.* = .{ .ptr = @ptrCast(@alignCast(self.Gcp)), .vtable = &root.gcpPubSub.vtable };
+    self.pubSub = ps;
+
+    buffer = try std.fmt.bufPrint(buffer, "gcp pubsub enabled for project '{s}'", .{project});
+    self.log.info(buffer);
+}
+
 pub fn natsPullWaitMs(self: *Self) u32 {
     return @intCast(self.config.getAsInt("NATS_MAX_PULL_WAIT") catch constants.DEFAULT_NATS_MAX_PULL_WAIT_MS);
 }
@@ -730,37 +809,80 @@ fn loadRedis(self: *Self) !void {
 
     const addr = try std.Io.net.IpAddress.parseIp4(hostname, portInt);
 
-    const connection = try addr.connect(utils.io, .{ .mode = .stream });
-
-    self.rdz = try rdzDatasource.create(self.allocator);
-    // Keep the connection and its reader/writer inside the heap-allocated `rdz` for
-    // the app's lifetime. `rdzClient.init` borrows `&rdz.reader.interface` /
-    // `&rdz.writer.interface`; stack-local copies would be freed before first use
-    // and the client would write through a dangling vtable (general-protection fault).
-    self.rdz.?.conn = connection;
-    self.rdz.?.reader = connection.reader(utils.io, &self.rdz.?.rbuf);
-    self.rdz.?.writer = connection.writer(utils.io, &self.rdz.?.wbuf);
-
-    self.redis = rdzClient.init(utils.io, &self.rdz.?.reader.interface, &self.rdz.?.writer.interface, .{
-        .user = null,
-        .pass = password,
-    }) catch |err| {
-        buffer = try std.fmt.bufPrint(buffer, "Failed to connect: {}", .{err});
-        self.log.err(buffer);
-        std.process.exit(1);
+    // Startup resilience: transient Redis unavailability during orchestrated
+    // bring-up (sidecar not ready, DNS, brief outage) must not hard-fail the
+    // whole process. Retry with exponential backoff before giving up. (Replaces
+    // the old `std.process.exit(1)` on connect failure.)
+    const max_retries: usize = blk: {
+        const v = self.config.getAsInt("REDIS_CONNECT_RETRIES") catch 0;
+        break :blk if (v == 0) 5 else @as(usize, v);
+    };
+    var backoff_ms: u64 = blk: {
+        const v = self.config.getAsInt("REDIS_CONNECT_BACKOFF_MS") catch 0;
+        break :blk if (v == 0) 500 else @as(u64, v);
     };
 
-    buffer = try std.fmt.bufPrint(buffer, "connecting to redis at '{s}:{d}' on database {d}", .{ hostname, portInt, dbInt });
-    self.log.info(buffer);
+    var attempt: usize = 0;
+    while (attempt <= max_retries) : (attempt += 1) {
+        const connection = addr.connect(utils.io, .{ .mode = .stream }) catch |err| {
+            if (attempt < max_retries) {
+                var buf: [128]u8 = undefined;
+                const msg = std.fmt.bufPrint(&buf, "redis connect attempt {d} failed ({any}); retrying in {d}ms", .{ attempt + 1, err, backoff_ms }) catch "redis connect attempt failed; retrying";
+                self.log.warn(msg);
+                std.Io.sleep(utils.io, std.Io.Duration.fromMilliseconds(@as(i64, @intCast(backoff_ms))), .awake) catch {};
+                backoff_ms *%= 2;
+                continue;
+            }
+            buffer = try std.fmt.bufPrint(buffer, "redis connection failed after {d} retries: {any}", .{ max_retries, err });
+            self.log.err(buffer);
+            return error.RedisConnectFailed;
+        };
 
-    const ping = try self.redis.?.sendAlloc([]u8, self.allocator, .{"ping"});
-    defer self.allocator.free(ping);
+        self.rdz = try rdzDatasource.create(self.allocator);
+        // Keep the connection and its reader/writer inside the heap-allocated `rdz` for
+        // the app's lifetime. `rdzClient.init` borrows `&rdz.reader.interface` /
+        // `&rdz.writer.interface`; stack-local copies would be freed before first use
+        // and the client would write through a dangling vtable (general-protection fault).
+        self.rdz.?.conn = connection;
+        self.rdz.?.reader = connection.reader(utils.io, &self.rdz.?.rbuf);
+        self.rdz.?.writer = connection.writer(utils.io, &self.rdz.?.wbuf);
 
-    buffer = try self.bootstrap.alloc(u8, 256);
-    buffer = try std.fmt.bufPrint(buffer, "ping status {s}", .{ping});
-    self.log.info(buffer);
+        self.redis = rdzClient.init(utils.io, &self.rdz.?.reader.interface, &self.rdz.?.writer.interface, .{
+            .user = null,
+            .pass = password,
+        }) catch |err| {
+            buffer = try std.fmt.bufPrint(buffer, "redis client init failed: {any}", .{err});
+            self.log.err(buffer);
+            self.rdz.?.close();
+            self.allocator.destroy(self.rdz.?);
+            self.rdz = null;
+            if (attempt < max_retries) {
+                std.Io.sleep(utils.io, std.Io.Duration.fromMilliseconds(@as(i64, @intCast(backoff_ms))), .awake) catch {};
+                backoff_ms *%= 2;
+                continue;
+            }
+            return error.RedisConnectFailed;
+        };
 
-    buffer = try self.bootstrap.alloc(u8, 256);
+        // Verify the connection with a PING round-trip before declaring success.
+        const ping = self.redis.?.sendAlloc([]u8, self.allocator, .{"ping"}) catch |err| {
+            buffer = try std.fmt.bufPrint(buffer, "redis ping failed: {any}", .{err});
+            self.log.err(buffer);
+            self.rdz.?.close();
+            self.allocator.destroy(self.rdz.?);
+            self.rdz = null;
+            self.redis = null;
+            if (attempt < max_retries) {
+                std.Io.sleep(utils.io, std.Io.Duration.fromMilliseconds(@as(i64, @intCast(backoff_ms))), .awake) catch {};
+                backoff_ms *%= 2;
+                continue;
+            }
+            return error.RedisConnectFailed;
+        };
+        self.allocator.free(ping);
+        break;
+    }
+
     buffer = try std.fmt.bufPrint(buffer, "connected to redis at '{s}:{d}' on database {d}", .{ hostname, portInt, dbInt });
     self.log.info(buffer);
 
@@ -803,49 +925,87 @@ fn loadSQL(self: *Self) !void {
         return;
     }
 
-    const hostname = self.config.get("DB_HOST");
+    if (std.mem.eql(u8, dialect, "mysql") == true) {
+        try self.loadMySQL();
+        return;
+    }
+
+    // Supabase is a managed Postgres instance; reuse the postgres backend but
+    // read connection params from the `SUPABASE_DB_*` namespace (with sensible
+    // defaults) so users don't have to also set the generic `DB_*` keys.
+    const is_supabase = std.mem.eql(u8, dialect, "supabase");
+    const eff_dialect = if (is_supabase) "postgres" else dialect;
+
+    var hostname: []const u8 = if (is_supabase)
+        self.config.getOrDefault("SUPABASE_DB_HOST", "")
+    else
+        self.config.get("DB_HOST");
+    const port: []const u8 = if (is_supabase)
+        self.config.getOrDefault("SUPABASE_DB_PORT", "5432")
+    else
+        self.config.get("DB_PORT");
+    const user: []const u8 = if (is_supabase)
+        self.config.getOrDefault("SUPABASE_DB_USER", "postgres")
+    else
+        self.config.get("DB_USER");
+    const password: []const u8 = if (is_supabase)
+        self.config.getOrDefault("SUPABASE_DB_PASSWORD", "")
+    else
+        self.config.get("DB_PASSWORD");
+    const db: []const u8 = if (is_supabase)
+        self.config.getOrDefault("SUPABASE_DB_NAME", "postgres")
+    else
+        self.config.get("DB_NAME");
+
+    if (is_supabase and hostname.len == 0) {
+        const proj = self.config.getOrDefault("SUPABASE_DB_PROJECT", "");
+        if (proj.len == 0) {
+            buffer = try std.fmt.bufPrint(buffer, "connection to supabase failed: SUPABASE_DB_HOST or SUPABASE_DB_PROJECT is required.", .{});
+            self.log.err(buffer);
+            return;
+        }
+        hostname = try std.fmt.allocPrint(self.allocator, "db.{s}.supabase.co", .{proj});
+    }
+
     if (std.mem.eql(u8, hostname, "") == true) {
         buffer = try std.fmt.bufPrint(buffer, "connection to {s} failed: host name is empty.", .{dialect});
         self.log.err(buffer);
         return;
     }
-
-    const port = self.config.get("DB_PORT");
     if (std.mem.eql(u8, port, "") == true) {
         buffer = try std.fmt.bufPrint(buffer, "connection to {s} failed: database port is empty.", .{dialect});
         self.log.err(buffer);
         return;
     }
-
-    const user = self.config.get("DB_USER");
     if (std.mem.eql(u8, user, "") == true) {
         buffer = try std.fmt.bufPrint(buffer, "connection to {s} failed: user name is empty.", .{dialect});
         self.log.err(buffer);
         return;
     }
-
-    const password = self.config.get("DB_PASSWORD");
     if (std.mem.eql(u8, password, "") == true) {
         buffer = try std.fmt.bufPrint(buffer, "connection to {s} failed: database password is empty.", .{dialect});
         self.log.err(buffer);
         return;
     }
-
-    const db = self.config.get("DB_NAME");
     if (std.mem.eql(u8, db, "") == true) {
         buffer = try std.fmt.bufPrint(buffer, "connection to {s} failed: database name is empty.", .{dialect});
         self.log.err(buffer);
         return;
     }
 
+    const sslMode = if (is_supabase)
+        self.config.getOrDefault("SUPABASE_DB_SSL_MODE", "require")
+    else
+        self.config.getOrDefault("DB_SSL_MODE", "disable");
+
     var config = root.SQL.dbConfig{
         .databaseName = db,
-        .dialect = dialect,
+        .dialect = eff_dialect,
         .hostname = hostname,
         .port = port,
         .username = user,
         .password = password,
-        .sslMode = self.config.getOrDefault("DB_SSL_MODE", "disable"),
+        .sslMode = sslMode,
     };
 
     self.SQL = try root.SQL.create(
@@ -857,10 +1017,8 @@ fn loadSQL(self: *Self) !void {
 
     self.SQL.?.allocator = self.allocator;
 
-    const portInt = try self.config.getAsInt("DB_PORT");
-    const dbPort: u16 = @intCast(portInt);
+    const dbPort: u16 = try std.fmt.parseInt(u16, port, 10);
 
-    const sslMode = self.config.getOrDefault("DB_SSL_MODE", "disable");
     var tlsMode: pgz.Conn.Opts.TLS = .off;
     if (std.mem.eql(u8, sslMode, "require")) {
         tlsMode = .require;
@@ -896,9 +1054,9 @@ fn loadSQL(self: *Self) !void {
         },
         .auth = .{
             .application_name = self.config.get("APP_NAME"),
-            .username = self.config.get("DB_USER"),
-            .password = self.config.get("DB_PASSWORD"),
-            .database = self.config.get("DB_NAME"),
+            .username = user,
+            .password = password,
+            .database = db,
             .timeout = acquire_timeout_ms,
         },
     };
@@ -1083,6 +1241,57 @@ fn loadDuckGres(self: *Self) !void {
     try self.registerSqlHealth();
 }
 
+// Auto-wire the MySQL / MariaDB backend (pure-Zig text-protocol client; see
+// `mysql.zig`). No native driver / C library is required.
+fn loadMySQL(self: *Self) !void {
+    if (self.MySQL != null) return;
+
+    var buffer: []u8 = undefined;
+    buffer = try self.bootstrap.alloc(u8, 512);
+
+    const hostname = self.config.get("DB_HOST");
+    if (std.mem.eql(u8, hostname, "") == true) {
+        buffer = try std.fmt.bufPrint(buffer, "connection to mysql failed: host name is empty.", .{});
+        self.log.err(buffer);
+        return;
+    }
+    const port = self.config.get("DB_PORT");
+    if (std.mem.eql(u8, port, "") == true) {
+        buffer = try std.fmt.bufPrint(buffer, "connection to mysql failed: database port is empty.", .{});
+        self.log.err(buffer);
+        return;
+    }
+    const user = self.config.get("DB_USER");
+    if (std.mem.eql(u8, user, "") == true) {
+        buffer = try std.fmt.bufPrint(buffer, "connection to mysql failed: user name is empty.", .{});
+        self.log.err(buffer);
+        return;
+    }
+    const password = self.config.get("DB_PASSWORD");
+    const db = self.config.get("DB_NAME");
+    if (std.mem.eql(u8, db, "") == true) {
+        buffer = try std.fmt.bufPrint(buffer, "connection to mysql failed: database name is empty.", .{});
+        self.log.err(buffer);
+        return;
+    }
+
+    const portInt = try self.config.getAsInt("DB_PORT");
+    const dbPort: u16 = @intCast(portInt);
+
+    const m = root.MySQL.connect(self.allocator, utils.io, hostname, dbPort, user, password, db) catch |err| {
+        buffer = try std.fmt.bufPrint(buffer, "Failed to connect to mysql: {}", .{err});
+        self.log.err(buffer);
+        return;
+    };
+    self.MySQL = m;
+    self.wireDatasource(m, .mysql);
+
+    buffer = try std.fmt.bufPrint(buffer, "connected to mysql user to {s} database at '{s}:{s}'", .{ user, hostname, port });
+    self.log.info(buffer);
+
+    try self.registerSqlHealth();
+}
+
 // Auto-wire the columnar OLAP SQL engine (ClickHouse) over HTTP when
 // CLICKHOUSE_URL is set. No native driver / C library is required; every
 // query travels over the framework's `zul` HTTP client.
@@ -1142,8 +1351,46 @@ fn loadTimeseries(self: *Self) !void {
     self.log.info(try std.fmt.allocPrint(self.bootstrap, "connected to influxdb at '{s}' (db '{s}')", .{ url, bucket }));
 }
 
-// Auto-wire the search datasource when SOLR_URL is set.
+// Auto-wire the OpenTSDB time-series backend when OPENTSDB_URL is set.
+fn loadTimeseriesOpenTSDB(self: *Self) !void {
+    const url = self.config.get("OPENTSDB_URL");
+    if (std.mem.eql(u8, url, "")) {
+        self.log.debug("opentsdb is disabled, as OPENTSDB_URL is not provided.");
+        return;
+    }
+
+    const token = self.config.get("OPENTSDB_TOKEN");
+    const handle = try root.Timeseries.build(self, .opentsdb, .{
+        .url = url,
+        .bucket = "",
+        .token = if (std.mem.eql(u8, token, "")) null else token,
+    });
+
+    self.Timeseries = handle;
+    self.log.info(try std.fmt.allocPrint(self.bootstrap, "connected to opentsdb at '{s}'", .{url}));
+}
+
+// Auto-wire the search datasource when SOLR_URL or MEILI_HOST is set.
 fn loadSearch(self: *Self) !void {
+    // Meilisearch takes priority when configured.
+    const meili_host = self.config.get("MEILI_HOST");
+    if (!std.mem.eql(u8, meili_host, "")) {
+        const index = self.config.get("MEILI_INDEX");
+        if (std.mem.eql(u8, index, "")) {
+            self.log.err("search connection failed: MEILI_INDEX must be set.");
+            return;
+        }
+        const key = self.config.get("MEILI_API_KEY");
+        const handle = try root.Search.build(self, .meilisearch, .{
+            .url = meili_host,
+            .default_collection = index,
+            .api_key = if (std.mem.eql(u8, key, "")) null else key,
+        });
+        self.Search = handle;
+        self.log.info(try std.fmt.allocPrint(self.bootstrap, "connected to meilisearch at '{s}' (index '{s}')", .{ meili_host, index }));
+        return;
+    }
+
     const url = self.config.get("SOLR_URL");
     if (std.mem.eql(u8, url, "")) {
         self.log.debug("search is disabled, as SOLR_URL is not provided.");
@@ -1249,6 +1496,50 @@ fn loadNoSQL(self: *Self) !void {
     self.log.debug("nosql is disabled, as CONTACT_POINTS are not provided.");
 }
 
+// Auto-wire the ArangoDB document backend when ARANGO_HOST is set.
+fn loadNoSQLArango(self: *Self) !void {
+    const host = self.config.get("ARANGO_HOST");
+    if (std.mem.eql(u8, host, "")) {
+        self.log.debug("arangodb is disabled, as ARANGO_HOST is not provided.");
+        return;
+    }
+
+    const db = self.config.get("ARANGO_DB");
+    if (std.mem.eql(u8, db, "")) {
+        self.log.err("nosql connection failed: ARANGO_DB must be set.");
+        return;
+    }
+
+    const user_val = self.config.get("ARANGO_USER");
+    const pass_val = self.config.get("ARANGO_PASSWORD");
+    const handle = try root.NoSQL.build(self, .arangodb, .{
+        .contact_points = host,
+        .keyspace = db,
+        .user = if (std.mem.eql(u8, user_val, "")) null else user_val,
+        .password = if (std.mem.eql(u8, pass_val, "")) null else pass_val,
+    });
+    self.NoSQL = handle;
+    self.nosql_backend = .arangodb;
+    self.log.info(try std.fmt.allocPrint(self.bootstrap, "connected to arangodb at '{s}' (db '{s}')", .{ host, db }));
+}
+
+// Auto-wire the Dgraph graph backend when DGRAPH_URL is set.
+fn loadGraph(self: *Self) !void {
+    const url = self.config.get("DGRAPH_URL");
+    if (std.mem.eql(u8, url, "")) {
+        self.log.debug("graph is disabled, as DGRAPH_URL is not provided.");
+        return;
+    }
+
+    const key = self.config.get("DGRAPH_API_KEY");
+    const handle = try root.Graph.build(self, .dgraph, .{
+        .url = url,
+        .api_key = if (std.mem.eql(u8, key, "")) null else key,
+    });
+    self.Graph = handle;
+    self.log.info(try std.fmt.allocPrint(self.bootstrap, "connected to dgraph at '{s}'", .{url}));
+}
+
 pub fn registerZeroClient(self: *Self, service: *zeroClient) !void {
     try self.services.?.put(service.name, service);
 }
@@ -1267,6 +1558,34 @@ fn loadFileStore(self: *Self) !void {
             self.defaultFileStore = store;
         }
         self.log.info("connected to s3 file store");
+        return;
+    }
+
+    if (std.mem.eql(u8, backend_name, "supabase")) {
+        const store = root.filestore.build(self, .supabase, .{}) catch |err| {
+            self.log.err("could not initialize supabase file store");
+            self.log.any(err);
+            return;
+        };
+        try self.fileStores.put("supabase", store);
+        if (self.defaultFileStore == null) {
+            self.defaultFileStore = store;
+        }
+        self.log.info("connected to supabase file store");
+        return;
+    }
+
+    if (std.mem.eql(u8, backend_name, "gcs")) {
+        const store = root.filestore.build(self, .gcs, .{}) catch |err| {
+            self.log.err("could not initialize gcs file store");
+            self.log.any(err);
+            return;
+        };
+        try self.fileStores.put("gcs", store);
+        if (self.defaultFileStore == null) {
+            self.defaultFileStore = store;
+        }
+        self.log.info("connected to gcs file store");
         return;
     }
 

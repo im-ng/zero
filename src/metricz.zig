@@ -1,5 +1,22 @@
 const std = @import("std");
 const root = @import("zero.zig");
+const metric_cap = @import("metric_cap.zig");
+
+/// Reads a process environment variable by scanning `std.c.environ`. Zig 0.16
+/// dropped `std.process.getEnv`, and this project always links libc, so the C
+/// environ pointer is available. Returns a slice into environ memory (stable
+/// for the process lifetime) or null when unset.
+fn envGet(name: []const u8) ?[]const u8 {
+    const envp = std.c.environ;
+    var i: usize = 0;
+    while (envp[i] != null) : (i += 1) {
+        const entry = std.mem.span(envp[i].?);
+        if (entry.len > name.len and std.mem.eql(u8, entry[0..name.len], name) and entry[name.len] == '=') {
+            return entry[name.len + 1 ..];
+        }
+    }
+    return null;
+}
 const builtin = @import("builtin");
 const Allocator = std.mem.Allocator;
 const Self = @This();
@@ -47,6 +64,11 @@ pub const PubSubSubscriberSuccessLabel = struct { topic: []const u8, consumer: [
 // failure metrics labels
 pub const CircuitOpenLabel = struct { name: []const u8 };
 pub const PubSubDLQLabel = PubSubSubscriberTotalLabel;
+
+// GraphQL operation metrics labels. `kind` is "query" | "mutation";
+// `status` is "ok" | "error" (synthesized from the response status and the
+// presence of resolver errors, since GraphQL returns 200 even on partial failure).
+pub const GraphQLOperationLabel = struct { operation: []const u8, kind: []const u8, status: []const u8 };
 
 // Type-erased handle for an app-registered custom metric. The metrics library
 // has no global registry, so custom metrics are kept in a dynamic list and
@@ -105,7 +127,7 @@ MemoryTotal: metrics.GaugeVec(
     AppMemoryTotalLabel,
 ).Impl,
 
-ResponseBucket: metrics.HistogramVec(
+ResponseBucket: metric_cap.CapHistogram(metrics.HistogramVec(
     f64,
     AppHttpResponseLatencyLabel,
     &.{
@@ -128,12 +150,12 @@ ResponseBucket: metrics.HistogramVec(
         10,
         30,
     },
-).Impl,
+).Impl),
 
-ResponseBucketHits: metrics.CounterVec(
+ResponseBucketHits: metric_cap.CapCounter(metrics.CounterVec(
     u64,
     AppHttpResponseHitLabel,
-).Impl,
+).Impl),
 
 ServiceResponseBucket: metrics.HistogramVec(
     f64,
@@ -186,29 +208,29 @@ SQLBucket: metrics.HistogramVec(
 ).Impl,
 
 /// Unified datasource latency (seconds) across all backends.
-DatasourceResponse: metrics.HistogramVec(f64, DatasourceLabel, datasourceBuckets).Impl,
+DatasourceResponse: metric_cap.CapHistogram(metrics.HistogramVec(f64, DatasourceLabel, datasourceBuckets).Impl),
 /// Unified datasource error counter across all backends.
-DatasourceErrorTotal: metrics.CounterVec(u64, DatasourceLabel).Impl,
+DatasourceErrorTotal: metric_cap.CapCounter(metrics.CounterVec(u64, DatasourceLabel).Impl),
 
-PubSubPublisherTotal: metrics.CounterVec(
+PubSubPublisherTotal: metric_cap.CapCounter(metrics.CounterVec(
     u64,
     PubSubPublisherTotalLabel,
-).Impl,
+).Impl),
 
-PubSubPublisherSuccess: metrics.CounterVec(
+PubSubPublisherSuccess: metric_cap.CapCounter(metrics.CounterVec(
     u64,
     PubSubPublisherSuccessLabel,
-).Impl,
+).Impl),
 
-PubSubSubscriberTotal: metrics.CounterVec(
+PubSubSubscriberTotal: metric_cap.CapCounter(metrics.CounterVec(
     u64,
     PubSubSubscriberTotalLabel,
-).Impl,
+).Impl),
 
-PubSubSubscriberSuccess: metrics.CounterVec(
+PubSubSubscriberSuccess: metric_cap.CapCounter(metrics.CounterVec(
     u64,
     PubSubSubscriberSuccessLabel,
-).Impl,
+).Impl),
 
 // failure metrics
 CircuitOpenTotal: metrics.CounterVec(
@@ -216,10 +238,15 @@ CircuitOpenTotal: metrics.CounterVec(
     CircuitOpenLabel,
 ).Impl,
 
-PubSubDLQTotal: metrics.CounterVec(
+PubSubDLQTotal: metric_cap.CapCounter(metrics.CounterVec(
     u64,
     PubSubDLQLabel,
-).Impl,
+).Impl),
+
+/// Total GraphQL operations by operation name / kind (query|mutation) / status (ok|error).
+GraphQLOperationTotal: metrics.CounterVec(u64, GraphQLOperationLabel).Impl,
+/// GraphQL operation latency (seconds) by operation name / kind / status.
+GraphQLOperationLatency: metrics.HistogramVec(f64, GraphQLOperationLabel, datasourceBuckets).Impl,
 
 pub fn info(self: *Self, labels: AppInfoLabel) !void {
     return self.Info.incr(labels);
@@ -259,6 +286,11 @@ pub fn datasourceResponse(self: *Self, labels: DatasourceLabel, value: f32) !voi
 
 pub fn datasourceError(self: *Self, labels: DatasourceLabel) !void {
     return self.DatasourceErrorTotal.incr(labels);
+}
+
+pub fn graphqlOperation(self: *Self, labels: GraphQLOperationLabel, latency: f64) !void {
+    try self.GraphQLOperationTotal.incr(labels);
+    try self.GraphQLOperationLatency.observe(labels, latency);
 }
 
 pub fn publisherTotal(self: *Self, labels: PubSubPublisherTotalLabel) !void {
@@ -326,6 +358,18 @@ fn addCustom(self: *Self, ptr: *anyopaque, write_fn: *const fn (*anyopaque, *std
 
 pub fn initialize(allocator: Allocator, comptime _: metrics.RegistryOpts) !*metricz {
     metrics.setIo(utils.io);
+
+    // Honor an operator-configured cap on distinct label sets per metric so a
+    // runaway label cardinality can't OOM the process. Off (null) unless the
+    // env var is set to a positive integer. Dropped series surface as the
+    // `otel_metric_overflow` series emitted by `writeRaw`.
+    var cap: ?usize = null;
+    if (envGet("METRICS_CARDINALITY_LIMIT")) |raw| {
+        if (std.fmt.parseUnsigned(usize, raw, 10)) |lim| {
+            cap = lim;
+        } else |_| {}
+    }
+
     const m = try allocator.create(metricz);
     errdefer allocator.destroy(m);
 
@@ -347,39 +391,89 @@ pub fn initialize(allocator: Allocator, comptime _: metrics.RegistryOpts) !*metr
     m.MemoryTotal = try metrics.GaugeVec(u64, AppMemoryTotalLabel).Impl
         .init(allocator, "app_memory_total", .{ .help = "Info of overall app memory total usage." });
 
-    m.ResponseBucket = try metrics.HistogramVec(f64, AppHttpResponseLatencyLabel, &.{ 0.001, 0.003, 0.005, 0.01, 0.02, 0.03, 0.05, 0.1, 0.2, 0.3, 0.5, 0.75, 1, 2, 3, 5, 10, 30 }).Impl
-        .init(allocator, utils.io, "app_http_response", .{ .help = "Response time of HTTP requests in seconds." });
+    m.ResponseBucket = metric_cap.CapHistogram(metrics.HistogramVec(f64, AppHttpResponseLatencyLabel, &.{ 0.001, 0.003, 0.005, 0.01, 0.02, 0.03, 0.05, 0.1, 0.2, 0.3, 0.5, 0.75, 1, 2, 3, 5, 10, 30 }).Impl).init(
+        allocator,
+        utils.io,
+        try metrics.HistogramVec(f64, AppHttpResponseLatencyLabel, &.{ 0.001, 0.003, 0.005, 0.01, 0.02, 0.03, 0.05, 0.1, 0.2, 0.3, 0.5, 0.75, 1, 2, 3, 5, 10, 30 }).Impl
+            .init(allocator, utils.io, "app_http_response", .{ .help = "Response time of HTTP requests in seconds." }),
+        cap,
+    );
 
-    m.ResponseBucketHits = try metrics.CounterVec(u64, AppHttpResponseHitLabel).Impl
-        .init(allocator, utils.io, "app_http_response_hits", .{ .help = "Response counts of HTTP requests." });
+    m.ResponseBucketHits = metric_cap.CapCounter(metrics.CounterVec(u64, AppHttpResponseHitLabel).Impl).init(
+        allocator,
+        utils.io,
+        try metrics.CounterVec(u64, AppHttpResponseHitLabel).Impl
+            .init(allocator, utils.io, "app_http_response_hits", .{ .help = "Response counts of HTTP requests." }),
+        cap,
+    );
 
     m.ServiceResponseBucket = try metrics.HistogramVec(f64, ServiceResponseLabel, &.{ 0.001, 0.003, 0.005, 0.01, 0.02, 0.03, 0.05, 0.1, 0.2, 0.3, 0.5, 0.75, 1, 2, 3, 5, 10, 30 }).Impl
         .init(allocator, utils.io, "app_http_service_response", .{ .help = "Response time of external service requests in seconds." });
 
     m.SQLBucket = try metrics.HistogramVec(f64, AppSQLStatsLabel, &.{ 0.001, 0.003, 0.005, 0.01, 0.02, 0.03, 0.05, 0.1, 0.2, 0.3, 0.5, 0.75, 1, 2, 3, 5, 10, 30 }).Impl
         .init(allocator, utils.io, "app_sql_response", .{ .help = "Response time of sql query execution in seconds." });
-    m.DatasourceResponse = try metrics.HistogramVec(f64, DatasourceLabel, datasourceBuckets).Impl
-        .init(allocator, utils.io, "app_datasource_response", .{ .help = "Datasource operation latency in seconds, by backend/operation/status." });
-    m.DatasourceErrorTotal = try metrics.CounterVec(u64, DatasourceLabel).Impl
-        .init(allocator, utils.io, "app_datasource_error_total", .{ .help = "Total datasource operation errors, by backend/operation/status." });
+    m.DatasourceResponse = metric_cap.CapHistogram(metrics.HistogramVec(f64, DatasourceLabel, datasourceBuckets).Impl).init(
+        allocator,
+        utils.io,
+        try metrics.HistogramVec(f64, DatasourceLabel, datasourceBuckets).Impl
+            .init(allocator, utils.io, "app_datasource_response", .{ .help = "Datasource operation latency in seconds, by backend/operation/status." }),
+        cap,
+    );
+    m.DatasourceErrorTotal = metric_cap.CapCounter(metrics.CounterVec(u64, DatasourceLabel).Impl).init(
+        allocator,
+        utils.io,
+        try metrics.CounterVec(u64, DatasourceLabel).Impl
+            .init(allocator, utils.io, "app_datasource_error_total", .{ .help = "Total datasource operation errors, by backend/operation/status." }),
+        cap,
+    );
 
-    m.PubSubPublisherTotal = try metrics.CounterVec(u64, PubSubPublisherTotalLabel).Impl
-        .init(allocator, utils.io, "app_pubsub_publish_total_count", .{ .help = "Total pubsub publisher counter per topic" });
+    m.PubSubPublisherTotal = metric_cap.CapCounter(metrics.CounterVec(u64, PubSubPublisherTotalLabel).Impl).init(
+        allocator,
+        utils.io,
+        try metrics.CounterVec(u64, PubSubPublisherTotalLabel).Impl
+            .init(allocator, utils.io, "app_pubsub_publish_total_count", .{ .help = "Total pubsub publisher counter per topic" }),
+        cap,
+    );
 
-    m.PubSubPublisherSuccess = try metrics.CounterVec(u64, PubSubPublisherSuccessLabel).Impl
-        .init(allocator, utils.io, "app_pubsub_publish_success_count", .{ .help = "Successful pubsub publisher counter per topic" });
+    m.PubSubPublisherSuccess = metric_cap.CapCounter(metrics.CounterVec(u64, PubSubPublisherSuccessLabel).Impl).init(
+        allocator,
+        utils.io,
+        try metrics.CounterVec(u64, PubSubPublisherSuccessLabel).Impl
+            .init(allocator, utils.io, "app_pubsub_publish_success_count", .{ .help = "Successful pubsub publisher counter per topic" }),
+        cap,
+    );
 
-    m.PubSubSubscriberTotal = try metrics.CounterVec(u64, PubSubSubscriberTotalLabel).Impl
-        .init(allocator, utils.io, "app_pubsub_subscriber_total_count", .{ .help = "Total pubsub subscriber counter per topic per consumer group" });
+    m.PubSubSubscriberTotal = metric_cap.CapCounter(metrics.CounterVec(u64, PubSubSubscriberTotalLabel).Impl).init(
+        allocator,
+        utils.io,
+        try metrics.CounterVec(u64, PubSubSubscriberTotalLabel).Impl
+            .init(allocator, utils.io, "app_pubsub_subscriber_total_count", .{ .help = "Total pubsub subscriber counter per topic per consumer group" }),
+        cap,
+    );
 
-    m.PubSubSubscriberSuccess = try metrics.CounterVec(u64, PubSubSubscriberSuccessLabel).Impl
-        .init(allocator, utils.io, "app_pubsub_subscriber_success_count", .{ .help = "Successful pubsub subscriber counter per topic per consumer group" });
+    m.PubSubSubscriberSuccess = metric_cap.CapCounter(metrics.CounterVec(u64, PubSubSubscriberSuccessLabel).Impl).init(
+        allocator,
+        utils.io,
+        try metrics.CounterVec(u64, PubSubSubscriberSuccessLabel).Impl
+            .init(allocator, utils.io, "app_pubsub_subscriber_success_count", .{ .help = "Successful pubsub subscriber counter per topic per consumer group" }),
+        cap,
+    );
 
     m.CircuitOpenTotal = try metrics.CounterVec(u64, CircuitOpenLabel).Impl
         .init(allocator, utils.io, "app_circuit_open_total", .{ .help = "Total circuit-breaker open events by downstream name." });
 
-    m.PubSubDLQTotal = try metrics.CounterVec(u64, PubSubDLQLabel).Impl
-        .init(allocator, utils.io, "app_pubsub_dlq_total", .{ .help = "Total dead-lettered messages per topic per consumer." });
+    m.PubSubDLQTotal = metric_cap.CapCounter(metrics.CounterVec(u64, PubSubDLQLabel).Impl).init(
+        allocator,
+        utils.io,
+        try metrics.CounterVec(u64, PubSubDLQLabel).Impl
+            .init(allocator, utils.io, "app_pubsub_dlq_total", .{ .help = "Total dead-lettered messages per topic per consumer." }),
+        cap,
+    );
+
+    m.GraphQLOperationTotal = try metrics.CounterVec(u64, GraphQLOperationLabel).Impl
+        .init(allocator, utils.io, "app_graphql_operation_total", .{ .help = "Total GraphQL operations by operation/kind/status." });
+    m.GraphQLOperationLatency = try metrics.HistogramVec(f64, GraphQLOperationLabel, datasourceBuckets).Impl
+        .init(allocator, utils.io, "app_graphql_operation_latency_seconds", .{ .help = "GraphQL operation latency in seconds by operation/kind/status." });
 
     m.custom = std.array_list.Managed(CustomMetric).init(allocator);
 
@@ -409,6 +503,8 @@ pub fn deinit(self: *Self, allocator: Allocator) void {
     self.PubSubSubscriberSuccess.deinit();
     self.CircuitOpenTotal.deinit();
     self.PubSubDLQTotal.deinit();
+    self.GraphQLOperationTotal.deinit();
+    self.GraphQLOperationLatency.deinit();
 
     for (self.custom.items) |c| {
         c.deinit(c.ptr);
@@ -457,9 +553,48 @@ pub fn writeRaw(self: *Self, allocator: Allocator, writer: *std.Io.Writer) !void
     try self.CircuitOpenTotal.write(writer);
     try self.PubSubDLQTotal.write(writer);
 
+    try self.GraphQLOperationTotal.write(writer);
+    try self.GraphQLOperationLatency.write(writer);
+
+    // Expose the cardinality-overflow counter as a single series so operators
+    // can see when the cap is silently folding series away.
+    const overflow = metric_cap.overflowCount();
+    if (overflow > 0) {
+        try writer.writeAll("# TYPE otel_metric_overflow counter\n");
+        try writer.writeAll("otel_metric_overflow ");
+        var buf: [20]u8 = undefined;
+        const s = std.fmt.bufPrint(&buf, "{d}", .{overflow}) catch unreachable;
+        try writer.writeAll(s);
+        try writer.writeByte('\n');
+    }
+
     self.mut.lockUncancelable(utils.io);
     defer self.mut.unlock(utils.io);
     for (self.custom.items) |c| {
         try c.write(c.ptr, writer);
     }
+}
+
+test "metricz: cardinality cap drops new series and counts overflow" {
+    const before = metric_cap.overflowCount();
+
+    const Label = struct { id: u16 };
+    var w = metric_cap.CapCounter(metrics.CounterVec(u64, Label).Impl).init(
+        std.testing.allocator,
+        utils.io,
+        try metrics.CounterVec(u64, Label).Impl.init(std.testing.allocator, utils.io, "test_card_cap", .{}),
+        2,
+    );
+    defer w.deinit();
+
+    // First two distinct label sets fit under the cap.
+    try w.incrBy(Label{ .id = 1 }, 1);
+    try w.incrBy(Label{ .id = 2 }, 1);
+    // Third distinct label set exceeds the cap: dropped, counted as overflow.
+    try w.incrBy(Label{ .id = 3 }, 1);
+    // Re-observing an existing label set still increments (not subject to cap).
+    try w.incrBy(Label{ .id = 1 }, 1);
+
+    try std.testing.expectEqual(@as(usize, 2), w.vec.values.count());
+    try std.testing.expectEqual(@as(u64, before + 1), metric_cap.overflowCount());
 }

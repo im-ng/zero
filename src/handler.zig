@@ -95,6 +95,37 @@ pub const Handler = struct {
             defer _ = self.in_flight.fetchSub(1, .monotonic);
         }
 
+        // RFC 10008: the `QUERY` method (safe, body-bearing) requires a
+        // Content-Type. Reject a missing one with 400 and an unsupported one
+        // with 415 before the handler runs.
+        if (std.mem.eql(u8, req.method_string, "QUERY")) {
+            const ct = req.header("content-type");
+            const supported = [_][]const u8{
+                "application/json",
+                "application/query",
+                "application/graphql",
+                "application/x-www-form-urlencoded",
+            };
+            if (ct == null) {
+                res.setStatus(.bad_request);
+                res.content_type = .TEXT;
+                res.body = "QUERY requires a Content-Type";
+                return;
+            }
+            const ct_trim = std.mem.trim(u8, ct.?, " ;\t");
+            const is_supported = for (supported) |s| {
+                if (std.mem.eql(u8, ct_trim, s) or std.mem.startsWith(u8, ct_trim, s)) {
+                    break true;
+                }
+            } else false;
+            if (!is_supported) {
+                res.setStatus(.unsupported_media_type);
+                res.content_type = .TEXT;
+                res.body = "Unsupported QUERY Content-Type";
+                return;
+            }
+        }
+
         var ctx = try Context.init(req.arena, self.container, req, res);
         defer req.arena.destroy(&ctx);
 

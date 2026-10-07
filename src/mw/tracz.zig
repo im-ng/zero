@@ -62,6 +62,13 @@ pub fn execute(self: *const tracz, req: *httpz.Request, res: *httpz.Response, ex
     res.headers.add("X-Correlation-ID", id);
     req.headers.add("X-Correlation-ID", id);
 
+    // Propagate the inbound W3C Baggage header onto the response and the
+    // request so it survives the round-trip and is available to downstream calls.
+    if (req.header("baggage")) |bg| {
+        res.headers.add("baggage", bg);
+        req.headers.add("baggage", bg);
+    }
+
     // OpenTelemetry: wrap the whole request in a server span. When the feature is
     // disabled the provider is inert and `startSpan` returns null (no overhead).
     var server_span: ?otel.Span = null;
@@ -114,6 +121,52 @@ pub fn execute(self: *const tracz, req: *httpz.Request, res: *httpz.Response, ex
     return result;
 }
 
+// ===================== Async trace propagation =====================
+//
+// A pub/sub message crosses an async boundary, so the in-flight request span
+// does not automatically cover the consumer. We bridge it the W3C way: the
+// publisher injects the active span's `traceparent` as a message header, and the
+// consumer extracts it to parent a fresh span to the upstream trace.
+
+/// Return the W3C `traceparent` of the currently active span (the in-flight
+/// request span when publishing from a handler), duplicated into `allocator`,
+/// or null when no span is active. Caller frees the slice. Publishers inject
+/// the result so the trace survives the hop to the consumer.
+pub fn currentTraceparent(allocator: std.mem.Allocator) ?[]u8 {
+    const cur = otel.currentSpan() orelse return null;
+    var buf: [55]u8 = undefined;
+    const sc = otel.spanContextFromActive(allocator, cur);
+    const tp = otel.formatTraceparent(&buf, sc);
+    return allocator.dupe(u8, tp) catch null;
+}
+
+/// Start a span for an inbound pub/sub message. `traceparent` (if present and
+/// well-formed) becomes the parent, continuing the upstream trace; otherwise a
+/// fresh trace starts. The span is pushed onto the active-span stack so a
+/// handler's own child spans parent correctly. Returns null when disabled or no
+/// tracer is available. The caller must `endConsumeSpan` when done.
+pub fn startConsumeSpan(allocator: std.mem.Allocator, provider: *otel.Provider, traceparent: ?[]const u8) ?otel.Span {
+    if (!provider.enabled) return null;
+    var parent: ?otel.ActiveSpan = null;
+    if (traceparent) |tp| {
+        parent = otel.parseTraceparent(tp);
+    }
+    const maybe_span = provider.startSpan(allocator, "MESSAGE", parent, .Consumer) catch return null;
+    const span = maybe_span orelse return null;
+    otel.pushSpan(otel.activeFromSpan(span.getContext()));
+    return span;
+}
+
+/// End, pop, and free a span started by `startConsumeSpan` (no-op when null).
+pub fn endConsumeSpan(provider: *otel.Provider, span: ?otel.Span) void {
+    if (span) |s| {
+        var sp = s;
+        provider.endSpan(&sp);
+        sp.deinit();
+        otel.popSpan();
+    }
+}
+
 pub const Config = struct {
     allocator: std.mem.Allocator,
     provider: *otel.Provider,
@@ -134,4 +187,29 @@ test "tracz init returns struct with allocator" {
     const cfg = Config{ .allocator = allocator, .provider = &provider };
     const t = try init(cfg);
     try std.testing.expectEqual(allocator, t.allocator);
+}
+
+test "currentTraceparent is null with no active span" {
+    const allocator = std.testing.allocator;
+    try std.testing.expectEqual(@as(?[]u8, null), currentTraceparent(allocator));
+}
+
+test "currentTraceparent formats the active span" {
+    const allocator = std.testing.allocator;
+    const tid = otel.TraceID.fromHex("00000000000000000000000000000001") catch unreachable;
+    const sid = otel.SpanID.fromHex("0000000000000002") catch unreachable;
+    otel.pushSpan(.{ .trace_id = tid, .span_id = sid, .trace_flags = otel.TraceFlags.sampled(), .is_remote = false });
+    defer otel.popSpan();
+    const tp = currentTraceparent(allocator);
+    try std.testing.expect(tp != null);
+    if (tp) |t| {
+        try std.testing.expectEqual(@as(usize, 55), t.len);
+        allocator.free(t);
+    }
+}
+
+test "startConsumeSpan is a no-op when disabled" {
+    const allocator = std.testing.allocator;
+    var provider = otel.Provider{ .enabled = false };
+    try std.testing.expectEqual(@as(?otel.Span, null), startConsumeSpan(allocator, &provider, null));
 }
