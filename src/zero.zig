@@ -77,7 +77,6 @@ pub const migrate = @import("migration/migrate.zig");
 // Specialized datasources (time-series / search)
 pub const timeseriesInterface = @import("datasource/timeseries/timeseriesInterface.zig");
 pub const Timeseries = timeseriesInterface.Timeseries;
-pub const graphInterface = @import("datasource/graph/graphInterface.zig");
 pub const InfluxDB = @import("datasource/timeseries/influxdb.zig").InfluxDB;
 pub const OpenTSDB = @import("datasource/timeseries/opentsdb.zig").OpenTSDB;
 
@@ -86,6 +85,8 @@ pub const Search = searchInterface.Search;
 pub const Solr = @import("datasource/search/solr.zig").Solr;
 pub const Meili = @import("datasource/search/meili.zig").Meili;
 pub const meiliClient = @import("datasource/search/meiliClient.zig");
+
+pub const graphInterface = @import("datasource/graph/graphInterface.zig");
 pub const Graph = graphInterface.Graph;
 pub const Dgraph = @import("datasource/graph/dgraph.zig").Dgraph;
 pub const dgraphClient = @import("datasource/graph/dgraphClient.zig");
@@ -93,8 +94,8 @@ pub const dgraphClient = @import("datasource/graph/dgraphClient.zig");
 // NoSQL datasource (document / wide-column)
 pub const nosqlInterface = @import("datasource/nosql/nosqlInterface.zig");
 pub const NoSQL = nosqlInterface.NoSQL;
+pub const Cassandra = @import("datasource/nosql/cassandra.zig").Cassandra;
 pub const Couchbase = @import("datasource/nosql/couchbase.zig").Couchbase;
-pub const NoSQLBackend = @import("datasource/nosql/cassandra.zig").NoSQL;
 pub const MongoDB = @import("datasource/nosql/mongodb.zig").MongoDB;
 pub const ArangoDB = @import("datasource/nosql/arangodb.zig").ArangoDB;
 
@@ -124,11 +125,11 @@ pub const nats = @import("pubsub/nats/NATS.zig").NATS;
 pub const redisMessage = @import("pubsub/redis/message.zig").redisMessage;
 pub const redisPubSub = @import("pubsub/redis/Redis.zig").Redis;
 
-pub const sqsMessage = @import("pubsub/sqs.zig").Message;
-pub const sqs = @import("pubsub/sqs.zig").SQS;
-pub const gcpMessage = @import("pubsub/gcppubsub.zig").Message;
-pub const gcpPubSub = @import("pubsub/gcppubsub.zig").GCP;
-pub const gcp_oauth = @import("gcp/oauth.zig");
+pub const sqsMessage = @import("pubsub/sqs/sqs.zig").Message;
+pub const sqs = @import("pubsub/sqs/sqs.zig").SQS;
+pub const gcpMessage = @import("pubsub/gcp/gcppubsub.zig").Message;
+pub const gcpPubSub = @import("pubsub/gcp/gcppubsub.zig").GCP;
+pub const gcp_oauth = @import("utils/oauth.zig");
 
 pub const pubsubInterface = @import("pubsub/interface.zig");
 pub const PubSub = pubsubInterface.Interface;

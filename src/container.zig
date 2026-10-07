@@ -807,7 +807,8 @@ fn loadRedis(self: *Self) !void {
     const dbInt = try self.config.getAsInt("REDIS_DB");
     const portInt = try self.config.getAsInt("REDIS_PORT");
 
-    const addr = try std.Io.net.IpAddress.parseIp4(hostname, portInt);
+    const addr = std.Io.net.IpAddress.parse(hostname, portInt) catch
+        try std.Io.net.IpAddress.resolve(utils.io, hostname, portInt);
 
     // Startup resilience: transient Redis unavailability during orchestrated
     // bring-up (sidecar not ready, DNS, brief outage) must not hard-fail the

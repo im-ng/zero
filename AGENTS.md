@@ -58,8 +58,8 @@ the affected example (`zig build` inside `examples/<name>`) must still pass.
 ## Commands
 
 ```bash
-zig build test              # unit tests (52; 7 known leaks, assertions pass)
-zig build test-integration  # real SQLite :memory: + Postgres integration tests (21)
+zig build test              # unit tests (52)
+zig build test-integration  # SQLite :memory: + Postgres + fakeserver integration tests (175)
 zig build test-validation   # Context memory-release + timestampz invalid-free (3)
 zig build -Dcoverage test   # kcov coverage report -> zig-out/kcov/
 zig build bench             # build the HTTP load/benchmark harness
@@ -73,7 +73,7 @@ make clean                  # remove .zig-cache, zig-out, and all example build 
 - Test runner: `src/tests.zig` — imports all test-bearing modules via `comptime { _ = module; }` references
 - Inline `test` blocks live in each source file (Zig convention)
 - `build.zig` creates a separate test module from the main one; test root is `src/tests.zig`
-- **Tests pass (52) but leak memory (7 leaks)** — `std.testing.allocator` detects leaks and the build exits with failure. This is a known issue, not a logic bug.
+- Unit tests (52) live as inline `test` blocks compiled into a separate test binary rooted at `src/tests.zig`.
 - `std.testing.expectError` needs an error union type (`error.Foo!void`), not a bare error set — wrap with `@as(ErrorSet, error.Foo)` or assign to a typed variable first
 - `std.posix.setenv`/`unsetenv` don't exist in Zig 0.15.2 — test with existing vars like `PATH` or unset keys
 - Zig 0.15.2 uses `.@"enum".fields` not `.Enum.fields` for `@typeInfo` enum field access
@@ -83,10 +83,11 @@ make clean                  # remove .zig-cache, zig-out, and all example build 
 
 ### Test layers
 
-- `zig build test` — unit tests (52; 7 known leaks, assertions pass)
-- `zig build test-integration` — real `SQLite :memory:` + Postgres, 21 tests (`src/tests_integration.zig`)
+- `zig build test` — unit tests (52)
+- `zig build test-integration` — `SQLite :memory:` + Postgres + fakeserver-backed backends, 175 tests (`src/tests_integration.zig`)
 - `zig build test-validation` — Context request/cron/pubsub release + `timestampz` invalid-free fix, 3 tests (`src/tests_validation.zig`, `src/validation/memory_test.zig`)
 - `zig build -Dcoverage test` — kcov over `src/` → `zig-out/kcov/` (HTML); measured **87.91%**
+- New fakeserver-backed integration tests: `src/pubsub/sqs_test.zig`, `src/pubsub/gcppubsub_test.zig` (AWS SQS + GCP Pub/Sub), `src/filestore/gcs_test.zig` (GCS) — all registered in `src/tests_integration.zig`.
 
 ### HTTP load / benchmark harness
 
@@ -126,18 +127,21 @@ downstream with a circuit breaker.
 
 - **Entry point**: `src/zero.zig` — re-exports all public types and dependencies
 - **App**: `src/app.zig` — main struct (`App.new(allocator)`, `app.run()`)
-- **Context**: `src/context.zig` — request context, exposes `.SQL`, `.Cache` (Redis), `.GetService()`
+- **Context**: `src/context.zig` — request context; carries `.SQL`, `.Cache` (Redis), `.Graph` (DGraph), pub/sub + file-store handles, and `.GetService()`
 - **Public import name**: `zero` (consumers do `@import("zero")`)
 
 ### Source layout
 
 | Directory | Purpose |
 |---|---|
-| `src/datasource/` | PostgreSQL (`SQL`), Redis (`rdz`) |
-| `src/pubsub/` | MQTT and Kafka pub/sub |
+| `src/datasource/` | Datasources: SQL (`postgres`/`mysql`/`sqlite`/`duckdb`/`supabase`), NoSQL (`cassandra`/`mongodb`/`couchbase`/`arangodb`), time-series (`influxdb`/`opentsdb`), search (`solr`/`meilisearch`), graph (`dgraph`), Redis (`rdz`) |
+| `src/pubsub/` | Pub/Sub backends: MQTT, Kafka, NATS, Redis, **AWS SQS** (`sqs.zig`), **GCP Pub/Sub** (`gcppubsub.zig`) behind `interface.zig` |
+| `src/filestore/` | File stores: local, S3, Supabase, **GCS** (`gcs.zig`) |
+| `src/aws/` | AWS SigV4 request signing (`sigv4.zig`), reused by S3 + SQS |
+| `src/gcp/` | GCP OAuth2 client-credentials (`oauth.zig`), reused by GCS + Pub/Sub |
 | `src/cronz/` | Cron scheduler and jobs |
 | `src/migration/` | DB migrations and seeding |
-| `src/mw/` | Middleware: auth, tracing (tracz), websocket |
+| `src/mw/` | Middleware: auth, tracing (tracz), websocket, **rate limiting** (`rateLimiter.zig`) |
 | `src/service/` | HTTP client for external services |
 | `src/http/` | Error types |
 | `src/zsutil/` | System utils: memory, cpu, process, host |
@@ -157,6 +161,12 @@ Three dependency imports have non-obvious module names in `build.zig`:
 
 - Loaded from `configs/.env` at startup, with per-environment overrides (e.g. `configs/.dev.env` when `APP_ENV=dev`)
 - All config keys are commented out by default; features activate only when uncommented
+- Recent config additions (all commented out by default):
+  - `RATE_LIMIT_STORE=memory|redis` — distributed rate limiting (`mw/rateLimiter.zig`); `redis` needs `REDIS_HOST`/`REDIS_PORT`.
+  - `DB_DIALECT=supabase` + `SUPABASE_DB_*` (host/project, port, forced SSL) — Supabase SQL reuses the Postgres backend.
+  - `FILE_STORE_BACKEND=supabase|gcs` + `SUPABASE_STORAGE_*` / `GCS_*` (OAuth2 client-credentials) — Supabase Storage reuses the S3 backend; GCS is native.
+  - `PUBSUB_BACKEND=SQS|GCP` + `AWS_*`/`SQS_*` (SigV4) / `GCP_*` (OAuth2) — AWS SQS and Google Pub/Sub pub/sub backends.
+  - `DEFAULT_CASSANDRA_CONNECT_RETRIES` (20) / `DEFAULT_CASSANDRA_CONNECT_BACKOFF_MS` (1000) — Cassandra connect retry window.
 
 ## Deliberate typos in public API (do not "fix")
 
@@ -170,6 +180,8 @@ These are used consistently across the codebase and must be referenced as-is:
 
 13 example apps in `examples/` — each has its own `build.zig.zon` and `build.zig`.
 
+Pub/Sub example configs (`zero-pubsub-publisher`, `zero-pubsub-subscriber`, `zero-kv`, `zero-redis`) document every `PUBSUB_BACKEND` option: MQTT, Kafka, NATS, SQS, GCP.
+
 ## Gotchas
 
 - `rdkafka` is linked as a weak system library — builds fail without `librdkafka-dev`
@@ -177,6 +189,8 @@ These are used consistently across the codebase and must be referenced as-is:
 - Auth modes: `Basic`, `APIKey`, `OAuth` — configured via `AUTH_MODE` env var
 - `src/cronz/scheduler.zig` and `src/mw/authProvider.zig` use `@import("../zero.zig")` (relative path), not `@import("zero")` — the module name form conflicts in test builds
 - `zul.http.Request.header(name, value)` returns an error union — always call it as `try req.header(...)` (the outbound client in `src/service/client.zig` does this)
+- `RATE_LIMIT_STORE=redis` reads `REDIS_HOST`/`REDIS_PORT` (not `REDIS_URL`) — `mw/rateLimiter.zig` borrows the `container.redis` client built from those keys.
+- Hostname resolution: Redis / MySQL / pub-sub-Redis resolve DNS hostnames via `std.Io.net.IpAddress.parse(...) catch resolve(...)`; new client code must do the same rather than `parse`/`parseIp4` (literal-IP only) alone.
 
 ## Zig version compatibility
 

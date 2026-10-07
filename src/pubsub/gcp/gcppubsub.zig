@@ -1,8 +1,8 @@
 const std = @import("std");
-const root = @import("../zero.zig");
+const root = @import("../../zero.zig");
 const zul = root.zul;
 const utils = root.utils;
-const dispatch = @import("dispatch.zig");
+const dispatch = @import("../dispatch.zig");
 
 /// Inbound message surfaced to GCP Pub/Sub subscribe hooks.
 pub const Message = struct {
@@ -13,8 +13,8 @@ pub const Message = struct {
 
 /// GCP Pub/Sub backend over the REST API, authenticated with an OAuth2 bearer
 /// token (fetched via the shared `gcp_oauth` client-credentials helper).
-/// `publish` posts to `topics/<topic>:publish`; `subscribe` spawns a polling
-/// Pull loop that dispatches each message and acknowledges it.
+/// `publish` posts to `topics/<topic>:publish`
+/// `subscribe` spawns a polling pull loop that dispatches each message and acknowledges it.
 pub const GCP = struct {
     allocator: std.mem.Allocator,
     container: ?*root.container = null,

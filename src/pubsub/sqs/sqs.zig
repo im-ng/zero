@@ -1,9 +1,9 @@
 const std = @import("std");
-const root = @import("../zero.zig");
+const root = @import("../../zero.zig");
 const zul = root.zul;
 const utils = root.utils;
-const sigv4 = @import("../aws/sigv4.zig");
-const dispatch = @import("dispatch.zig");
+const sigv4 = @import("../../utils/sigv4.zig");
+const dispatch = @import("../dispatch.zig");
 
 /// Inbound message surfaced to SQS subscribe hooks.
 pub const Message = struct {
@@ -13,9 +13,9 @@ pub const Message = struct {
 };
 
 /// AWS SQS pub/sub backend over the JSON 1.1 protocol (SigV4 header-signed).
-/// `publish` sends `SendMessage`; `subscribe` spawns a long-polling receiver
-/// thread that dispatches each message to the registered hook (with retry/DLQ
-/// via the shared `dispatch.runHook`).
+/// `publish` sends `SendMessage`
+/// `subscribe` spawns a long-polling receiver thread that dispatches
+/// each message to the registered hook (with retry/DLQ via the shared `dispatch.runHook`).
 pub const SQS = struct {
     allocator: std.mem.Allocator,
     container: ?*root.container = null,

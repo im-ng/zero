@@ -46,15 +46,18 @@ test "http request context reclaims all allocations via req.arena" {
     var ca = CountingAllocator.init(da.allocator());
     const alloc = ca.allocator();
     var c = mockContainer(alloc);
-    var req: httpz.Request = undefined;
-    var res: httpz.Response = undefined;
+    // httpz.testing builds a fully-valid Request/Response (the uninitialized
+    // `undefined` pair crashed in Context.init when it read req.header()).
+    const config = httpz.Config{};
+    var t = httpz.testing.init(config);
+    defer t.deinit();
 
     const N: usize = 5000;
     var i: usize = 0;
     while (i < N) : (i += 1) {
         var req_arena = std.heap.ArenaAllocator.init(alloc);
         {
-            var ctx = try Context.init(req_arena.allocator(), &c, &req, &res);
+            var ctx = try Context.init(req_arena.allocator(), &c, t.req, t.res);
             // Simulate a handler that allocates through the context allocator,
             // including the formatting helper used for log lines.
             const buf = try ctx.allocator.alloc(u8, 100);
@@ -76,8 +79,9 @@ test "cron job context reclaims all allocations via per-job child arena" {
     var ca = CountingAllocator.init(da.allocator());
     const alloc = ca.allocator();
     var c = mockContainer(alloc);
-    var req: httpz.Request = undefined;
-    var res: httpz.Response = undefined;
+    const config = httpz.Config{};
+    var t = httpz.testing.init(config);
+    defer t.deinit();
 
     const N: usize = 5000;
     var i: usize = 0;
@@ -85,7 +89,7 @@ test "cron job context reclaims all allocations via per-job child arena" {
         var child = try alloc.create(std.heap.ArenaAllocator);
         child.* = std.heap.ArenaAllocator.init(alloc);
         {
-            var ctx = try Context.init(child.allocator(), &c, &req, &res);
+            var ctx = try Context.init(child.allocator(), &c, t.req, t.res);
             const buf = try ctx.allocator.alloc(u8, 64);
             _ = buf;
             const msg = try utils.combine(ctx.allocator, "cron job {d} ran", .{i});

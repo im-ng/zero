@@ -3,7 +3,7 @@ const root = @import("../zero.zig");
 const zul = root.zul;
 const utils = root.utils;
 const constants = root.constants;
-const sigv4 = @import("../aws/sigv4.zig");
+const sigv4 = @import("../utils/sigv4.zig");
 
 /// S3-compatible object store (MinIO / R2 / Spaces / B2 / AWS S3).
 ///
@@ -304,4 +304,3 @@ pub const FileStoreS3 = struct {
         return out.toOwnedSlice();
     }
 };
-

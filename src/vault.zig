@@ -10,11 +10,11 @@ const zul = @import("zul");
 /// into the process environment. Subsequent datasource wiring (`DB_*`, `REDIS_*`,
 /// ...) then reads credentials that never lived in a file or image. Secret
 /// values are never logged.
-pub fn load(config: *root.config, log: *root.logger, allocator: std.mem.Allocator, io: std.Io) !void {
+pub fn load(allocator: std.mem.Allocator, io: std.Io, config: *root.config, log: *root.logger) !void {
     const addr = config.getOrDefault("VAULT_ADDR", "");
     if (addr.len == 0) return;
 
-    const token = try resolveToken(config, allocator, io, addr);
+    const token = try resolveToken(allocator, io, config, addr);
     if (token.len == 0) {
         log.err("vault: VAULT_ADDR set but no token available (set VAULT_TOKEN or VAULT_ROLE_ID+VAULT_SECRET_ID)");
         return;
@@ -30,7 +30,7 @@ pub fn load(config: *root.config, log: *root.logger, allocator: std.mem.Allocato
     while (it.next()) |raw| {
         const path = std.mem.trim(u8, raw, " ");
         if (path.len == 0) continue;
-        fetchAndMerge(config, log, allocator, io, addr, token, path) catch |err| {
+        fetchAndMerge(allocator, io, config, log, addr, token, path) catch |err| {
             var buf: [256]u8 = undefined;
             const msg = std.fmt.bufPrint(&buf, "vault: failed to load secret path '{s}': {s}", .{ path, @errorName(err) }) catch "vault: failed to load secret path";
             log.err(msg);
@@ -43,7 +43,7 @@ pub fn load(config: *root.config, log: *root.logger, allocator: std.mem.Allocato
     log.info(loaded);
 }
 
-fn resolveToken(config: *root.config, allocator: std.mem.Allocator, io: std.Io, addr: []const u8) ![]const u8 {
+fn resolveToken(allocator: std.mem.Allocator, io: std.Io, config: *root.config, addr: []const u8) ![]const u8 {
     const explicit = config.getOrDefault("VAULT_TOKEN", "");
     if (explicit.len > 0) return explicit;
 
@@ -84,7 +84,7 @@ fn appRoleLogin(allocator: std.mem.Allocator, io: std.Io, addr: []const u8, role
     return allocator.dupe(u8, token_v.string);
 }
 
-fn fetchAndMerge(config: *root.config, log: *root.logger, allocator: std.mem.Allocator, io: std.Io, addr: []const u8, token: []const u8, path: []const u8) !void {
+fn fetchAndMerge(allocator: std.mem.Allocator, io: std.Io, config: *root.config, log: *root.logger, addr: []const u8, token: []const u8, path: []const u8) !void {
     const url = try std.fmt.allocPrint(allocator, "{s}/v1/{s}", .{ addr, path });
     defer allocator.free(url);
 

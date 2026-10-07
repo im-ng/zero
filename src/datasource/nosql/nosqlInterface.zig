@@ -79,7 +79,7 @@ pub const NoSQL = struct {
     pub fn build(container: *root.container, backend: Backend, opts: Options) !*NoSQL {
         const impl: *anyopaque = switch (backend) {
             .cassandra => blk: {
-                const c = try root.NoSQLBackend.create(container.allocator, .{
+                const c = try root.Cassandra.create(container.allocator, .{
                     .contact_points = opts.contact_points,
                     .keyspace = opts.keyspace,
                     .user = opts.user,
@@ -132,7 +132,7 @@ pub const NoSQL = struct {
     pub fn deinit(self: *NoSQL, allocator: std.mem.Allocator) void {
         switch (self.backend) {
             .cassandra => {
-                const c = @as(*root.NoSQLBackend, @ptrCast(@alignCast(self.ptr)));
+                const c = @as(*root.Cassandra, @ptrCast(@alignCast(self.ptr)));
                 c.conn.deinit();
                 allocator.destroy(c);
             },
@@ -165,7 +165,7 @@ pub const NoSQL = struct {
         }
         const start = utils.nowMonotonic();
         const r = switch (self.backend) {
-            .cassandra => @as(*root.NoSQLBackend, @ptrCast(@alignCast(self.ptr))).get(ctx, statement),
+            .cassandra => @as(*root.Cassandra, @ptrCast(@alignCast(self.ptr))).get(ctx, statement),
             .couchbase => @as(*root.Couchbase, @ptrCast(@alignCast(self.ptr))).get(ctx, statement),
             .mongodb => @as(*root.MongoDB, @ptrCast(@alignCast(self.ptr))).get(ctx, statement),
             .arangodb => @as(*root.ArangoDB, @ptrCast(@alignCast(self.ptr))).get(ctx, statement),
@@ -191,7 +191,7 @@ pub const NoSQL = struct {
         }
         const start = utils.nowMonotonic();
         const r = switch (self.backend) {
-            .cassandra => @as(*root.NoSQLBackend, @ptrCast(@alignCast(self.ptr))).put(ctx, statement),
+            .cassandra => @as(*root.Cassandra, @ptrCast(@alignCast(self.ptr))).put(ctx, statement),
             .couchbase => @as(*root.Couchbase, @ptrCast(@alignCast(self.ptr))).put(ctx, statement),
             .mongodb => @as(*root.MongoDB, @ptrCast(@alignCast(self.ptr))).put(ctx, statement),
             .arangodb => @as(*root.ArangoDB, @ptrCast(@alignCast(self.ptr))).put(ctx, statement),
@@ -217,7 +217,7 @@ pub const NoSQL = struct {
         }
         const start = utils.nowMonotonic();
         const r = switch (self.backend) {
-            .cassandra => @as(*root.NoSQLBackend, @ptrCast(@alignCast(self.ptr))).delete(ctx, statement),
+            .cassandra => @as(*root.Cassandra, @ptrCast(@alignCast(self.ptr))).delete(ctx, statement),
             .couchbase => @as(*root.Couchbase, @ptrCast(@alignCast(self.ptr))).delete(ctx, statement),
             .mongodb => @as(*root.MongoDB, @ptrCast(@alignCast(self.ptr))).delete(ctx, statement),
             .arangodb => @as(*root.ArangoDB, @ptrCast(@alignCast(self.ptr))).delete(ctx, statement),
@@ -244,7 +244,7 @@ pub const NoSQL = struct {
         }
         const start = utils.nowMonotonic();
         const r = switch (self.backend) {
-            .cassandra => @as(*root.NoSQLBackend, @ptrCast(@alignCast(self.ptr))).query(ctx, statement),
+            .cassandra => @as(*root.Cassandra, @ptrCast(@alignCast(self.ptr))).query(ctx, statement),
             .couchbase => @as(*root.Couchbase, @ptrCast(@alignCast(self.ptr))).query(ctx, statement),
             .mongodb => @as(*root.MongoDB, @ptrCast(@alignCast(self.ptr))).query(ctx, statement),
             .arangodb => @as(*root.ArangoDB, @ptrCast(@alignCast(self.ptr))).query(ctx, statement),

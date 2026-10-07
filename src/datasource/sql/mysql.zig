@@ -5,12 +5,9 @@ const root = @import("../../zero.zig");
 // auth). No native driver or C library is required, mirroring the framework's
 // other vendored backends (ClickHouse/DuckGres over pure-Zig clients).
 //
-// Scope for the stable gate: a single shared connection (one command at a
-// time), COM_QUERY text protocol, reflection-based row decode, basic
+// a single shared connection (one command at a time),
+// COM_QUERY text protocol, reflection-based row decode, basic
 // transactions (BEGIN/COMMIT/ROLLBACK), lastInsertRowID and rowsAffected.
-// Prepared statements, SSL, and connection pooling are deliberately out of
-// scope for now (documented limitation, see parity report Phase 1).
-
 pub const MySQL = struct {
     allocator: std.mem.Allocator,
     io: std.Io,
@@ -47,7 +44,8 @@ pub const MySQL = struct {
         password: []const u8,
         database: []const u8,
     ) !*Self {
-        const addr = try std.Io.net.IpAddress.parse(host, port);
+        const addr = std.Io.net.IpAddress.parse(host, port) catch
+            try std.Io.net.IpAddress.resolve(io, host, port);
         const conn = try addr.connect(io, .{ .mode = .stream });
 
         const recv_buf = try allocator.alloc(u8, 1 << 16);

@@ -284,8 +284,9 @@ test "redis kvstore concurrent set/get (mutex serialization)" {
     const port = std.fmt.parseInt(u16, envOr(allocator, "REDIS_PORT", "6379"), 10) catch 6379;
     const password = envOr(allocator, "REDIS_PASSWORD", "");
 
-    const addr = std.Io.net.IpAddress.parseIp4(host, port) catch {
-        std.debug.print("redis address parse failed, skipping redis concurrency test\n", .{});
+    const addr = std.Io.net.IpAddress.parse(host, port) catch
+        std.Io.net.IpAddress.resolve(root.utils.io, host, port) catch {
+        std.debug.print("redis address resolve failed, skipping redis concurrency test\n", .{});
         return;
     };
     const connection = addr.connect(root.utils.io, .{ .mode = .stream }) catch {

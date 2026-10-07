@@ -1,84 +1,96 @@
-# Feature Parity
+# Feature Coverage — `zero`
 
-`zero` framework comes with the following features out-of-box for quick development.
+`zero` framework comes with the following features out-of-box for quick development. Instead of developing and integrating with boilerplate, an app developer can immediately focus on business logic.
 
-Instead of developing and integrating with these boilerplates, an app developer can immediately focus on the business logic.
-
-- ✅ 12 factor app methodology
+- ✅ 12-factor app methodology
   - ✅ Load default `.env` for app startup
   - ✅ Override them per environment
 - ✅ REST Standard
   - ✅ Build CRUD endpoints
+  - ✅ Auto REST CRUD (`addRestHandlers`)
 - ✅ Health and Service check
-  - ✅ Live
-  - ✅ Status
+  - ✅ Live (`/.well-known/live`)
+  - ✅ Health (`/.well-known/health`)
+  - ✅ Startup (`/.well-known/startup`)
+  - ✅ Downstream-service health aggregation (auto-ping `addHttpService`)
 - ✅ Serve static files
   - ✅ Serve static files from registered directory
   - ✅ Serve swagger and openapi spec
 - ✅ Metrics tracking
   - ✅ Default metrics
-    - ✅ App Status
-    - ✅ Http Status
-    - ✅ SQL Status
-    - ✅ KV Status
-    - ✅ Pub/Sub Status (publish / subscribe / DLQ)
+    - ✅ app / http / sql / kv / pub/sub / cron
+    - ✅ circuit-breaker / retry
   - ✅ Register custom metrics (Counter / Gauge / Histogram)
-  - ✅ Process stats
-  - ✅ Memory stats
+  - ✅ Process / memory stats
+  - ✅ Metrics cardinality limit (`METRICS_CARDINALITY_LIMIT`)
 - ✅ Traceability
-  - ✅ Basic (X-Correlation-ID)
-  - ✅ Downstream propagation (outbound HTTP + Kafka/NATS headers)
-  - ⬜ Open Telemetry
-- ✅ Well structured logging mechanism
-  - ✅ UTC Timezone
-  - ✅ Custom Timezone (`ZERO_LOG_TIMEZONE`: local / utc / IANA)
+- ✅ Basic (X-Correlation-ID)
+- ✅ Downstream propagation
+  - ✅ outbound HTTP
+  - ✅ Kafka / NATS headers
+- ✅ Open Telemetry (traces + logs; OTLP exporter)
+  - ✅ Configured via **OTEL-standard** env vars
+  - ✅ `OTEL_EXPORTER_OTLP_ENDPOINT` (exporter URL)
+  - ✅ `OTEL_TRACES_SAMPLER` / `OTEL_TRACES_SAMPLER_ARG` (sampling ratio)
+  - ✅ `OTEL_EXPORTER_OTLP_HEADERS`
+  - ✅ `OTEL_EXPORTER_OTLP_AUTH_HEADER` (custom headers / auth)
+- ✅ W3C Baggage propagation
+- ✅ Full async OTel span propagation across pub/sub
+- ✅ Well structured logging
+  - ✅ UTC / custom timezone (`ZERO_LOG_TIMEZONE`)
   - ✅ JSON structured logging (`LOG_FORMAT=json`)
   - ✅ Remote log-level pull (`REMOTE_LOG_URL`)
 - ✅ Middleware
   - ✅ CORS
   - ✅ TraceID
   - ✅ Logging
+  - ✅ custom middleware
   - ✅ Auth
-    - ✅ Basic credentials
-      - ✅ Config Mode
-      - ⬜ KV mode
-    - ✅ API Key
-      - ✅ Config Mode
-      - ⬜ KV mode
-    - ✅ OAuth Key
-      - ✅ Register OAuth Provider
-      - ✅ Refresh Public Keys
-        - ⬜ Client became unresponsive if the external service down
-        - ⬜ Health check
-        - ⬜ Surge and Circuit breaker
-      - ✅ Validate claims
-  - ✅ RBAC (config-driven roles/permissions from JWT claims)
+    - ✅ Basic credentials (config mode; **KV mode ✅**)
+    - ✅ API Key (config mode; **KV mode ✅**)
+    - ✅ OAuth Key (register provider, refresh JWKS, validate claims; **JWKS-refresh resilience ✅**)
+    - ✅ RBAC (config-driven roles/permissions from JWT claims)
   - ✅ Rate Limiter
-    - ✅ IP / header / custom key modes
-    - ✅ Fixed-window (`RATE_LIMIT_*`) (GoFr uses token-bucket)
+    - ✅ Inbound (fixed-window; the common alternative is token-bucket)
+    - ✅ Downstream per-service (Redis-backed distributed limiter — `RATE_LIMIT_STORE=redis`)
 - ✅ Panic recovery
-- ✅ Handle Error response
-  - ✅ Custom Errors
+- ✅ Handle Error response (custom errors)
 - ✅ Database support
-  - ✅ `postgres`
-    - ✅ TLS Support (`DB_SSL_MODE`)
+  - ✅ `postgres` (TLS `DB_SSL_MODE`)
   - ✅ `sqlite`
   - ✅ `duckdb` (in-process OLAP, unified `ctx.SQL`)
-  - ✅ `redis`
-    - ✅ Authentication enabled
-  - ✅ `mqtt`
-  - ✅ `kafka`
-    - ✅ `rdkafka` driver integrated
-    - ⬜ Support for multiple topics subscription
-    - ✅ Support for metrics (publish / subscribe / DLQ)
-    - ✅ Reconnect + resubscribe, retry, dead-letter (DLQ)
-  - ✅ `redis` (Pub/Sub)
-- ✅ NoSQL (wide-column / document)
+  - ✅ `clickhouse`
   - ✅ `cassandra` (`ctx.NoSQL`)
+  - ✅ `couchbase` (`ctx.NoSQL`, N1QL/HTTP)
+  - ✅ `mongodb` (`ctx.NoSQL`)
+  - ✅ `mysql` / `mariadb` (`DB_DIALECT=mysql`)
+  - ⬜ MySQL `DBResolver` (read/write splitting)
+  - ✅ CockroachDB (Postgres wire-compat, reuse `postgres`)
+  - ✅ ScyllaDB (CQL/Cassandra wire-compat, reuse `cassandra`)
+  - ✅ OpenTSDB (`ctx.Timeseries`, HTTP/JSON)
+  - ✅ ArangoDB (`ctx.NoSQL`, AQL)
+  - ✅ DGraph (`ctx.Graph`, HTTP)
+  - ⬜ Elasticsearch / SurrealDB
+- ✅ Cache
+  - ✅ `redis`
+    - ✅ cache / KV
+    - ✅ TLS
+    - ✅ auth
+- ✅ Pub/Sub - Messaging Queue
+  - ✅ `mqtt`
+  - ✅ `kafka` (rdkafka; **multi-topic subscription ✅**)
+  - ✅ `NATS` (publisher / subscriber)
+  - ✅ `redis` (Pub/Sub)
+  - ✅ `sqs` (AWS SQS, SigV4)
+  - ✅ `gcppubsub` (Google Pub/Sub, OAuth2 bearer)
+- ✅ NoSQL (wide-column / document)
+  - ✅ `cassandra`
+  - ✅ `couchbase`
+  - ✅ `mongodb`
 - ✅ Time-series
   - ✅ `influxdb` (`ctx.Timeseries`, Flux + line protocol)
 - ✅ Search
-  - ✅ `solr` (`ctx.Search`, index / query / get / delete)
+  - ✅ `solr` (`ctx.Search`)
 - ✅ KV Store
   - ✅ `redis`
   - ✅ `nats_kv`
@@ -86,60 +98,50 @@ Instead of developing and integrating with these boilerplates, an app developer 
   - ✅ `sqlite`
 - ✅ File Store
   - ✅ `local`
-  - ✅ `s3` (S3-compatible: MinIO / R2 / Spaces / B2)
+  - ✅ `s3` (S3-compatible: MinIO / R2 / Spaces / B2, and AWS S3)
+  - ✅ `supabase` (S3-compatible API; `FILE_STORE_BACKEND=supabase`)
+  - ✅ `gcs` (native OAuth2; `FILE_STORE_BACKEND=gcs`)
   - ⬜ `ftp` (deferred — no vendored Zig lib)
   - ⬜ `sftp` (deferred — needs libssh)
-- ✅ Database Migrations
-- ✅ Seed data on App startup
-- ✅ Auto CRUD
-  - ✅ Register resource handlers (`addRestHandlers`)
-  - ✅ ID / UUID / custom key modes
+- ✅ Database Migrations + Seed on startup
+- ✅ Auto CRUD (`addRestHandlers`)
+  - ✅ ID mode
+  - ✅ UUID mode
+  - ✅ custom key modes
 - ✅ HTTP Client
-  - ✅ Register one or more external http/https client
-  - ✅ Handle redirection
-  - ✅ Handle CRUD operations
-  - ✅ Handle on-fly response transformation
-  - ✅ Outbound authentication (Basic, API Key, OAuth 2.0 bearer)
+  - ✅ Register one or more external clients
+  - ✅ Redirection, CRUD, on-fly response transformation
+  - ✅ Outbound auth (Basic, API Key, OAuth 2.0 bearer)
   - ✅ Circuit Breaker (closed → open → half-open)
   - ✅ Per-service Rate Limiting
   - ✅ Retry (transport + 5xx; OAuth 401 token-refresh replay)
 - ✅ Cron Jobs
-  - ✅ `* * * * *` format support
-  - ✅ Enable second-level executions `* * * * * *`
-  - ✅ `*/2` split support
-  - ✅ `1-31` ranges support (day/hour/minute)
-  - ✅ Support for multiple task executions
+  - ✅ `* * * * *` standard schedule
+  - ✅ seconds precision
+  - ✅ ranges
+  - ✅ multi schedules
 - ✅ Websocket
 - ✅ GraphQL-over-HTTP
-  - ✅ POST with JSON body (`query`, `variables`, `operationName`)
-  - ✅ GET with URL query params (`?query=...&variables=...&operationName=...`)
-  - ✅ Schema-less resolver graph execution
-  - ✅ Mutations / CRUD operations
-  - ✅ Constant field values
-  - ✅ Function resolvers (`fn (*Context, Args) anyerror!T`)
-  - ✅ Argument coercion (Int, Float, String, Boolean, Enum, Object)
-  - ✅ Nested objects & lists
-  - ✅ Fragments & inline fragments
-  - ✅ Per-field error collection (`data` + `errors`)
+  - ✅ POST/GET, schema-less resolvers, mutations, fragments, per-field errors
+  - ✅ GraphQL operation metrics
   - ⬜ SDL schema definition & validation
   - ⬜ Introspection (`__schema` / `__type`)
   - ⬜ Subscriptions (WebSocket)
-- ✅ NATS
-  - ✅ Publisher
-  - ✅ Subscriber
-- ✅ Protobuf support
-  - ✅ Decode request bodies (`ctx.bindProto(T)` for `application/x-protobuf`)
-  - ✅ Encode responses (`ctx.protobuf(data)`)
-  - ✅ Codegen from `.proto` via `zig build gen-proto` (protoc)
-  - ✅ Hand-written messages via the `protobuf` `encode`/`decode` primitives
+- ✅ Protobuf support (decode/encode, `zig build gen-proto`, hand-written primitives)
 - ✅ Protocol Buffers over HTTP
-- ✅ CLI Application
-- ✅ Memory leaks
-  - ✅ Cronz
-  - ✅ Context
-  - ✅ Container
-- ✅ Interface (type-erased)
-  - ✅ Pubsub
-  - ✅ SQL
-  - ✅ Cache (redis / nats-kv / memory / sqlite)
-- ⬜ TLS
+- ✅ CLI Application (`src/cli.zig`)
+- ✅ Memory-leak hardening (cronz, context, container)
+- ✅ Interface (type-erased): Pubsub, SQL, Cache (redis/nats-kv/memory/sqlite)
+- ✅ Graceful shutdown (bounded drain deferred — open hardening)
+- ✅ HTTP `QUERY` method (RFC 10008)
+- ✅ Secret management (Vault) — **STABLE**
+- ⬜ HTTPS / TLS termination (run behind proxy; low priority)
+
+## Microservices maturity (future work)
+
+- ⬜ Service discovery / registry (k8s-DNS + optional Consul)
+- ✅ Distributed (Redis-backed) rate limiting (`RATE_LIMIT_STORE=redis`)
+- ⬜ Transactional outbox / reliable event publishing
+- ⬜ Leader election / distributed locking
+- ⬜ Dynamic config / feature flags
+- ⬜ Contract testing

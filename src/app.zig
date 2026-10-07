@@ -106,7 +106,7 @@ fn initBase(allocator: std.mem.Allocator, io: std.Io, em: *EnvMap) !*App {
 
     // Vault secret injection (no-op when VAULT_ADDR is unset). Must run before
     // container.create so datasources can read credentials from the environment.
-    try root.vault.load(config, log, allocator, io);
+    try root.vault.load(allocator, io, config, log);
 
     // One fixed region, sized by ZERO_FRAMEWORK_MEM_SIZE (MiB, default 8), holding
     // all framework-internal bootstrap allocations. It is never tied to a request

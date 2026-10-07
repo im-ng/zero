@@ -77,6 +77,10 @@ pub const DEFAULT_CB_HALF_OPEN_TRIALS: u32 = 1;
 pub const DEFAULT_PUBSUB_MAX_ATTEMPTS: u32 = 3;
 pub const DEFAULT_PUBSUB_BACKOFF_MS: i64 = 500;
 
+// --- Cassandra startup (native-protocol port can lag the healthcheck) -----
+pub const DEFAULT_CASSANDRA_CONNECT_RETRIES: u32 = 20;
+pub const DEFAULT_CASSANDRA_CONNECT_BACKOFF_MS: i64 = 1_000;
+
 // --- Kafka / filestore / context ------------------------------------------
 pub const DEFAULT_KAFKA_FLUSH_MS: u32 = 60_000;
 pub const DEFAULT_KAFKA_BATCH_SIZE: u32 = 100;
