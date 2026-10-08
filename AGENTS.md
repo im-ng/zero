@@ -167,6 +167,7 @@ Three dependency imports have non-obvious module names in `build.zig`:
   - `FILE_STORE_BACKEND=supabase|gcs` + `SUPABASE_STORAGE_*` / `GCS_*` (OAuth2 client-credentials) — Supabase Storage reuses the S3 backend; GCS is native.
   - `PUBSUB_BACKEND=SQS|GCP` + `AWS_*`/`SQS_*` (SigV4) / `GCP_*` (OAuth2) — AWS SQS and Google Pub/Sub pub/sub backends.
   - `DEFAULT_CASSANDRA_CONNECT_RETRIES` (20) / `DEFAULT_CASSANDRA_CONNECT_BACKOFF_MS` (1000) — Cassandra connect retry window.
+  - `DB_DIALECT=mysql` + `MYSQL_*` — pure-Zig MySQL/MariaDB client. `MYSQL_SSL_MODE` (`disabled`/`preferred`/`required`; `required` encrypts, `MYSQL_SSL_CA` verifies server cert+host) and `MYSQL_POOL_SIZE` (default 10, connection pool + per-request sessions in `datasource/sql/mysql.zig`).
 
 ## Deliberate typos in public API (do not "fix")
 

@@ -2,29 +2,67 @@ const std = @import("std");
 const root = @import("../../zero.zig");
 
 // Pure-Zig MySQL / MariaDB client (text protocol, `mysql_native_password`
-// auth). No native driver or C library is required, mirroring the framework's
-// other vendored backends (ClickHouse/DuckGres over pure-Zig clients).
+// auth). No native driver or C library is required.
 //
-// a single shared connection (one command at a time),
-// COM_QUERY text protocol, reflection-based row decode, basic
-// transactions (BEGIN/COMMIT/ROLLBACK), lastInsertRowID and rowsAffected.
-pub const MySQL = struct {
+// Two layers:
+//   * `Connection` — one TCP socket (optionally upgraded to TLS via
+//     `std.crypto.tls.Client`) speaking the COM_QUERY text protocol, with
+//     reflection-based row decode, basic transactions, lastInsertRowID and
+//     rowsAffected. This is the unit of a connection pool.
+//   * `MySQL` — a thread-safe connection pool AND a per-request session. The
+//     same struct serves both roles (mirroring the Postgres `SQL` wrapper):
+//     when `conn == null` and `pool == null` it is the top-level pool; when
+//     `conn != null` and `pool != null` it is a borrowed session that pins one
+//     connection for a transaction. `ctx.SQL` for MySQL is a per-request
+//     session so concurrent requests never share a socket or a transaction.
+
+const capProtocol41: u32 = 0x200;
+const capSecureConnection: u32 = 0x8000;
+const capPluginAuth: u32 = 0x800000;
+const capConnectWithDb: u32 = 0x8;
+// Request a TLS upgrade after the initial handshake. The auth credentials are
+// still sent in the (cleartext) SSL-request packet, which is the de-facto
+// behaviour of the reference Go driver; the TLS handshake immediately follows
+// and all subsequent traffic is encrypted.
+const capSsl: u32 = 0x0800;
+
+pub const Config = struct {
+    host: []const u8,
+    port: u16,
+    user: []const u8,
+    password: []const u8,
+    database: []const u8,
+    ssl_mode: MySQL.SslMode = .disabled,
+    ssl_ca: ?[]const u8 = null,
+    max: usize = 10,
+};
+
+// One live MySQL connection: a socket (optionally wrapped in TLS) plus the
+// protocol state for a single serialized command stream.
+pub const Connection = struct {
     allocator: std.mem.Allocator,
     io: std.Io,
-    conn: std.Io.net.Stream,
-    reader: std.Io.net.Stream.Reader,
+    stream: std.Io.net.Stream,
+    socket_reader: std.Io.net.Stream.Reader,
+    socket_writer: std.Io.net.Stream.Writer,
     recv_buf: []u8,
     send_buf: []u8,
+    tls_client: ?std.crypto.tls.Client = null,
+    tls_read_buf: []u8 = &[_]u8{},
+    tls_write_buf: []u8 = &[_]u8{},
+    // Active read/write interfaces. Point at the socket until TLS is negotiated,
+    // then at the TLS client. All packet I/O goes through these so the rest of
+    // the protocol code is TLS-agnostic.
+    read_if: *std.Io.Reader,
+    write_if: *std.Io.Writer,
+    ca_bundle: std.crypto.Certificate.Bundle = .empty,
+    ca_lock: std.Io.RwLock = .init,
     seq: u8,
     last_insert_id: i64,
     rows_affected: usize,
+    connected: bool = false,
 
     const Self = @This();
-
-    const capProtocol41: u32 = 0x200;
-    const capSecureConnection: u32 = 0x8000;
-    const capPluginAuth: u32 = 0x800000;
-    const capConnectWithDb: u32 = 0x8;
 
     const Result = struct {
         rows: [][]const u8,
@@ -35,46 +73,78 @@ pub const MySQL = struct {
         scramble: [20]u8,
     };
 
-    pub fn connect(
-        allocator: std.mem.Allocator,
-        io: std.Io,
-        host: []const u8,
-        port: u16,
-        user: []const u8,
-        password: []const u8,
-        database: []const u8,
-    ) !*Self {
-        const addr = std.Io.net.IpAddress.parse(host, port) catch
-            try std.Io.net.IpAddress.resolve(io, host, port);
-        const conn = try addr.connect(io, .{ .mode = .stream });
+    // Establish a connection, performing the handshake (and TLS upgrade when
+    // `cfg.ssl_mode` is not `disabled`). For `preferred`, a TLS failure falls
+    // back to a plaintext connection; for `required`, the error is propagated.
+    // Connections are created lazily by the pool during request handling, so the
+    // io loop is running and async DNS/connect resolve correctly.
+    pub fn connect(allocator: std.mem.Allocator, io: std.Io, cfg: Config) !*Self {
+        if (cfg.ssl_mode == .disabled) return connectAttempt(allocator, io, cfg);
+        const conn = connectAttempt(allocator, io, cfg) catch |err| {
+            if (cfg.ssl_mode == .preferred) {
+                var fallback = cfg;
+                fallback.ssl_mode = .disabled;
+                return connectAttempt(allocator, io, fallback);
+            }
+            return err;
+        };
+        return conn;
+    }
+
+    fn connectAttempt(allocator: std.mem.Allocator, io: std.Io, cfg: Config) !*Self {
+        const addr = std.Io.net.IpAddress.parse(cfg.host, cfg.port) catch
+            try std.Io.net.IpAddress.resolve(io, cfg.host, cfg.port);
+        const stream = try addr.connect(io, .{ .mode = .stream });
 
         const recv_buf = try allocator.alloc(u8, 1 << 16);
         const send_buf = try allocator.alloc(u8, 1 << 16);
         const self = try allocator.create(Self);
-        self.* = .{
+        self.* = Self{
             .allocator = allocator,
             .io = io,
-            .conn = conn,
+            .stream = stream,
             .recv_buf = recv_buf,
             .send_buf = send_buf,
             .seq = 0,
             .last_insert_id = 0,
             .rows_affected = 0,
-            .reader = conn.reader(io, recv_buf),
+            .connected = false,
+            .tls_client = null,
+            .tls_read_buf = &[_]u8{},
+            .tls_write_buf = &[_]u8{},
+            .read_if = undefined,
+            .write_if = undefined,
+            .socket_reader = undefined,
+            .socket_writer = undefined,
+            .ca_bundle = .empty,
+            .ca_lock = .init,
         };
-        try self.handshake(user, password, database);
+        self.socket_reader = stream.reader(io, recv_buf);
+        self.socket_writer = stream.writer(io, send_buf);
+        self.read_if = &self.socket_reader.interface;
+        self.write_if = &self.socket_writer.interface;
+
+        self.handshake(cfg) catch |err| {
+            self.deinit();
+            return err;
+        };
+        self.connected = true;
         return self;
     }
 
-    fn handshake(self: *Self, user: []const u8, password: []const u8, database: []const u8) !void {
+    fn handshake(self: *Self, cfg: Config) !void {
         const packet = try self.readPacket();
         defer self.allocator.free(packet);
         const hs = try self.parseHandshake(packet);
 
-        self.seq = 1;
-        const resp = try self.buildHandshakeResponse(&hs, user, password, database);
+        const with_ssl = cfg.ssl_mode != .disabled;
+        const resp = try self.buildHandshakeResponse(&hs, cfg.user, cfg.password, cfg.database, with_ssl);
         defer self.allocator.free(resp);
         try self.writePacket(resp);
+
+        if (with_ssl) {
+            try self.setupTls(cfg);
+        }
 
         const auth_result = try self.readPacket();
         defer self.allocator.free(auth_result);
@@ -83,6 +153,46 @@ pub const MySQL = struct {
         if (t == 0xFF) return error.MySqlAccessDenied;
         if (t == 0x01) return error.MySqlAuthMore;
         if (t != 0x00) return error.MySqlProtocol;
+    }
+
+    // Upgrade the active socket to TLS. The ClientHello is written during
+    // `crypto.tls.Client.init`; the first subsequent read completes the
+    // handshake and decrypts the server's auth result.
+    fn setupTls(self: *Self, cfg: Config) !void {
+        const tls_size = std.crypto.tls.Client.min_buffer_len;
+        self.tls_read_buf = try self.allocator.alloc(u8, tls_size + (1 << 16));
+        self.tls_write_buf = try self.allocator.alloc(u8, tls_size + (1 << 16));
+
+        var rand: [std.crypto.tls.Client.Options.entropy_len]u8 = undefined;
+        self.io.random(&rand);
+        const now = std.Io.Timestamp.now(self.io, .real);
+
+        // When a CA path is supplied we verify the server cert (and hostname);
+        // otherwise we accept the cert without verification (the channel is
+        // still encrypted). Prefer setting MYSQL_SSL_CA in production.
+        self.tls_client = try std.crypto.tls.Client.init(
+            &self.socket_reader.interface,
+            &self.socket_writer.interface,
+            .{
+                .host = if (cfg.ssl_ca != null) .{ .explicit = cfg.host } else .no_verification,
+                .ca = if (cfg.ssl_ca) |ca_path| blk: {
+                    try self.ca_bundle.addCertsFromFilePathAbsolute(self.allocator, self.io, now, ca_path);
+                    break :blk .{ .bundle = .{
+                        .gpa = self.allocator,
+                        .io = self.io,
+                        .lock = &self.ca_lock,
+                        .bundle = &self.ca_bundle,
+                    } };
+                } else .no_verification,
+                .write_buffer = self.tls_write_buf,
+                .read_buffer = self.tls_read_buf,
+                .entropy = &rand,
+                .realtime_now = now,
+                .allow_truncation_attacks = true,
+            },
+        );
+        self.read_if = &self.tls_client.?.reader;
+        self.write_if = &self.tls_client.?.writer;
     }
 
     fn parseHandshake(self: *Self, packet: []const u8) !Handshake {
@@ -111,8 +221,12 @@ pub const MySQL = struct {
         user: []const u8,
         password: []const u8,
         database: []const u8,
+        with_ssl: bool,
     ) ![]u8 {
         var cap: u32 = capProtocol41 | capSecureConnection | capPluginAuth;
+        if (with_ssl) {
+            cap |= capSsl;
+        }
         if (database.len > 0) {
             cap |= capConnectWithDb;
         }
@@ -178,14 +292,13 @@ pub const MySQL = struct {
 
     fn readPacket(self: *Self) ![]u8 {
         var hdr: [4]u8 = undefined;
-        const rdr = &self.reader.interface;
-        try rdr.readSliceAll(&hdr);
+        try self.read_if.readSliceAll(&hdr);
         const len: u32 = @as(u32, hdr[0]) |
             (@as(u32, hdr[1]) << 8) |
             (@as(u32, hdr[2]) << 16);
         self.seq = hdr[3];
         if (len == 0) return &[_]u8{};
-        return try rdr.readAlloc(self.allocator, len);
+        return try self.read_if.readAlloc(self.allocator, len);
     }
 
     fn writePacket(self: *Self, payload: []const u8) !void {
@@ -197,10 +310,9 @@ pub const MySQL = struct {
         hdr[3] = self.seq;
         self.seq +%= 1;
 
-        var w = self.conn.writer(self.io, self.send_buf);
-        try w.interface.writeAll(&hdr);
+        try self.write_if.writeAll(&hdr);
         if (payload.len > 0) {
-            try w.interface.writeAll(payload);
+            try self.write_if.writeAll(payload);
         }
     }
 
@@ -379,82 +491,204 @@ pub const MySQL = struct {
         return try list.toOwnedSlice(self.allocator);
     }
 
-    fn appendLiteral(allocator: std.mem.Allocator, buf: *std.ArrayList(u8), value: anytype) !void {
-        const T = @TypeOf(value);
-        const ti = @typeInfo(T);
-        if (ti == .optional) {
-            if (value) |v| {
-                try appendLiteral(allocator, buf, v);
-            }
-            return;
-        }
-        switch (ti) {
-            .pointer => |p| {
-                const is_u8_seq = if (p.child == u8) true else blk: {
-                    const ci = @typeInfo(p.child);
-                    break :blk switch (ci) {
-                        .array => |a| a.child == u8,
-                        else => false,
-                    };
-                };
-                if (is_u8_seq) {
-                    const s: []const u8 = if (p.size == .slice) value else value[0..];
-                    try buf.appendSlice(allocator, s);
-                } else {
-                    @compileError("unsupported interpolation pointer: " ++ @typeName(@TypeOf(value)));
-                }
-            },
-            .int, .float => {
-                var tmp: [48]u8 = undefined;
-                const s = std.fmt.bufPrint(&tmp, "{d}", .{value}) catch "0";
-                try buf.appendSlice(allocator, s);
-            },
-            .bool => {
-                try buf.appendSlice(allocator, if (value) "1" else "0");
-            },
-            else => @compileError("unsupported interpolation type: " ++ @typeName(T)),
-        }
-    }
-
-    fn interpolateSql(self: *Self, comptime stmt: []const u8, args: anytype) ![]const u8 {
-        const ArgIndex = comptime blk: {
-            var arr: [stmt.len]?usize = undefined;
-            var counter: usize = 0;
-            var k: usize = 0;
-            while (k < stmt.len) : (k += 1) {
-                if (stmt[k] == '?') {
-                    arr[k] = counter;
-                    counter += 1;
-                } else {
-                    arr[k] = null;
-                }
-            }
-            break :blk arr;
-        };
-        var buf: std.ArrayList(u8) = .empty;
-        inline for (stmt, ArgIndex) |ch, maybe_ai| {
-            if (ch == '?') {
-                const v = args[maybe_ai.?];
-                try appendLiteral(self.allocator, &buf, v);
-            } else {
-                try buf.append(self.allocator, ch);
-            }
-        }
-        return try buf.toOwnedSlice(self.allocator);
-    }
-
     pub fn queryRows(
         self: *Self,
-        ctx: *root.Context,
         comptime Type: type,
         comptime stmt: []const u8,
         args: anytype,
     ) ![]Type {
-        _ = ctx;
-        const q = try self.interpolateSql(stmt, args);
+        const q = try interpolateSql(self.allocator, stmt, args);
         defer self.allocator.free(q);
         const res = try self.execInternal(q, false);
         return try self.decodeRows(Type, res);
+    }
+
+    pub fn exec(self: *Self, comptime stmt: []const u8, args: anytype) !i64 {
+        const q = try interpolateSql(self.allocator, stmt, args);
+        defer self.allocator.free(q);
+        const res = try self.execInternal(q, false);
+        return @intCast(res.affected);
+    }
+
+    pub fn deinit(self: *Self) void {
+        if (self.connected) {
+            self.stream.close(self.io);
+        }
+        self.allocator.free(self.recv_buf);
+        self.allocator.free(self.send_buf);
+        if (self.tls_read_buf.len > 0) {
+            self.allocator.free(self.tls_read_buf);
+        }
+        if (self.tls_write_buf.len > 0) {
+            self.allocator.free(self.tls_write_buf);
+        }
+        self.ca_bundle.deinit(self.allocator);
+        self.allocator.destroy(self);
+    }
+};
+
+// Thread-safe connection pool and per-request session for MySQL. See the module
+// doc comment for the dual role of this struct.
+pub const MySQL = struct {
+    pub const SslMode = enum {
+        disabled,
+        preferred,
+        required,
+    };
+
+    allocator: std.mem.Allocator,
+    io: std.Io,
+    host: []const u8,
+    port: u16,
+    user: []const u8,
+    password: []const u8,
+    database: []const u8,
+    ssl_mode: SslMode,
+    ssl_ca: ?[]const u8,
+    max: usize,
+
+    // Pool state. Only meaningful on the top-level pool (when `pool == null`).
+    mu: std.Io.Mutex = .init,
+    cond: std.Io.Condition = .init,
+    free: std.ArrayList(*Connection) = .empty,
+    total: usize = 0,
+
+    // Session state. `conn` is the pinned connection during a transaction;
+    // `pool` is the back-pointer to the shared pool. On the top-level pool both
+    // are null.
+    conn: ?*Connection = null,
+    pool: ?*MySQL = null,
+
+    lastId: i64 = 0,
+    rows: usize = 0,
+
+    const Self = @This();
+
+    // Build the top-level pool. No network connection is made here; connections
+    // are established lazily on first use (so async DNS/connect have a running
+    // io loop), which also keeps `container.create` (which runs before the loop)
+    // crash-free for hostname-based configs.
+    pub fn create(allocator: std.mem.Allocator, io: std.Io, cfg: Config) !*Self {
+        const m = try allocator.create(Self);
+        m.* = Self{
+            .allocator = allocator,
+            .io = io,
+            .host = cfg.host,
+            .port = cfg.port,
+            .user = cfg.user,
+            .password = cfg.password,
+            .database = cfg.database,
+            .ssl_mode = cfg.ssl_mode,
+            .ssl_ca = cfg.ssl_ca,
+            .max = cfg.max,
+            .free = .empty,
+            .total = 0,
+        };
+        return m;
+    }
+
+    // Build a per-request session that borrows the shared pool but keeps its own
+    // transaction/last-id/rows state. This is what `Context.init` hands to each
+    // HTTP request so concurrent requests can't share a transaction connection
+    // or clobber each other's last-insert-id.
+    pub fn createSession(allocator: std.mem.Allocator, shared: *Self) !*Self {
+        const s = try allocator.create(Self);
+        s.* = Self{
+            .allocator = shared.allocator,
+            .io = shared.io,
+            .host = shared.host,
+            .port = shared.port,
+            .user = shared.user,
+            .password = shared.password,
+            .database = shared.database,
+            .ssl_mode = shared.ssl_mode,
+            .ssl_ca = shared.ssl_ca,
+            .max = shared.max,
+            .free = .empty,
+            .total = 0,
+            .conn = null,
+            .pool = shared,
+        };
+        return s;
+    }
+
+    fn config(self: *Self) Config {
+        return .{
+            .host = self.host,
+            .port = self.port,
+            .user = self.user,
+            .password = self.password,
+            .database = self.database,
+            .ssl_mode = self.ssl_mode,
+            .ssl_ca = self.ssl_ca,
+            .max = self.max,
+        };
+    }
+
+    fn getPool(self: *Self) *Self {
+        return self.pool orelse self;
+    }
+
+    // Acquire a connection. Inside a transaction (see `begin`) the pinned
+    // connection is returned so every statement shares one transaction.
+    pub fn acquireConn(self: *Self) !*Connection {
+        if (self.conn) |c| return c;
+        return try self.getPool().poolAcquire();
+    }
+
+    // Release a connection acquired via `acquireConn`, unless it is the pinned
+    // transaction connection (owned by the active transaction).
+    pub fn releaseConn(self: *Self, c: *Connection) void {
+        if (self.conn != null) return;
+        self.getPool().poolRelease(c);
+    }
+
+    // Pool-only: hand out a free connection, creating one up to `max`, or block
+    // until a connection is returned. Broken connections are discarded and
+    // replaced on the next acquire.
+    fn poolAcquire(self: *Self) !*Connection {
+        self.mu.lockUncancelable(self.io);
+        while (true) {
+            if (self.free.items.len > 0) {
+                // pop() returns `?T`; the length check above guarantees non-null.
+                const c = self.free.pop() orelse unreachable;
+                if (!c.connected) {
+                    c.deinit();
+                    self.total -= 1;
+                    continue;
+                }
+                self.mu.unlock(self.io);
+                return c;
+            }
+            if (self.total < self.max) {
+                self.total += 1;
+                self.mu.unlock(self.io);
+                const c = Connection.connect(self.allocator, self.io, self.config()) catch |err| {
+                    self.mu.lockUncancelable(self.io);
+                    self.total -= 1;
+                    self.mu.unlock(self.io);
+                    return err;
+                };
+                return c;
+            }
+            self.cond.waitUncancelable(self.io, &self.mu);
+        }
+    }
+
+    // Pool-only: return a connection to the free list (or discard it if broken).
+    fn poolRelease(self: *Self, c: *Connection) void {
+        self.mu.lockUncancelable(self.io);
+        if (!c.connected) {
+            c.deinit();
+            self.total -= 1;
+        } else {
+            self.free.append(self.allocator, c) catch {
+                c.deinit();
+                self.total -= 1;
+            };
+        }
+        self.cond.signal(self.io);
+        self.mu.unlock(self.io);
     }
 
     pub fn queryRow(
@@ -469,6 +703,25 @@ pub const MySQL = struct {
         const row = rows[0];
         self.allocator.free(rows);
         return row;
+    }
+
+    pub fn queryRows(
+        self: *Self,
+        _: *root.Context,
+        comptime Type: type,
+        comptime stmt: []const u8,
+        args: anytype,
+    ) ![]Type {
+        const conn = try self.acquireConn();
+        const res = conn.queryRows(Type, stmt, args) catch |err| {
+            conn.connected = false;
+            self.releaseConn(conn);
+            return err;
+        };
+        self.lastId = conn.last_insert_id;
+        self.rows = conn.rows_affected;
+        self.releaseConn(conn);
+        return res;
     }
 
     pub fn queryRowContext(
@@ -509,34 +762,158 @@ pub const MySQL = struct {
 
     pub fn execWithContext(
         self: *Self,
-        ctx: *root.Context,
+        _: *root.Context,
         comptime stmt: []const u8,
         args: anytype,
     ) !i64 {
-        _ = ctx;
-        const q = try self.interpolateSql(stmt, args);
-        defer self.allocator.free(q);
-        const res = try self.execInternal(q, false);
-        return @intCast(res.affected);
+        const conn = try self.acquireConn();
+        const r = conn.exec(stmt, args) catch |err| {
+            conn.connected = false;
+            self.releaseConn(conn);
+            return err;
+        };
+        self.lastId = conn.last_insert_id;
+        self.rows = conn.rows_affected;
+        self.releaseConn(conn);
+        return r;
     }
 
     pub fn lastInsertRowID(self: *Self) i64 {
-        return self.last_insert_id;
+        return self.lastId;
     }
 
     pub fn rowsAffected(self: *Self) usize {
-        return self.rows_affected;
+        return self.rows;
     }
 
+    // Start a transaction. All subsequent `exec`/`query*` calls run on a single
+    // pinned connection until `commit`/`rollback`.
     pub fn begin(self: *Self) !void {
-        _ = try self.execInternal("BEGIN", false);
+        if (self.conn != null) return error.AlreadyInTransaction;
+        const pool = self.getPool();
+        const c = try pool.poolAcquire();
+        _ = c.execInternal("BEGIN", false) catch |err| {
+            pool.poolRelease(c);
+            return err;
+        };
+        self.conn = c;
     }
 
+    // Commit the active transaction and release the pinned connection.
     pub fn commit(self: *Self) !void {
-        _ = try self.execInternal("COMMIT", false);
+        const c = self.conn orelse return error.NotInTransaction;
+        _ = c.execInternal("COMMIT", false) catch |err| {
+            c.connected = false;
+            self.getPool().poolRelease(c);
+            self.conn = null;
+            return err;
+        };
+        self.getPool().poolRelease(c);
+        self.conn = null;
     }
 
-    pub fn rollback(self: *Self) !void {
-        _ = try self.execInternal("ROLLBACK", false);
+    // Roll back the active transaction (best-effort) and release the connection.
+    pub fn rollback(self: *Self) void {
+        if (self.conn) |c| {
+            _ = c.execInternal("ROLLBACK", false) catch {
+                c.connected = false;
+            };
+            self.getPool().poolRelease(c);
+            self.conn = null;
+        }
+    }
+
+    // Close the pool and every idle connection it holds. Request sessions must
+    // not call this (they borrow the shared pool's connections).
+    pub fn deinit(self: *Self) void {
+        self.mu.lockUncancelable(self.io);
+        for (self.free.items) |c| {
+            c.deinit();
+        }
+        self.free.deinit(self.allocator);
+        self.mu.unlock(self.io);
+        self.allocator.destroy(self);
     }
 };
+
+// Build a SQL string from a `?`-placeholder statement and the provided args.
+// Placeholders are interpolated directly (text protocol); this is a convenience
+// for the typed query API, not a server-side prepared statement.
+fn interpolateSql(allocator: std.mem.Allocator, comptime stmt: []const u8, args: anytype) ![]const u8 {
+    const ArgIndex = comptime blk: {
+        var arr: [stmt.len]?usize = undefined;
+        var counter: usize = 0;
+        var k: usize = 0;
+        while (k < stmt.len) : (k += 1) {
+            if (stmt[k] == '?') {
+                arr[k] = counter;
+                counter += 1;
+            } else {
+                arr[k] = null;
+            }
+        }
+        break :blk arr;
+    };
+    var buf: std.ArrayList(u8) = .empty;
+    inline for (stmt, ArgIndex) |ch, maybe_ai| {
+        if (ch == '?') {
+            const v = args[maybe_ai.?];
+            try appendLiteral(allocator, &buf, v);
+        } else {
+            try buf.append(allocator, ch);
+        }
+    }
+    return try buf.toOwnedSlice(allocator);
+}
+
+fn appendLiteral(allocator: std.mem.Allocator, buf: *std.ArrayList(u8), value: anytype) !void {
+    const T = @TypeOf(value);
+    const ti = @typeInfo(T);
+    if (ti == .optional) {
+        if (value) |v| {
+            try appendLiteral(allocator, buf, v);
+        }
+        return;
+    }
+    switch (ti) {
+        .pointer => |p| {
+            const is_u8_seq = if (p.child == u8) true else blk: {
+                const ci = @typeInfo(p.child);
+                break :blk switch (ci) {
+                    .array => |a| a.child == u8,
+                    else => false,
+                };
+            };
+            if (is_u8_seq) {
+                const s: []const u8 = if (p.size == .slice) value else value[0..];
+                try buf.appendSlice(allocator, s);
+            } else {
+                @compileError("unsupported interpolation pointer: " ++ @typeName(@TypeOf(value)));
+            }
+        },
+        .int, .float, .comptime_int, .comptime_float => {
+            var tmp: [48]u8 = undefined;
+            const s = std.fmt.bufPrint(&tmp, "{d}", .{value}) catch "0";
+            try buf.appendSlice(allocator, s);
+        },
+        .bool => {
+            try buf.appendSlice(allocator, if (value) "1" else "0");
+        },
+        else => @compileError("unsupported interpolation type: " ++ @typeName(T)),
+    }
+}
+
+test "mysql: interpolateSql substitutes ? placeholders" {
+    const alloc = std.testing.allocator;
+    const q = try interpolateSql(alloc, "SELECT * FROM t WHERE id = ? AND name = ?", .{ 42, "zig" });
+    defer alloc.free(q);
+    try std.testing.expectEqualStrings("SELECT * FROM t WHERE id = 42 AND name = zig", q);
+}
+
+test "mysql: interpolateSql handles optional args" {
+    const alloc = std.testing.allocator;
+    const name: ?[]const u8 = null;
+    const q = try interpolateSql(alloc, "WHERE name = ?", .{name});
+    defer alloc.free(q);
+    try std.testing.expectEqualStrings("WHERE name = ", q);
+}

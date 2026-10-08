@@ -70,13 +70,19 @@ pub const Context = struct {
         };
 
         if (container.SQL != null) {
-            // Postgres/MySQL: hand each request its own session that borrows the
+            // Postgres: hand each request its own session that borrows the
             // shared (thread-safe) connection pool but isolates transaction_conn
             // /lastId/rows so concurrent requests can't share a transaction or
             // clobber each other's last-insert-id.
             const session = try root.SQL.createSession(allocator, container.SQL.?);
             c.SQL = root.Datasource.init(session, .postgres, container.datasource.breaker, container.metricz);
-        } else if (container.SQLite != null or container.DuckDB != null or container.ClickHouse != null or container.DuckGres != null or container.MySQL != null) {
+        } else if (container.MySQL != null) {
+            // MySQL: same per-request session model as Postgres. Each request
+            // borrows a pooled connection (pinned for transactions) so concurrent
+            // requests never share a socket or a transaction.
+            const session = try root.MySQL.createSession(allocator, container.MySQL.?);
+            c.SQL = root.Datasource.init(session, .mysql, container.datasource.breaker, container.metricz);
+        } else if (container.SQLite != null or container.DuckDB != null or container.ClickHouse != null or container.DuckGres != null) {
             // SQLite/DuckDB backends reuse a single shared connection; the
             // per-request session does not apply (see ZIG_LEARNINGS.md — their
             // single-connection concurrency is a separate, documented limitation).

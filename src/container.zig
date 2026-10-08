@@ -1279,18 +1279,58 @@ fn loadMySQL(self: *Self) !void {
     const portInt = try self.config.getAsInt("DB_PORT");
     const dbPort: u16 = @intCast(portInt);
 
-    const m = root.MySQL.connect(self.allocator, utils.io, hostname, dbPort, user, password, db) catch |err| {
-        buffer = try std.fmt.bufPrint(buffer, "Failed to connect to mysql: {}", .{err});
+    const ssl_mode = parseMySqlSslMode(self.config.getOrDefault("MYSQL_SSL_MODE", "disabled"));
+    const ssl_ca = if (std.mem.eql(u8, self.config.get("MYSQL_SSL_CA"), ""))
+        null
+    else
+        self.config.get("MYSQL_SSL_CA");
+    const pool_size = self.config.getAsInt("MYSQL_POOL_SIZE") catch 10;
+
+    // The pool defers all socket connections until first use (lazy connect), so
+    // this runs safely during `container.create` (before the io loop) and works
+    // for hostname-based configs that need async DNS.
+    const m = root.MySQL.create(self.allocator, utils.io, .{
+        .host = hostname,
+        .port = dbPort,
+        .user = user,
+        .password = password,
+        .database = db,
+        .ssl_mode = ssl_mode,
+        .ssl_ca = ssl_ca,
+        .max = @intCast(pool_size),
+    }) catch |err| {
+        buffer = try std.fmt.bufPrint(buffer, "Failed to create mysql pool: {}", .{err});
         self.log.err(buffer);
         return;
     };
     self.MySQL = m;
     self.wireDatasource(m, .mysql);
 
-    buffer = try std.fmt.bufPrint(buffer, "connected to mysql user to {s} database at '{s}:{s}'", .{ user, hostname, port });
+    buffer = try std.fmt.bufPrint(buffer, "configured mysql pool (size {d}) for user '{s}' at '{s}:{s}'", .{ pool_size, user, hostname, port });
     self.log.info(buffer);
 
-    try self.registerSqlHealth();
+    try self.healthChecks.append(.{ .name = "mysql", .check = mysqlHealthCheck });
+}
+
+// Resolve the `MYSQL_SSL_MODE` env value to the client's `SslMode`. Unknown
+// values (and the empty default) fall back to `disabled`.
+fn parseMySqlSslMode(s: []const u8) root.MySQL.SslMode {
+    if (std.mem.eql(u8, s, "preferred")) return .preferred;
+    if (std.mem.eql(u8, s, "required")) return .required;
+    return .disabled;
+}
+
+// Probes MySQL connectivity for the health endpoint by checking out a pooled
+// connection and running a trivial `SELECT 1`. The checkout is lazy, so it
+// establishes a connection on first use.
+fn mysqlHealthCheck(c: *container) anyerror!void {
+    if (c.MySQL) |m| {
+        const conn = try m.acquireConn();
+        defer m.releaseConn(conn);
+        _ = conn.exec("SELECT 1", .{}) catch return error.DatasourceUnavailable;
+        return;
+    }
+    return error.DatasourceUnavailable;
 }
 
 // Auto-wire the columnar OLAP SQL engine (ClickHouse) over HTTP when

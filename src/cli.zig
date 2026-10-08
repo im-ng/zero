@@ -18,6 +18,11 @@ pub fn run(args: std.process.Args) !void {
         return;
     }
 
+    if (std.mem.eql(u8, cmd, "--version") or std.mem.eql(u8, cmd, "-v")) {
+        std.debug.print("zero {s}\n", .{zero.constants.SERVER_VERSION});
+        return;
+    }
+
     if (std.mem.eql(u8, cmd, "migrator")) {
         const sub = it.next() orelse {
             printHelp();
@@ -66,10 +71,14 @@ fn printHelp() void {
         \\
         \\Usage:
         \\  zero --help
+        \\  zero --version
         \\  zero migrator add --name <name>
         \\
         \\Commands:
         \\  migrator add --name <name>   Scaffold a new migration in src/migrations/
+        \\
+        \\Options:
+        \\  -v, --version                Print the zero server version
         \\
     ) catch {};
 }
