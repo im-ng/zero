@@ -590,7 +590,7 @@ pub const Interface = struct {
             .mock => @as(*MockBackend, @ptrCast(@alignCast(self.ptr))).rollback(),
             .duckdb => @as(*root.DuckDB, @ptrCast(@alignCast(self.ptr))).rollback(),
             .clickhouse => @as(*root.ClickHouse, @ptrCast(@alignCast(self.ptr))).rollback(),
-            .mysql => @as(*root.MySQL, @ptrCast(@alignCast(self.ptr))).rollback() catch {},
+            .mysql => @as(*root.MySQL, @ptrCast(@alignCast(self.ptr))).rollback(),
             .duckgres => @as(*root.DuckGres, @ptrCast(@alignCast(self.ptr))).rollback(),
         }
     }
