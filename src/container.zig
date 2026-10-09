@@ -26,8 +26,8 @@ pub const HealthCheck = struct {
 
 /// Probes SQL connectivity for the health endpoint. For Postgres it acquires and
 /// releases a pooled connection (failing the check if the pool is exhausted or
-/// the server is unreachable); for SQLite the store is local, so a successful
-/// load already implies health.
+/// the server is unreachable). For in-process engines (SQLite, DuckDB) a
+/// successful load already implies health; DuckGres reuses the Postgres pool.
 fn sqlHealthCheck(c: *container) anyerror!void {
     if (c.SQL) |sql| {
         const conn = try sql.sql.acquire();
@@ -35,6 +35,14 @@ fn sqlHealthCheck(c: *container) anyerror!void {
         return;
     }
     if (c.SQLite) |_| {
+        return;
+    }
+    if (c.DuckDB) |_| {
+        return;
+    }
+    if (c.DuckGres) |dg| {
+        const conn = try dg.sql.acquire();
+        dg.sql.release(conn);
         return;
     }
     return error.DatasourceUnavailable;
