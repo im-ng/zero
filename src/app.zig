@@ -74,6 +74,7 @@ bootstrap_allocator: std.mem.Allocator = undefined,
 bootstrap_backing: []u8 = undefined,
 
 var hServer: ?*root.httpServer = undefined;
+var shutdown_requested: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
 var AppInstance: *Self = undefined;
 
 /// Shared setup for both HTTP (`new`) and CLI (`newCmd`) applications: config,
@@ -102,6 +103,12 @@ fn initBase(allocator: std.mem.Allocator, io: std.Io, em: *EnvMap) !*App {
     });
 
     configureLogFormat(em, config);
+
+    try config.callOutConfigLoads();
+
+    // Vault secret injection (no-op when VAULT_ADDR is unset). Must run before
+    // container.create so datasources can read credentials from the environment.
+    try root.vault.load(allocator, io, config, log);
 
     // One fixed region, sized by ZERO_FRAMEWORK_MEM_SIZE (MiB, default 8), holding
     // all framework-internal bootstrap allocations. It is never tied to a request
@@ -250,6 +257,47 @@ pub fn deinit(self: *Self) void {
     self.allocator.free(self.bootstrap_backing);
 }
 
+/// Full teardown of every framework subsystem and the container. Safe to call
+/// exactly once after the app stops serving (server) or after a CLI command
+/// finishes (`runCmd`). Frees the `App` struct itself, so do not touch `self`
+/// afterwards. Idempotent guards on optional subsystems mean it is also correct
+/// for the CLI path, where the HTTP/metrics servers and pub/sub threads were
+/// never started.
+pub fn destroy(self: *Self) void {
+    if (self.metriczThread) |mthread| {
+        self.metriczServer.stop();
+        mthread.join();
+        self.metriczServer.deinit();
+        self.allocator.destroy(self.metriczServer);
+    }
+    if (self.cronz) |cronz| {
+        cronz.destroy();
+    }
+    if (self.container.Nats) |n| {
+        n.destroy();
+    }
+    if (self.container.mqtt) |pb| {
+        pb.destroy();
+    }
+    if (self.container.Kakfa) |k| {
+        k.destroy();
+    }
+
+    self.migrations.deinit();
+    self.subcommands.deinit();
+    self.container.destroy();
+
+    // Flush any in-flight OpenTelemetry spans/metrics and stop its background
+    // exporters before the process exits. No-op when OTEL_EXPERIMENTAL is off.
+    self.otelProvider.shutdown();
+
+    // All framework subsystems are torn down; release the bootstrap arena.
+    self.deinit();
+
+    // Finally, free the `App` struct itself.
+    self.allocator.destroy(self);
+}
+
 fn getLogLevel(_: *Self, level: []const u8) u8 {
     if (std.mem.eql(u8, level, "debug")) {
         return 0;
@@ -304,6 +352,13 @@ pub fn SubCommand(self: *App, name: []const u8, handler: CliHandler, opts: SubCo
 /// `args` is typically `init.minimal.args` from a `std.process.Init` main
 /// parameter.
 pub fn runCmd(self: *App, args: std.process.Args) !void {
+    // Tear down the whole app (container, metricz, datasources, logger, config)
+    // on every exit path — including early `help`/`unknown command` returns — so
+    // the CLI does not leak the bootstrap-wired allocations. `destroy` frees the
+    // `App` struct itself, which is safe because nothing touches `self` after
+    // `runCmd` returns.
+    defer self.destroy();
+
     var it = std.process.Args.Iterator.init(args);
 
     // skip the program name (argv[0]).
@@ -468,7 +523,7 @@ fn runStartupHooks(self: *Self) !void {
         return;
     }
 
-    const _req: *httpz.Request = undefined;
+    const _req: ?*httpz.Request = null;
     const _res: *httpz.Response = undefined;
     var context = try Context.init(self.container.allocator, self.container, _req, _res);
     // The startup `Context` (and its Postgres session) is heap-allocated from the
@@ -545,53 +600,44 @@ pub fn run(self: *Self) !void {
     // try self.startMetricsServer();
     try self.startMetricsServer();
 
-    try self.startHttpServer();
+    const http_thread = try self.prepareHttpServer();
 
     // HTTP server is now listening — signal the startup probe as ready.
     self.container.started.store(true, .monotonic);
 
-    // The listen thread has joined, so the http server can now be safely torn
-    // down. (It used to be deinited from the signal handler, racing the still
-    // running thread and skipping this teardown path.)
-    self.httpServer.http.deinit();
-    self.allocator.destroy(self.httpServer);
+    // Bounded graceful-shutdown drain: wait for a shutdown signal, then give
+    // in-flight requests up to SHUTDOWN_DRAIN_TIMEOUT_MS to finish before
+    // tearing the server down, so an in-progress request is not abruptly cut.
+    // (Worker-side draining of the connection is the remaining httpz fork
+    // patch; this bound guarantees shutdown can never hang.)
+    const drain_timeout_ms: u64 = blk: {
+        const v = self.container.config.getAsInt("SHUTDOWN_DRAIN_TIMEOUT_MS") catch 0;
+        break :blk if (v == 0) 10_000 else @as(u64, v);
+    };
+    while (!shutdown_requested.load(.monotonic)) {
+        std.Io.sleep(utils.io, std.Io.Duration.fromMilliseconds(100), .awake) catch {};
+    }
+    var waited: u64 = 0;
+    while (hServer.?.handler.in_flight.load(.monotonic) > 0 and waited < drain_timeout_ms) {
+        std.Io.sleep(utils.io, std.Io.Duration.fromMilliseconds(50), .awake) catch {};
+        waited += 50;
+    }
+    if (hServer.?.handler.in_flight.load(.monotonic) > 0) {
+        var buf: [128]u8 = undefined;
+        const msg = std.fmt.bufPrint(&buf, "shutdown drain timed out after {d}ms with {d} in-flight requests; forcing close", .{ drain_timeout_ms, hServer.?.handler.in_flight.load(.monotonic) }) catch "shutdown drain timed out; forcing close";
+        self.container.log.warn(msg);
+    }
 
     // The http server has stopped (e.g. after a SIGINT/SIGTERM via the
     // shutdown handler). Tear down the rest in NORMAL execution flow — never
     // from the signal handler itself, where joining threads or freeing client
     // state (while their background threads are still running) is UB/deadlock
     // and can leave the process hanging (e.g. the NATS io_task thread).
-    if (self.metriczThread) |mthread| {
-        self.metriczServer.stop();
-        mthread.join();
-        self.metriczServer.deinit();
-        self.allocator.destroy(self.metriczServer);
-    }
-    if (self.cronz) |cronz| {
-        cronz.destroy();
-    }
-    if (self.container.Nats) |n| {
-        n.destroy();
-    }
-    if (self.container.mqtt) |pb| {
-        pb.destroy();
-    }
-    if (self.container.Kakfa) |k| {
-        k.destroy();
-    }
+    http_thread.join();
+    self.httpServer.http.deinit();
+    self.allocator.destroy(self.httpServer);
 
-    self.migrations.deinit();
-    self.container.destroy();
-
-    // Flush any in-flight OpenTelemetry spans/metrics and stop its background
-    // exporters before the process exits. No-op when OTEL_EXPERIMENTAL is off.
-    self.otelProvider.shutdown();
-
-    // All framework subsystems are torn down; release the bootstrap arena.
-    self.deinit();
-
-    // Finally, free the `App` struct itself.
-    self.allocator.destroy(self);
+    self.destroy();
 }
 
 fn startPubSubSubscriptions(self: Self) !void {
@@ -639,6 +685,8 @@ fn shutdown(_: std.c.SIG) callconv(.c) void {
     // handler is undefined behavior (can deadlock), so we just stop the
     // scheduler loop and stop the http server. The actual thread join for
     // cronz happens later in run() once the server thread exits.
+    shutdown_requested.store(true, .monotonic);
+
     if (AppInstance.cronz) |cronz| {
         cronz.stop();
         AppInstance.log.info("cleaning running cronz");
@@ -666,19 +714,6 @@ fn startMetricsServer(self: *Self) !void {
     self.log.debug("metrics server started");
 }
 
-fn startHttpServer(self: Self) !void {
-    const buffer: []u8 = try self.container.allocator.alloc(u8, 100);
-    const msg = try std.fmt.bufPrint(buffer, "Starting server on port: {d}", .{self.httpServer.port});
-    self.container.log.info(msg);
-    self.container.allocator.free(buffer);
-
-    const thread = self.httpServer.run() catch |err| {
-        self.container.log.any(err);
-        return;
-    };
-    thread.join();
-}
-
 pub fn prepareHttpServer(self: Self) !std.Thread {
     const buffer: []u8 = try self.container.allocator.alloc(u8, 100);
     const msg = try std.fmt.bufPrint(buffer, "Starting server on port: {d}", .{self.httpServer.port});
@@ -690,8 +725,9 @@ pub fn prepareHttpServer(self: Self) !std.Thread {
     // try self.startShutdownHandler();
 
     return self.httpServer.run() catch |err| {
-        buffer = try std.fmt.bufPrint(buffer, "Server starting failed: {any}. check configs.", .{error.AddressInUse});
-        self.container.log.any(err);
+        var fail_buf: [128]u8 = undefined;
+        const fail = std.fmt.bufPrint(&fail_buf, "Server starting failed: {any}. check configs.", .{err}) catch "Server starting failed; check configs.";
+        self.container.log.err(fail);
         return err;
     };
 }
@@ -875,6 +911,22 @@ pub fn health(ctx: *Context) !void {
         }
     }
 
+    // Aggregate registered downstream HTTP services so the readiness probe also
+    // reflects their health. Each is probed with a bounded timeout; a failed
+    // probe flips the overall status but can't hang the readiness endpoint.
+    if (ctx.container.services) |svcs| {
+        const svc_path = ctx.container.config.getOrDefault("HEALTH_CHECK_SERVICE_PATH", constants.HEALTH_PATH);
+        var svc_iter = svcs.iterator();
+        while (svc_iter.next()) |entry| {
+            const status = entry.value_ptr.*.ping(ctx, svc_path) catch 0;
+            const ok = status >= 200 and status < 400;
+            if (!ok) {
+                all_up = false;
+            }
+            try components.put(ctx.allocator, entry.key_ptr.*, std.json.Value{ .string = if (ok) up else down });
+        }
+    }
+
     const services = .{
         .name = ctx.container.appName,
         .version = ctx.container.appVersion,
@@ -965,6 +1017,15 @@ pub fn patch(self: Self, path: []const u8, handler: *const fn (*root.Context) an
 
 pub fn delete(self: Self, path: []const u8, handler: *const fn (*root.Context) anyerror!void) !void {
     self.httpServer.router.delete(path, handler, .{});
+}
+
+/// Registers a route for the RFC 10008 `QUERY` method — a safe, cacheable,
+/// body-bearing variant of GET. The handler runs only after `dispatch` has
+/// enforced the RFC's Content-Type rules (400 missing / 415 unsupported).
+/// Routing reuses httpz's `_other` method map, so no `Method` enum change is
+/// needed.
+pub fn query(self: *Self, path: []const u8, handler: *const fn (*root.Context) anyerror!void) !void {
+    self.httpServer.router.tryMethod("QUERY", path, handler, .{});
 }
 
 /// Registers a GraphQL-over-HTTP endpoint at `path`.
@@ -1092,12 +1153,14 @@ pub fn addSearch(self: *Self, backend: root.searchInterface.Backend, opts: root.
 /// context as `ctx.NoSQL`.
 pub fn addNoSQL(self: *Self, backend: root.nosqlInterface.Backend, opts: root.nosqlInterface.Options) !void {
     self.container.NoSQL = try root.NoSQL.build(self.container, backend, opts);
+    self.container.nosql_backend = backend;
 }
 
 /// Register the Couchbase document backend over N1QL/HTTP and expose it on the
 /// request context as `ctx.NoSQL`. No `libcouchbase` C library required.
 pub fn addCouchbase(self: *Self, opts: root.nosqlInterface.Options) !void {
     self.container.NoSQL = try root.NoSQL.build(self.container, .couchbase, opts);
+    self.container.nosql_backend = .couchbase;
 }
 
 /// Register the in-process OLAP SQL engine (DuckDB). Exposed on the request
@@ -1225,15 +1288,43 @@ pub fn addOAuthKeyRefresher(self: *Self) anyerror!void {
                 self.container.log.info(schedule);
 
                 //register http client
-                try self.addHttpService("zero-jwks-service", provider.pathUrl, zeroClient.ServiceOptions{});
+                try self.addHttpService("zero-jwks-service", provider.pathUrl, zeroClient.ServiceOptions{
+                    .circuitBreaker = .{},
+                    .max_retries = 2,
+                    .retry_base_ms = 500,
+                    .timeout_ms = 5000,
+                });
+
+                // Surface JWKS freshness as a health probe so an unreachable IdP
+                // is observable (the refresh cron keeps retrying with backoff).
+                try self.addHealthCheck("jwks", jwksHealthCheck);
 
                 //register job to refresh
                 try self.addCronJob(schedule, "zero-jwks-refresher", AuthProvider.refreshKeys);
+
+                // Eager initial key load: populate `pubKeys` before the first
+                // request so tokens validate immediately instead of failing with
+                // `TokenInvalidClaims` until the first cron tick (which can be many
+                // seconds away). The cron above keeps the keys fresh afterwards.
+                var ctx = root.Context.initCli(self.container.allocator, self.container) catch |e| {
+                    self.container.log.any(e);
+                    return;
+                };
+                AuthProvider.refreshKeys(&ctx) catch |e| self.container.log.any(e);
             },
             else => {
                 // do nothing
             },
         }
+    }
+}
+
+/// Health probe for the JWKS refresh path. Fails when the last refresh did not
+/// succeed, so an unreachable IdP is visible to Kubernetes even though the
+/// refresh cron keeps retrying with backoff.
+fn jwksHealthCheck(c: *root.container) anyerror!void {
+    if (!c.authProvider.jwksHealthy()) {
+        return error.JwksUnhealthy;
     }
 }
 

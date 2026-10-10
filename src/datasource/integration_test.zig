@@ -268,12 +268,7 @@ test "datasource postgres concurrent transactions isolation" {
     try std.testing.expectEqual(@as(i64, N), got.?.n);
 }
 
-// Concurrent Redis SET/GET through the shared `KVRedis` wrapper. Validates the
-// M2 mutex: okredis is a single unsynchronized connection, so `KVRedis` must
-// serialize every command or concurrent workers corrupt the RESP stream. This
-// would hang/crash without the lock.
-//
-// Gated on `REDIS_HOST`; skips cleanly when no Redis is configured.
+// Concurrent Redis SET/GET through the shared `KVRedis` wrapper.
 test "redis kvstore concurrent set/get (mutex serialization)" {
     const allocator = std.testing.allocator;
 
@@ -284,8 +279,9 @@ test "redis kvstore concurrent set/get (mutex serialization)" {
     const port = std.fmt.parseInt(u16, envOr(allocator, "REDIS_PORT", "6379"), 10) catch 6379;
     const password = envOr(allocator, "REDIS_PASSWORD", "");
 
-    const addr = std.Io.net.IpAddress.parseIp4(host, port) catch {
-        std.debug.print("redis address parse failed, skipping redis concurrency test\n", .{});
+    const addr = std.Io.net.IpAddress.parse(host, port) catch
+        std.Io.net.IpAddress.resolve(root.utils.io, host, port) catch {
+        std.debug.print("redis address resolve failed, skipping redis concurrency test\n", .{});
         return;
     };
     const connection = addr.connect(root.utils.io, .{ .mode = .stream }) catch {
@@ -366,4 +362,70 @@ test "redis kvstore concurrent set/get (mutex serialization)" {
     for (results) |ok| {
         try std.testing.expect(ok);
     }
+}
+
+// MySQL pool + TLS integration. Gated on MYSQL_TEST (set in CI and locally when
+// a MySQL/MariaDB is reachable). Exercises the pure-Zig client end-to-end:
+// connection pooling (connection reuse), typed row decode, and transaction
+// connection pinning. When MYSQL_SSL_MODE is `required`/`preferred` the TLS
+// upgrade path (std.crypto.tls) is exercised too.
+test "mysql pool, ssl and transaction integration" {
+    if (envGet("MYSQL_TEST") == null) {
+        std.debug.print("MYSQL_TEST not set, skipping mysql integration test\n", .{});
+        return;
+    }
+    const allocator = std.testing.allocator;
+
+    const host = envGet("MYSQL_HOST") orelse "127.0.0.1";
+    const port = std.fmt.parseInt(u16, envGet("MYSQL_PORT") orelse "3306", 10) catch 3306;
+    const user = envGet("MYSQL_USER") orelse "root";
+    const password = envGet("MYSQL_PASSWORD") orelse "";
+    const db = envGet("MYSQL_NAME") orelse "mysql";
+    const ssl_mode_str = envGet("MYSQL_SSL_MODE") orelse "disabled";
+    const ssl_mode: root.MySQL.SslMode = if (std.mem.eql(u8, ssl_mode_str, "required"))
+        .required
+    else if (std.mem.eql(u8, ssl_mode_str, "preferred"))
+        .preferred
+    else
+        .disabled;
+    const ssl_ca = envGet("MYSQL_SSL_CA");
+
+    const pool = try root.MySQL.create(allocator, root.utils.io, .{
+        .host = host,
+        .port = port,
+        .user = user,
+        .password = password,
+        .database = db,
+        .ssl_mode = ssl_mode,
+        .ssl_ca = ssl_ca,
+        .max = 4,
+    });
+    defer pool.deinit();
+
+    // Typed row decode over a pooled, optionally TLS-wrapped connection.
+    const Row = struct { one: i64 };
+    const conn = pool.acquireConn() catch {
+        std.debug.print("mysql not reachable, skipping mysql integration test\n", .{});
+        return;
+    };
+    const rows = try conn.queryRows(Row, "SELECT 1 AS one", .{});
+    defer allocator.free(rows);
+    try std.testing.expect(rows.len == 1);
+    try std.testing.expect(rows[0].one == 1);
+    pool.releaseConn(conn);
+
+    // Pool reuse: the second checkout returns the same idle connection.
+    const first = try pool.acquireConn();
+    pool.releaseConn(first);
+    const second = try pool.acquireConn();
+    try std.testing.expect(second == first);
+    pool.releaseConn(second);
+
+    // Transaction: begin pins a connection; every subsequent statement (and the
+    // commit) uses that same pinned connection.
+    try pool.begin();
+    const pinned = try pool.acquireConn();
+    try std.testing.expect(pinned == first);
+    _ = try pinned.exec("SELECT 1", .{});
+    try pool.commit();
 }

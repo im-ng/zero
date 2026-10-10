@@ -7,6 +7,7 @@ const kConfig = root.kConfig;
 const rdkafka = root.rdkafka;
 const kafkaSubscriber = root.kafkaSubscriber;
 const kafkaMessage = root.kafkaMessage;
+const tracz = root.tracz;
 
 pub const kafkaConfig = root.rdkafka.struct_rd_kafka_conf_s;
 pub const kafkaClient = root.rdkafka.rd_kafka_t;
@@ -34,6 +35,7 @@ config: ?*kafkaConfig,
 topic: ?*kafkaTopic,
 client: ?*kafkaClient,
 subscriber: std.array_list.Managed(kafkaSubscriber) = undefined,
+subscriber_by_topic: std.StringHashMap(*kafkaSubscriber) = undefined,
 isPubSubSet: bool = false,
 kafkaMode: c_uint = 0,
 err_message: [4096]u8 = undefined,
@@ -51,6 +53,7 @@ pub fn create(
     c.signal = Atomic(bool).init(true);
     c.container = container;
     c.subscriber = std.array_list.Managed(kafkaSubscriber).init(container.allocator);
+    c.subscriber_by_topic = std.StringHashMap(*kafkaSubscriber).init(container.allocator);
 
     const client: ?*kafkaClient = rdkafka.rd_kafka_new(
         mode,
@@ -130,6 +133,8 @@ pub fn destroy(self: *Self) void {
         self.thread.join();
     }
 
+    self.subscriber_by_topic.deinit();
+
     // Only producers have pending messages to flush; flushing a consumer
     // returns "Not implemented" and is meaningless here.
     if (self.kafkaMode != root.rdkafka.RD_KAFKA_CONSUMER) {
@@ -150,15 +155,24 @@ pub fn publish(self: *Self, ctx: *Context, topic: *kafkaTopic, key: []const u8, 
     const message_ptr: ?*anyopaque = @constCast(payload.ptr);
     const key_ptr: ?*anyopaque = @constCast(key.ptr);
 
-    // Propagate the inbound correlation id as a Kafka record header when present.
-    // ctx.request is only set during an HTTP request; cron/pub-sub driven
-    // publishes have no request, so guard against a null request.
+    // Propagate the inbound correlation id and the active OpenTelemetry trace
+    // as Kafka record headers when present. ctx.request is only set during an
+    // HTTP request; cron/pub-sub driven publishes have no request, so guard
+    // against a null request. The traceparent continues the trace across the
+    // async boundary so the consumer can parent a span to the upstream.
     const cid = if (ctx.request) |r| r.header("X-Correlation-ID") else null;
+    const tp = tracz.currentTraceparent(ctx.allocator);
+    defer if (tp) |t| ctx.allocator.free(t);
 
     const err_code: c_int = blk: {
-        if (cid) |id| {
-            const hdrs = rdkafka.rd_kafka_headers_new(1);
-            _ = rdkafka.rd_kafka_header_add(hdrs, "X-Correlation-ID", -1, id.ptr, @intCast(id.len));
+        if (cid != null or tp != null) {
+            const hdrs = rdkafka.rd_kafka_headers_new(2);
+            if (cid) |id| {
+                _ = rdkafka.rd_kafka_header_add(hdrs, "X-Correlation-ID", -1, id.ptr, @intCast(id.len));
+            }
+            if (tp) |t| {
+                _ = rdkafka.rd_kafka_header_add(hdrs, "traceparent", -1, t.ptr, @intCast(t.len));
+            }
             const rc = rdkafka.rd_kafka_producev(
                 self.client.?,
                 topic,
@@ -263,7 +277,94 @@ fn destroryChildAllocator(self: *Self, ca: *arena) void {
     self.container.allocator.destroy(caPtr);
 }
 
-pub fn readPayload(self: *Self, subscriber: kafkaSubscriber) !void {
+/// Run the registered handler for one message, retrying on failure and
+/// dead-lettering poison messages to `<topic>__dlq` before committing.
+fn processMessage(self: *Self, context: *Context, msg: *kafkaMessage, subscriber: kafkaSubscriber) void {
+    // Continue the upstream trace across the async boundary: extract the
+    // traceparent injected at publish time and parent a consume span to it so
+    // the consumer's work shows up under the original request's trace.
+    const tp = msg.getHeader("traceparent");
+    const span = tracz.startConsumeSpan(self.container.allocator, self.container.otel, tp);
+    defer tracz.endConsumeSpan(self.container.otel, span);
+
+    // transform packet to client.response using std.json.parse.
+    context.message = .{ .kafka = msg };
+
+    // Retry the handler a few times; on a poison message, dead-letter it to
+    // `<topic>__dlq` before committing the offset so it isn't silently lost.
+    var attempt: u32 = 0;
+    const max_attempts: u32 = constants.DEFAULT_PUBSUB_MAX_ATTEMPTS;
+    const backoff_ms: i64 = constants.DEFAULT_PUBSUB_BACKOFF_MS;
+    while (attempt < max_attempts) : (attempt += 1) {
+        subscriber.exec(context) catch |err| {
+            self.container.log.Any(self.container.allocator, err);
+            if (attempt + 1 < max_attempts) {
+                std.Io.sleep(self.container.io, std.Io.Duration.fromMilliseconds(backoff_ms), .awake) catch {};
+                continue;
+            }
+            const dlq = std.fmt.allocPrint(self.container.allocator, "{s}__dlq", .{msg.topic}) catch return;
+            defer self.container.allocator.free(dlq);
+            self.container.metricz.dlq(.{ .topic = msg.topic, .consumer = "dlq" }) catch {};
+            self.publishOnSubject(dlq, msg.payload orelse &[_]u8{}) catch |dlerr| {
+                self.container.log.Any(self.container.allocator, dlerr);
+            };
+            break;
+        };
+        break;
+    }
+
+    self.commitOffset(context, msg.*);
+
+    self.container.metricz.subscriberTotal(.{ .topic = msg.topic, .consumer = "zero-consumer" }) catch |e| std.debug.print("kafka subscriberTotal metric failed: {}\n", .{e});
+}
+
+fn subscriptions(self: *Self) !void {
+    // rdkafka's consumer subscribes to a single topic list on the shared
+    // client; calling subscribe per-subscriber *replaces* the prior list, so
+    // only the last registered topic would ever be serviced. Instead, union
+    // every registered topic into one list, subscribe ONCE, and dispatch each
+    // incoming message to the subscriber that owns its topic.
+    if (self.subscriber.items.len == 0) return;
+
+    const combined = rdkafka.rd_kafka_topic_partition_list_new(@intCast(self.subscriber.items.len));
+    if (combined == null) {
+        self.container.log.err("failed to allocate kafka topic list");
+        return;
+    }
+
+    var dedupe = std.StringHashMap(void).init(self.container.allocator);
+    defer dedupe.deinit();
+
+    for (self.subscriber.items) |*s| {
+        if (!dedupe.contains(s.topic)) {
+            dedupe.put(s.topic, {}) catch {};
+            _ = rdkafka.rd_kafka_topic_partition_list_add(
+                combined,
+                @constCast(s.topic.ptr),
+                rdkafka.RD_KAFKA_PARTITION_UA,
+            );
+        }
+        // Map topic -> owning subscriber for dispatch. Last registration for a
+        // topic wins, preserving the prior single-topic semantics.
+        self.subscriber_by_topic.put(s.topic, s) catch |err| self.container.log.any(err);
+    }
+
+    const err_code: c_int = rdkafka.rd_kafka_subscribe(self.client, combined);
+    if (err_code != rdkafka.RD_KAFKA_RESP_ERR_NO_ERROR) {
+        const msg = utils.combine(
+            self.container.allocator,
+            "failed to kafka subscriber: {s}",
+            .{rdkafka.rd_kafka_err2str(err_code)},
+        ) catch "failed to kafka subscribe";
+        self.container.log.err(msg);
+        rdkafka.rd_kafka_topic_partition_list_destroy(combined);
+        return;
+    }
+    rdkafka.rd_kafka_topic_partition_list_destroy(combined);
+
+    self.container.log.info("kafka consumer subscribed");
+
+    // A single shared consumer loop services every subscribed topic.
     while (self.signal.load(.monotonic)) {
         const message_or_null = rdkafka.rd_kafka_consumer_poll(self.client, 1000);
         if (message_or_null) |message| {
@@ -286,75 +387,19 @@ pub fn readPayload(self: *Self, subscriber: kafkaSubscriber) !void {
                 _res,
             ) catch |err| {
                 self.container.log.Any(self.container.allocator, err);
-                return;
+                continue;
             };
             const context = &ctx;
 
-            // transform packet to client.response using std.json.parse.
-            context.message = .{ .kafka = &msg };
+            // Dispatch to the subscriber that registered this topic. With no
+            // handler we still commit so the message isn't redelivered.
+            const sub_ptr = self.subscriber_by_topic.get(msg.topic) orelse {
+                self.commitOffset(context, msg);
+                continue;
+            };
 
-            // Retry the handler a few times; on a poison message, dead-letter it to
-            // `<topic>__dlq` before committing the offset so it isn't silently lost.
-            var attempt: u32 = 0;
-            const max_attempts: u32 = constants.DEFAULT_PUBSUB_MAX_ATTEMPTS;
-            const backoff_ms: i64 = constants.DEFAULT_PUBSUB_BACKOFF_MS;
-            while (attempt < max_attempts) : (attempt += 1) {
-                subscriber.exec(context) catch |err| {
-                    self.container.log.Any(self.container.allocator, err);
-                    if (attempt + 1 < max_attempts) {
-                        std.Io.sleep(self.container.io, std.Io.Duration.fromMilliseconds(backoff_ms), .awake) catch {};
-                        continue;
-                    }
-                    const dlq = std.fmt.allocPrint(self.container.allocator, "{s}__dlq", .{msg.getTopic()}) catch break;
-                    defer self.container.allocator.free(dlq);
-                    self.container.metricz.dlq(.{ .topic = msg.getTopic(), .consumer = "dlq" }) catch {};
-                    self.publishOnSubject(dlq, msg.getPayload()) catch |dlerr| {
-                        self.container.log.Any(self.container.allocator, dlerr);
-                    };
-                    break;
-                };
-                break;
-            }
-
-            self.commitOffset(context, msg);
-
-            self.container.metricz.subscriberTotal(.{ .topic = msg.getTopic(), .consumer = "zero-consumer" }) catch |e| std.debug.print("kafka subscriberTotal metric failed: {}\n", .{e});
+            self.processMessage(context, &msg, sub_ptr.*);
         }
-    }
-}
-
-fn subscriptions(self: *Self) !void {
-    // Spawn one thread per subscriber, then join them all afterwards. The
-    // consumer loops run until `self.signal` flips, so joining after the loop
-    // is correct — joining *inside* the loop would block on the first
-    // subscriber forever and never start the rest (only the first topic would
-    // ever be serviced).
-    var threads = try std.ArrayList(std.Thread).initCapacity(self.container.allocator, 0);
-    defer {
-        for (threads.items) |t| {
-            t.join();
-        }
-    }
-
-    for (self.subscriber.items) |s| {
-        std.Io.sleep(self.container.io, std.Io.Duration.fromMilliseconds(100), .awake) catch {};
-        const err_code: c_int = rdkafka.rd_kafka_subscribe(self.client, s.topics);
-        if (err_code != rdkafka.RD_KAFKA_RESP_ERR_NO_ERROR) {
-            const msg = try utils.combine(
-                self.container.allocator,
-                "failed to kafka subscriber: {s}",
-                .{rdkafka.rd_kafka_err2str(err_code)},
-            );
-            self.container.log.err(msg);
-            continue;
-        }
-
-        self.container.log.info("kafka consumer subscribed");
-        const thread = Thread.spawn(.{}, Self.readPayload, .{ self, s }) catch |err| {
-            self.container.log.any(err);
-            continue;
-        };
-        try threads.append(self.container.allocator, thread);
     }
 }
 

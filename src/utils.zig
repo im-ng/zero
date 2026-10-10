@@ -30,6 +30,14 @@ pub fn elapsedMs(start: std.Io.Timestamp) f32 {
     return @floatFromInt(@as(u64, @intCast(@divFloor(elapsedNanos(start), 1_000_000))));
 }
 
+/// Elapsed time in seconds as a float with nanosecond precision. The HTTP and
+/// service latency histograms are documented in seconds; `elapsedMs` truncates
+/// to integer milliseconds, which zeroes sub-ms requests (collapsing `_sum` to
+/// 0 and dumping every observation into the first bucket).
+pub fn elapsedSeconds(start: std.Io.Timestamp) f64 {
+    return @as(f64, @floatFromInt(elapsedNanos(start))) / 1_000_000_000.0;
+}
+
 pub fn combine(allocator: std.mem.Allocator, comptime format: []const u8, value: anytype) ![]const u8 {
     var buffer: []u8 = undefined;
     buffer = try allocator.alloc(u8, 256);

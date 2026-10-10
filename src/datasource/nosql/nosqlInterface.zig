@@ -14,6 +14,9 @@ pub const Backend = enum {
     /// Document backend over the pure-Zig OP_MSG wire protocol (no `mongo-c-driver`
     /// C link). Backed by `src/datasource/nosql/mongodb.zig`.
     mongodb,
+    /// Multi-model (document) backend over the ArangoDB HTTP API (`/_api/cursor`,
+    /// `/_api/document`). Backed by `src/datasource/nosql/arangodb.zig`.
+    arangodb,
     /// Test-only backend backed by `MockBackend`. Lets the `NoSQL` dispatch be
     /// exercised without a running database.
     mock,
@@ -54,6 +57,7 @@ pub const NoSQL = struct {
             .cassandra => "cassandra",
             .couchbase => "couchbase",
             .mongodb => "mongodb",
+            .arangodb => "arangodb",
             .mock => "mock",
         };
     }
@@ -75,7 +79,7 @@ pub const NoSQL = struct {
     pub fn build(container: *root.container, backend: Backend, opts: Options) !*NoSQL {
         const impl: *anyopaque = switch (backend) {
             .cassandra => blk: {
-                const c = try root.NoSQLBackend.create(container.allocator, .{
+                const c = try root.Cassandra.create(container.allocator, .{
                     .contact_points = opts.contact_points,
                     .keyspace = opts.keyspace,
                     .user = opts.user,
@@ -107,6 +111,15 @@ pub const NoSQL = struct {
                 });
                 break :blk @as(*anyopaque, m);
             },
+            .arangodb => blk: {
+                const a = try root.ArangoDB.create(container.allocator, .{
+                    .url = opts.contact_points,
+                    .db = opts.keyspace,
+                    .user = opts.user,
+                    .password = opts.password,
+                });
+                break :blk @as(*anyopaque, a);
+            },
         };
         const handle = try container.allocator.create(NoSQL);
         handle.* = NoSQL.init(impl, backend, null, container.metricz);
@@ -119,7 +132,7 @@ pub const NoSQL = struct {
     pub fn deinit(self: *NoSQL, allocator: std.mem.Allocator) void {
         switch (self.backend) {
             .cassandra => {
-                const c = @as(*root.NoSQLBackend, @ptrCast(@alignCast(self.ptr)));
+                const c = @as(*root.Cassandra, @ptrCast(@alignCast(self.ptr)));
                 c.conn.deinit();
                 allocator.destroy(c);
             },
@@ -130,6 +143,10 @@ pub const NoSQL = struct {
             .mongodb => {
                 const m = @as(*root.MongoDB, @ptrCast(@alignCast(self.ptr)));
                 m.deinit(allocator);
+            },
+            .arangodb => {
+                const a = @as(*root.ArangoDB, @ptrCast(@alignCast(self.ptr)));
+                a.deinit(allocator);
             },
             .mock => {
                 const mb = @as(*MockBackend, @ptrCast(@alignCast(self.ptr)));
@@ -148,9 +165,10 @@ pub const NoSQL = struct {
         }
         const start = utils.nowMonotonic();
         const r = switch (self.backend) {
-            .cassandra => @as(*root.NoSQLBackend, @ptrCast(@alignCast(self.ptr))).get(ctx, statement),
+            .cassandra => @as(*root.Cassandra, @ptrCast(@alignCast(self.ptr))).get(ctx, statement),
             .couchbase => @as(*root.Couchbase, @ptrCast(@alignCast(self.ptr))).get(ctx, statement),
             .mongodb => @as(*root.MongoDB, @ptrCast(@alignCast(self.ptr))).get(ctx, statement),
+            .arangodb => @as(*root.ArangoDB, @ptrCast(@alignCast(self.ptr))).get(ctx, statement),
             .mock => @as(*MockBackend, @ptrCast(@alignCast(self.ptr))).get(ctx, statement),
         } catch |e| {
             if (self.breaker) |*b| {
@@ -173,9 +191,10 @@ pub const NoSQL = struct {
         }
         const start = utils.nowMonotonic();
         const r = switch (self.backend) {
-            .cassandra => @as(*root.NoSQLBackend, @ptrCast(@alignCast(self.ptr))).put(ctx, statement),
+            .cassandra => @as(*root.Cassandra, @ptrCast(@alignCast(self.ptr))).put(ctx, statement),
             .couchbase => @as(*root.Couchbase, @ptrCast(@alignCast(self.ptr))).put(ctx, statement),
             .mongodb => @as(*root.MongoDB, @ptrCast(@alignCast(self.ptr))).put(ctx, statement),
+            .arangodb => @as(*root.ArangoDB, @ptrCast(@alignCast(self.ptr))).put(ctx, statement),
             .mock => @as(*MockBackend, @ptrCast(@alignCast(self.ptr))).put(ctx, statement),
         } catch |e| {
             if (self.breaker) |*b| {
@@ -198,9 +217,10 @@ pub const NoSQL = struct {
         }
         const start = utils.nowMonotonic();
         const r = switch (self.backend) {
-            .cassandra => @as(*root.NoSQLBackend, @ptrCast(@alignCast(self.ptr))).delete(ctx, statement),
+            .cassandra => @as(*root.Cassandra, @ptrCast(@alignCast(self.ptr))).delete(ctx, statement),
             .couchbase => @as(*root.Couchbase, @ptrCast(@alignCast(self.ptr))).delete(ctx, statement),
             .mongodb => @as(*root.MongoDB, @ptrCast(@alignCast(self.ptr))).delete(ctx, statement),
+            .arangodb => @as(*root.ArangoDB, @ptrCast(@alignCast(self.ptr))).delete(ctx, statement),
             .mock => @as(*MockBackend, @ptrCast(@alignCast(self.ptr))).delete(ctx, statement),
         } catch |e| {
             if (self.breaker) |*b| {
@@ -224,9 +244,10 @@ pub const NoSQL = struct {
         }
         const start = utils.nowMonotonic();
         const r = switch (self.backend) {
-            .cassandra => @as(*root.NoSQLBackend, @ptrCast(@alignCast(self.ptr))).query(ctx, statement),
+            .cassandra => @as(*root.Cassandra, @ptrCast(@alignCast(self.ptr))).query(ctx, statement),
             .couchbase => @as(*root.Couchbase, @ptrCast(@alignCast(self.ptr))).query(ctx, statement),
             .mongodb => @as(*root.MongoDB, @ptrCast(@alignCast(self.ptr))).query(ctx, statement),
+            .arangodb => @as(*root.ArangoDB, @ptrCast(@alignCast(self.ptr))).query(ctx, statement),
             .mock => @as(*MockBackend, @ptrCast(@alignCast(self.ptr))).query(ctx, statement),
         } catch |e| {
             if (self.breaker) |*b| {
@@ -251,6 +272,7 @@ pub const NoSQL = struct {
         return switch (self.backend) {
             .couchbase => @as(*root.Couchbase, @ptrCast(@alignCast(self.ptr))).lastError(),
             .mongodb => @as(*root.MongoDB, @ptrCast(@alignCast(self.ptr))).lastError(),
+            .arangodb => @as(*root.ArangoDB, @ptrCast(@alignCast(self.ptr))).lastError(),
             else => null,
         };
     }

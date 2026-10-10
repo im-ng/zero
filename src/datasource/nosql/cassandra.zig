@@ -2,14 +2,14 @@ const std = @import("std");
 const root = @import("../../zero.zig");
 const client = @import("cassandraClient.zig");
 
-/// NoSQL wide-column backend. Talks the native CQL binary protocol v4 via the
+/// Cassandra wide-column backend. Talks the native CQL binary protocol v4 via the
 /// self-contained `cassandraClient.zig` (no external driver dependency).
 ///
 /// Unlike `SQL`, this backend does not build statements. Callers pass a full
 /// CQL string to `get`/`put`/`delete`/`query`, so the query lives with the
 /// caller (the route handler), never in the datasource layer. The configured
 /// keyspace is `USE`d on connect, so statements need not qualify it.
-pub const NoSQL = struct {
+pub const Cassandra = struct {
     conn: client.Connection,
 
     pub fn create(allocator: std.mem.Allocator, opts: struct {
@@ -17,8 +17,8 @@ pub const NoSQL = struct {
         keyspace: []const u8,
         user: ?[]const u8 = null,
         password: ?[]const u8 = null,
-    }) !*NoSQL {
-        const self = try allocator.create(NoSQL);
+    }) !*Cassandra {
+        const self = try allocator.create(Cassandra);
         self.* = .{
             .conn = client.Connection.init(
                 allocator,
@@ -33,7 +33,7 @@ pub const NoSQL = struct {
 
     /// Run a SELECT-style `query` and return the first column of the first row,
     /// owned by `ctx.allocator`, or `null` when no row matches. Caller frees.
-    pub fn get(self: *NoSQL, ctx: *root.Context, statement: []const u8) !?[]const u8 {
+    pub fn get(self: *Cassandra, ctx: *root.Context, statement: []const u8) !?[]const u8 {
         var res = try self.conn.query(statement);
         defer res.deinit();
         if (res.rows.len == 0) return null;
@@ -44,20 +44,20 @@ pub const NoSQL = struct {
     }
 
     /// Run an INSERT/UPDATE-style `query`. The result set is discarded.
-    pub fn put(self: *NoSQL, _: *root.Context, statement: []const u8) !void {
+    pub fn put(self: *Cassandra, _: *root.Context, statement: []const u8) !void {
         var res = try self.conn.query(statement);
         res.deinit();
     }
 
     /// Run a DELETE-style `query`. The result set is discarded.
-    pub fn delete(self: *NoSQL, _: *root.Context, statement: []const u8) !void {
+    pub fn delete(self: *Cassandra, _: *root.Context, statement: []const u8) !void {
         var res = try self.conn.query(statement);
         res.deinit();
     }
 
     /// Run an arbitrary CQL `query` and return the rows as a JSON array, owned by
     /// `ctx.allocator`. Caller frees.
-    pub fn query(self: *NoSQL, ctx: *root.Context, statement: []const u8) ![]const u8 {
+    pub fn query(self: *Cassandra, ctx: *root.Context, statement: []const u8) ![]const u8 {
         var res = try self.conn.query(statement);
         defer res.deinit();
         return try res.toJson(ctx.allocator);

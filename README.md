@@ -1,4 +1,4 @@
-<img src="./static/zero-framework-backdrop.png">
+<img src="./static/zero-framework-backdrop.jpg">
 <br/>
 
 <p align="center">
@@ -20,8 +20,6 @@
 <br/>
 
 # Zero Framework
-
-![mascot](./static/zero-mascot-1.svg)
 
 **One binary. No GC. Build config-driven microservices in Zig.**
 

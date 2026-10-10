@@ -83,7 +83,8 @@ pub fn create(
 fn connect(self: *Self) !void {
     self.disconnect();
 
-    const addr = try std.Io.net.IpAddress.parseIp4(self.host, self.port);
+    const addr = std.Io.net.IpAddress.parse(self.host, self.port) catch
+        try std.Io.net.IpAddress.resolve(self.container.io, self.host, self.port);
 
     const conn = try addr.connect(self.container.io, .{ .mode = .stream });
     self.stream = conn;

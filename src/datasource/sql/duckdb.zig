@@ -9,6 +9,10 @@ pub const DuckDB = struct {
     allocator: std.mem.Allocator,
     db: c.duckdb_database,
     conn: c.duckdb_connection,
+    /// Serializes access to the shared single connection. DuckDB is wired as one
+    /// process-wide connection (see `container.loadDuckDB` / `context.zig`), so
+    /// concurrent requests would otherwise race the same C connection handle.
+    mu: std.Io.Mutex,
 
     pub fn create(allocator: std.mem.Allocator, path: []const u8) !*DuckDB {
         const open_path = if (path.len == 0) "" else path;
@@ -25,7 +29,7 @@ pub const DuckDB = struct {
         }
 
         const self = try allocator.create(DuckDB);
-        self.* = .{ .allocator = allocator, .db = db, .conn = conn };
+        self.* = .{ .allocator = allocator, .db = db, .conn = conn, .mu = .init };
         return self;
     }
 
@@ -117,6 +121,8 @@ pub const DuckDB = struct {
     }
 
     pub fn queryRow(self: *DuckDB, ctx: *root.Context, comptime Type: type, comptime stmt: []const u8, args: anytype) !?Type {
+        self.mu.lockUncancelable(root.utils.io);
+        defer self.mu.unlock(root.utils.io);
         var result: c.duckdb_result = undefined;
         try self.run(stmt, args, &result);
         defer c.duckdb_destroy_result(&result);
@@ -125,6 +131,8 @@ pub const DuckDB = struct {
     }
 
     pub fn queryRows(self: *DuckDB, ctx: *root.Context, comptime Type: type, comptime stmt: []const u8, args: anytype) ![]Type {
+        self.mu.lockUncancelable(root.utils.io);
+        defer self.mu.unlock(root.utils.io);
         var result: c.duckdb_result = undefined;
         try self.run(stmt, args, &result);
         defer c.duckdb_destroy_result(&result);
@@ -154,6 +162,8 @@ pub const DuckDB = struct {
     }
 
     pub fn execWithContext(self: *DuckDB, _: *root.Context, comptime stmt: []const u8, args: anytype) !i64 {
+        self.mu.lockUncancelable(root.utils.io);
+        defer self.mu.unlock(root.utils.io);
         var result: c.duckdb_result = undefined;
         try self.run(stmt, args, &result);
         c.duckdb_destroy_result(&result);
@@ -171,18 +181,24 @@ pub const DuckDB = struct {
     }
 
     pub fn begin(self: *DuckDB) !void {
+        self.mu.lockUncancelable(root.utils.io);
+        defer self.mu.unlock(root.utils.io);
         var result: c.duckdb_result = undefined;
         try self.run("BEGIN TRANSACTION", .{}, &result);
         c.duckdb_destroy_result(&result);
     }
 
     pub fn commit(self: *DuckDB) !void {
+        self.mu.lockUncancelable(root.utils.io);
+        defer self.mu.unlock(root.utils.io);
         var result: c.duckdb_result = undefined;
         try self.run("COMMIT", .{}, &result);
         c.duckdb_destroy_result(&result);
     }
 
     pub fn rollback(self: *DuckDB) void {
+        self.mu.lockUncancelable(root.utils.io);
+        defer self.mu.unlock(root.utils.io);
         var result: c.duckdb_result = undefined;
         // Best-effort: a failed rollback cannot be recovered here, and the
         // result is destroyed regardless, so the error is intentionally ignored.

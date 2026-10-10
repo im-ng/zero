@@ -1,6 +1,8 @@
 const std = @import("std");
 
-pub const SERVER_VERSION = "0.5.2";
+// Update this version on every tagged release
+// TODO: Inject this through build step
+pub const FRAMEWORK_VERSION = "0.5.3";
 
 pub const APP_ENVIRONMENT = "APP_ENV";
 pub const APP_NAME = "APP_NAME";
@@ -76,6 +78,10 @@ pub const DEFAULT_CB_HALF_OPEN_TRIALS: u32 = 1;
 // --- Pub/Sub retry (kafka / nats / cronz / redis share these) -------------
 pub const DEFAULT_PUBSUB_MAX_ATTEMPTS: u32 = 3;
 pub const DEFAULT_PUBSUB_BACKOFF_MS: i64 = 500;
+
+// --- Cassandra startup (native-protocol port can lag the healthcheck) -----
+pub const DEFAULT_CASSANDRA_CONNECT_RETRIES: u32 = 20;
+pub const DEFAULT_CASSANDRA_CONNECT_BACKOFF_MS: i64 = 1_000;
 
 // --- Kafka / filestore / context ------------------------------------------
 pub const DEFAULT_KAFKA_FLUSH_MS: u32 = 60_000;
