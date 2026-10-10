@@ -19,7 +19,7 @@ pub fn run(args: std.process.Args) !void {
     }
 
     if (std.mem.eql(u8, cmd, "--version") or std.mem.eql(u8, cmd, "-v")) {
-        std.debug.print("zero {s}\n", .{zero.constants.SERVER_VERSION});
+        std.debug.print("zero {s}\n", .{zero.constants.FRAMEWORK_VERSION});
         return;
     }
 

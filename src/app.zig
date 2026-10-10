@@ -104,6 +104,8 @@ fn initBase(allocator: std.mem.Allocator, io: std.Io, em: *EnvMap) !*App {
 
     configureLogFormat(em, config);
 
+    try config.callOutConfigLoads();
+
     // Vault secret injection (no-op when VAULT_ADDR is unset). Must run before
     // container.create so datasources can read credentials from the environment.
     try root.vault.load(allocator, io, config, log);

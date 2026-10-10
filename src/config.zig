@@ -18,6 +18,7 @@ const defaultFile = "./configs/.env";
 environments: *std.process.Environ.Map,
 allocator: std.mem.Allocator,
 log: *root.logger,
+loadMessage: []const u8 = undefined,
 
 pub fn create(self: Self) !*config {
     const c = try self.allocator.create(config);
@@ -39,25 +40,20 @@ pub fn create(self: Self) !*config {
 /// Frees the `config` struct. The wrapped `environments` map is the process-global
 /// `std.process.environ` and is not owned here, so only the struct itself is freed.
 pub fn deinit(self: *Self) void {
+    self.allocator.free(self.loadMessage);
+
     self.allocator.destroy(self);
 }
 
-fn isFileRWExist(fn_dir: std.fs.Dir, fn_file_name: []const u8) !bool {
-    fn_dir.access(fn_file_name, .{ .mode = .read_only }) catch |err| switch (err) {
-        error.FileNotFound => return false,
-        error.PermissionDenied => return false,
-        else => {
-            return err;
-        },
-    };
-    return true;
+pub fn callOutConfigLoads(self: *Self) !void {
+    var buf: [256]u8 = undefined;
+    const msg = try std.fmt.bufPrint(&buf, "Loaded config from file: {s}", .{defaultFile});
+    self.log.Info(self.allocator, msg);
+    self.log.info(self.loadMessage);
 }
 
 fn loadDefaultEnv(self: *Self) !void {
     try dotenv.loadFrom(self.allocator, utils.io, self.environments, defaultFile, .{});
-    var buf: [256]u8 = undefined;
-    const msg = try std.fmt.bufPrint(&buf, "Loaded config from file: {s}", .{defaultFile});
-    self.log.Info(self.allocator, msg);
 }
 
 fn loadEnvironmentOverrides(self: *Self) !void {
@@ -71,16 +67,18 @@ fn loadEnvironmentOverrides(self: *Self) !void {
         finalEnvFile = defaultFile;
     }
 
-    dotenv.loadFrom(self.allocator, utils.io, self.environments, finalEnvFile, .{ .override = true }) catch |err| switch (err) {
+    dotenv.loadFrom(
+        self.allocator,
+        utils.io,
+        self.environments,
+        finalEnvFile,
+        .{ .override = true },
+    ) catch |err| switch (err) {
         error.FileNotFound => {
-            var msg_buf: [256]u8 = undefined;
-            const msg = try std.fmt.bufPrint(&msg_buf, "config overriden {s} file not found.", .{finalEnvFile});
-            self.log.info(msg);
+            self.loadMessage = try std.fmt.allocPrint(self.allocator, "config overriden {s} file not found.", .{finalEnvFile});
         },
         else => {
-            var msg_buf: [256]u8 = undefined;
-            const msg = try std.fmt.bufPrint(&msg_buf, "config overriden from: {s}", .{finalEnvFile});
-            self.log.info(msg);
+            self.loadMessage = try std.fmt.allocPrint(self.allocator, "config overriden from: {s}", .{finalEnvFile});
         },
     };
 }

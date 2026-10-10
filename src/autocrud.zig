@@ -13,7 +13,7 @@ const Datasource = root.Datasource;
 const MockBackend = root.datasourceInterface.MockBackend;
 
 /// Options for `addRestHandlers`. `resource` is the URL segment (e.g. `"users"`
-/// registers `/users`, `/users/:id`, …). `table` defaults to `resource`; the
+/// registers `/users`, `/users/:id`, …). `table` defaults to `resource`
 /// primary key is `id` unless `id_field` says otherwise.
 pub const AutoCrudOptions = struct {
     resource: []const u8,
