@@ -79,6 +79,43 @@ That's the whole app. Everything else — Postgres, Redis, Kafka, auth, and metr
 
 Full walkthrough in [Hello Zero](https://zerofmk.in/hello-zero) and [Getting Started](https://zerofmk.in/started).
 
+## Install
+
+Zero ships as a single prebuilt binary — no Zig toolchain required. The installer
+detects your platform, downloads the matching binary from GitHub Releases,
+verifies its checksum, and installs to `/usr/local/bin`:
+
+```bash
+curl -fsSL https://im-ng.github.io/zero/install.sh | sh
+```
+
+Install a specific version:
+
+```bash
+sh install.sh v0.5.3
+```
+
+The prebuilt binary dynamically links libc plus `librdkafka` and OpenSSL
+(`libssl`/`libcrypto`). If `zero --version` fails with a missing shared library,
+install them:
+
+```bash
+apt install librdkafka-dev libssl-dev   # Debian/Ubuntu
+brew install rdkafka openssl            # macOS
+```
+
+`duckdb` is only needed for `zero migrator` and DuckDB-backed features:
+
+```bash
+apt install duckdb   # Debian/Ubuntu
+brew install duckdb   # macOS
+```
+
+On macOS, Gatekeeper may block the unsigned binary the first time it runs —
+clear the quarantine with `xattr -dr com.apple.quarantine $(which zero)`.
+
+To build from source instead, see [Quick Start](#quick-start).
+
 ## Why Zero?
 
 If you want Go's ergonomics without its runtime, or Node's speed without its footprint, Zero is a strongly-opinionated Zig framework. You get explicit memory control, a single binary, and the microservice building blocks you'd otherwise wire together by hand.

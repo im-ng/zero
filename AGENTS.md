@@ -47,6 +47,11 @@ grep -rnE "catch \{\}" src examples || true
 Fix anything the audit surfaces in the files you touched. `zig build test` and
 the affected example (`zig build` inside `examples/<name>`) must still pass.
 
+- Outbound websocket client: `examples/zero-ws-client` must `zig build` (it
+  depends on `zero.WebSocketClient` / `app.connectWebSocket`). `wss` TLS is opened
+  with `ca_bundle = null`, so server-cert verification is skipped — supply a CA
+  bundle for hosts that require it.
+
 ## Toolchain
 
 - **Zig 0.16.0** minimum, pinned in `build.zig.zon`
@@ -179,9 +184,11 @@ These are used consistently across the codebase and must be referenced as-is:
 
 ## Examples
 
-13 example apps in `examples/` — each has its own `build.zig.zon` and `build.zig`.
+A large set of example apps in `examples/` — each has its own `build.zig.zon` and `build.zig`.
 
-Pub/Sub example configs (`zero-pubsub-publisher`, `zero-pubsub-subscriber`, `zero-kv`, `zero-redis`) document every `PUBSUB_BACKEND` option: MQTT, Kafka, NATS, SQS, GCP.
+- `zero-websocket` — inbound websocket server (`app.addWebsocket`).
+- `zero-ws-client` — **outbound** websocket client: `app.connectWebSocket(url, headers, on_message, on_open, userdata)` + `zero.WebSocketClient` (`sendText`/`sendBin`). Runs its own thread, auto-reconnects with backoff, and self-terminates on app shutdown.
+- Pub/Sub example configs (`zero-pubsub-publisher`, `zero-pubsub-subscriber`, `zero-kv`, `zero-redis`) document every `PUBSUB_BACKEND` option: MQTT, Kafka, NATS, SQS, GCP.
 
 ## Gotchas
 

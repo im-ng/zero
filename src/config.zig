@@ -76,11 +76,17 @@ fn loadEnvironmentOverrides(self: *Self) !void {
     ) catch |err| switch (err) {
         error.FileNotFound => {
             self.loadMessage = try std.fmt.allocPrint(self.allocator, "config overriden {s} file not found.", .{finalEnvFile});
+            return;
         },
         else => {
             self.loadMessage = try std.fmt.allocPrint(self.allocator, "config overriden from: {s}", .{finalEnvFile});
+            return;
         },
     };
+    // Success path: loadFrom returned without error, so the catch above never
+    // assigned loadMessage. Leave it as a valid (heap) slice — it is logged by
+    // callOutConfigLoads and freed in deinit, so an undefined value there is UB.
+    self.loadMessage = try std.fmt.allocPrint(self.allocator, "config loaded from: {s}", .{finalEnvFile});
 }
 
 pub fn get(self: *Self, key: []const u8) []const u8 {

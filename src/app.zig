@@ -15,6 +15,7 @@ const Cronz = root.cronz;
 const AuthProvider = root.AuthProvider;
 const favoriteIcon = root.favIcon;
 const otel = root.otel;
+const wsclient = @import("wsclient.zig");
 
 /// Signature for a CLI subcommand handler. The handler uses `ctx` to access
 /// datasources (`ctx.SQL`, `ctx.Cache`, …), parsed flags (`ctx.Param`), the
@@ -74,7 +75,7 @@ bootstrap_allocator: std.mem.Allocator = undefined,
 bootstrap_backing: []u8 = undefined,
 
 var hServer: ?*root.httpServer = undefined;
-var shutdown_requested: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
+pub var shutdown_requested: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
 var AppInstance: *Self = undefined;
 
 /// Shared setup for both HTTP (`new`) and CLI (`newCmd`) applications: config,
@@ -510,6 +511,37 @@ fn remoteLogServiceGet(ctx: *root.Context) !void {
 
 pub fn onStartup(self: *Self, hook: fn (*root.Context) anyerror!void) void {
     self.startupHook = &hook;
+}
+
+/// Register a long-lived outbound websocket connection. Mirrors `addHttpService`:
+/// the client is created from `opts` and tracked by `name` in the container, so it
+/// is joined and freed on app exit (no leaked thread or `Context`). `name` resolves
+/// outbound auth + circuit-breaker config from `SERVICE_<NAME>_*` env; explicit
+/// `opts` values override those defaults. The optional `on_open` fires once after
+/// the handshake so the caller can send a subscribe/login frame. Returns the client
+/// so the caller can wire it into `userdata` (e.g. to reply to heartbeats).
+pub fn addWebsocketClient(
+    self: *Self,
+    name: []const u8,
+    url: []const u8,
+    opts: wsclient.Options,
+) !*wsclient.Client {
+    const resolved = zeroClient.fromEnv(self.container, name);
+    const up = opts.userdata orelse @as(*anyopaque, @ptrCast(self));
+
+    const client = try wsclient.connect(
+        self.container.allocator,
+        self.container,
+        url,
+        opts.headers,
+        opts.on_message,
+        opts.on_open,
+        up,
+        opts.auth orelse resolved.auth,
+        opts.circuitBreaker orelse resolved.circuitBreaker,
+    );
+    try self.container.registerWsClient(name, client);
+    return client;
 }
 
 /// Returns the metrics registry so apps can register custom counters, gauges,

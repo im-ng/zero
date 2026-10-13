@@ -840,6 +840,7 @@ pub const MySQL = struct {
 // Placeholders are interpolated directly (text protocol); this is a convenience
 // for the typed query API, not a server-side prepared statement.
 fn interpolateSql(allocator: std.mem.Allocator, comptime stmt: []const u8, args: anytype) ![]const u8 {
+    @setEvalBranchQuota(2_000_000);
     const ArgIndex = comptime blk: {
         var arr: [stmt.len]?usize = undefined;
         var counter: usize = 0;

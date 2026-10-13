@@ -12,6 +12,11 @@ const utils = zero.utils;
 const Allocator = std.mem.Allocator;
 const Io = std.Io;
 
+// Route logs through zero's custom logger. The Zig 0.16 default terminal logger
+// panics with EINVAL (positioned write on a non-seekable fd) on
+// fileWriteStreaming; the custom logger uses a plain streaming write to stdout.
+pub const std_options: std.Options = .{ .logFn = zero.logger.custom };
+
 fn nowNs() u64 {
     return @as(u64, @intCast(utils.nowMonotonic().nanoseconds));
 }

@@ -158,6 +158,9 @@ nosql_backend: ?root.nosqlInterface.Backend = null,
 // Graph datasource (Round 3: Dgraph over its HTTP query/mutate API).
 Graph: ?*root.Graph = null,
 services: ?std.StringHashMap(*zeroClient) = null,
+// Outbound websocket clients (App.addWebsocketClient). Tracked so each
+// background thread is joined and the client freed on container teardown.
+wsClients: ?std.StringHashMap(*root.wsclient.Client) = null,
 kvStores: std.StringHashMap(*root.KVStore) = undefined,
 defaultKV: ?*root.KVStore = null,
 fileStores: std.StringHashMap(*root.FileStore) = undefined,
@@ -197,6 +200,7 @@ pub fn create(self: Self) anyerror!*container {
 
     // initialize service client handler maps
     c.services = std.StringHashMap(*zeroClient).init(c.bootstrap);
+    c.wsClients = std.StringHashMap(*root.wsclient.Client).init(c.bootstrap);
 
     // initialize kv stores (backends registered via App.addKVStore / loadRedis)
     c.kvStores = std.StringHashMap(*root.KVStore).init(c.bootstrap);
@@ -282,6 +286,16 @@ pub fn destroy(self: *Self) void {
     if (self.services) |*svcs| {
         var svc_it = svcs.iterator();
         while (svc_it.next()) |entry| {
+            entry.value_ptr.*.deinit();
+        }
+    }
+
+    // Outbound websocket clients: stop (join) each background thread and free the
+    // client plus its datasource-wired Context. Runs before config/log teardown
+    // because the client threads reference the container while alive.
+    if (self.wsClients) |*cls| {
+        var cl_it = cls.iterator();
+        while (cl_it.next()) |entry| {
             entry.value_ptr.*.deinit();
         }
     }
@@ -1591,6 +1605,10 @@ fn loadGraph(self: *Self) !void {
 
 pub fn registerZeroClient(self: *Self, service: *zeroClient) !void {
     try self.services.?.put(service.name, service);
+}
+
+pub fn registerWsClient(self: *Self, name: []const u8, client: *root.wsclient.Client) !void {
+    try self.wsClients.?.put(name, client);
 }
 
 fn loadFileStore(self: *Self) !void {
