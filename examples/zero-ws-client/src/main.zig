@@ -40,7 +40,11 @@ pub fn main(init: std.process.Init) !void {
 // Fired once after the handshake: subscribe to the ETH ticker.
 fn onOpen(client: *WebSocketClient, _: ?*anyopaque) !void {
     var buf: [128]u8 = undefined;
-    const sub = try std.fmt.bufPrint(&buf, "{{\"op\":\"subscribe\",\"args\":[\"tickers.{s}\"]}}", .{ETH_SYMBOL});
+    const sub = try std.fmt.bufPrint(
+        &buf,
+        "{{\"op\":\"subscribe\",\"args\":[\"tickers.{s}\"]}}",
+        .{ETH_SYMBOL},
+    );
     try client.sendText(sub);
 }
 
@@ -70,7 +74,12 @@ fn onMessage(ctx: *Context, frame: []const u8, ud: ?*anyopaque) !void {
         return;
     }
 
-    const parsed = std.json.parseFromSlice(Envelope, ctx.allocator, frame, .{ .ignore_unknown_fields = true }) catch {
+    const parsed = std.json.parseFromSlice(
+        Envelope,
+        ctx.allocator,
+        frame,
+        .{ .ignore_unknown_fields = true },
+    ) catch {
         // Genuinely unexpected payloads: print so a bad shape is visible
         // instead of silently dropped.
         std.log.err("unparsed ws frame: {s}", .{frame});
@@ -81,5 +90,13 @@ fn onMessage(ctx: *Context, frame: []const u8, ud: ?*anyopaque) !void {
     // Subscription acks and non-ticker frames have no `data`: skip silently.
     const data = parsed.value.data orelse return;
     const last = data.lastPrice orelse return;
-    std.log.info("ETH {s} last={s}", .{ data.symbol orelse ETH_SYMBOL, last });
+
+    const msg = try std.fmt.allocPrint(
+        ctx.allocator,
+        "ETH {s} last={s}",
+        .{ data.symbol orelse ETH_SYMBOL, last },
+    );
+    defer ctx.allocator.free(msg);
+
+    ctx.info(msg);
 }
