@@ -34,9 +34,8 @@ pub fn build(b: *std.Build) void {
             .openssl_lib_path = std.Build.LazyPath{ .cwd_relative = "/usr/local/opt/openssl@3/lib" },
             .openssl_lib_name = "ssl",
         })
-    else {
+    else
         b.dependency("pg", .{ .openssl = true });
-    };
 
     module.addImport("pg", pgz.module("pg"));
 
