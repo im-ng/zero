@@ -56,7 +56,7 @@ the affected example (`zig build` inside `examples/<name>`) must still pass.
 
 - **Zig 0.16.0** minimum, pinned in `build.zig.zon`
 - Requires `librdkafka-dev` (`apt install librdkafka-dev` / `brew install librdkafka`)
-- On macOS, `build.zig` hardcodes `/usr/local/Cellar/librdkafka/2.13.0` include/lib paths
+- On macOS, `build.zig` hardcodes `/usr/local/Cellar/librdkafka/2.15.1` include/lib paths
 - **Always `rm -rf .zig-cache zig-out zig-pkg/` before switching Zig versions** — stale cache causes build failures and runtime corruption
 - This environment builds and tests with **Zig 0.16.0** (`/usr/local/zig-x86_64-linux-0.16.0/zig`); the deps vendored in `zig-pkg/` compile under it.
 
