@@ -129,9 +129,9 @@ pub fn innerHtmlItem(allocator: std.mem.Allocator, sb: *Builder, todo: *const mo
 }
 
 fn replace(allocator: std.mem.Allocator, source: []const u8, needle: []const u8, word: []const u8) []u8 {
-    const new_size = std.mem.replacementSize(u8, source, needle, word);
-
-    const dest: []u8 = allocator.alloc(u8, new_size) catch unreachable;
-    _ = std.mem.replace(u8, source, needle, word, dest);
-    return dest;
+    // `replaceOwned` allocates exactly `replacementSize` bytes, which is the only
+    // safe size for `std.mem.replace`; hand-rolling it can under-size the
+    // destination when a replacement itself contains the (possibly expanded)
+    // needle text.
+    return std.mem.replaceOwned(u8, allocator, source, needle, word) catch unreachable;
 }

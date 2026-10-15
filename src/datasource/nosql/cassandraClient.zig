@@ -4,6 +4,7 @@ const constants = @import("../../constants.zig");
 
 const Io = std.Io;
 const net = Io.net;
+const crypto = std.crypto;
 
 /// Minimal Apache Cassandra native protocol v4 client (binary CQL), implemented
 /// on `std.Io.net` so it is portable across Linux and macOS (no `std.os.linux`
@@ -104,17 +105,31 @@ pub const Connection = struct {
     buf: []u8,
     read_buf: []u8,
     write_buf: []u8,
+    /// When TLS is enabled, the CQL frames are written/read through this
+    /// `crypto.tls.Client` instead of the raw stream. `reader`/`writer` always
+    /// point at the active layer (raw stream before the handshake, TLS after).
+    tls_client: ?crypto.tls.Client = null,
+    ca_bundle: crypto.Certificate.Bundle,
+    ca_lock: Io.RwLock = .init,
+    reader: *Io.Reader,
+    writer: *Io.Writer,
+    tls_read_buf: []u8,
+    tls_write_buf: []u8,
     contact_points: []const u8,
     user: []const u8,
     pass: []const u8,
     /// When set, a `USE` statement is issued right after the auth handshake so
     /// every later statement runs in this keyspace without re-qualifying it.
     keyspace: ?[]const u8 = null,
+    tls_enabled: bool,
+    tls_verify: bool,
+    tls_ca_path: ?[]const u8,
     connected: bool = false,
     mutex: std.atomic.Mutex = .unlocked,
 
     const read_buffer_size = 1 << 16;
     const write_buffer_size = 1 << 16;
+    const tls_buffer_size = crypto.tls.Client.min_buffer_len;
 
     fn lock(self: *Connection) void {
         while (!self.mutex.tryLock()) {
@@ -128,10 +143,26 @@ pub const Connection = struct {
         self.mutex.unlock();
     }
 
-    pub fn init(allocator: std.mem.Allocator, contact_points: []const u8, user: []const u8, pass: []const u8, keyspace: ?[]const u8) Connection {
-        const buf = allocator.alloc(u8, read_buffer_size + write_buffer_size) catch @panic("oom");
-        const read_buf = buf[0..read_buffer_size];
-        const write_buf = buf[read_buffer_size..][0..write_buffer_size];
+    pub fn init(allocator: std.mem.Allocator, opts: struct {
+        contact_points: []const u8,
+        user: []const u8,
+        pass: []const u8,
+        keyspace: ?[]const u8,
+        tls_enabled: bool = false,
+        tls_verify: bool = false,
+        tls_ca_path: ?[]const u8 = null,
+    }) Connection {
+        const alloc_len = read_buffer_size + write_buffer_size + (tls_buffer_size * 2);
+        const buf = allocator.alloc(u8, alloc_len) catch @panic("oom");
+        var off: usize = 0;
+        const read_buf = buf[off..][0..read_buffer_size];
+        off += read_buffer_size;
+        const write_buf = buf[off..][0..write_buffer_size];
+        off += write_buffer_size;
+        const tls_read_buf = buf[off..][0..tls_buffer_size];
+        off += tls_buffer_size;
+        const tls_write_buf = buf[off..][0..tls_buffer_size];
+
         const self: Connection = .{
             .allocator = allocator,
             .stream = undefined,
@@ -140,10 +171,19 @@ pub const Connection = struct {
             .buf = buf,
             .read_buf = read_buf,
             .write_buf = write_buf,
-            .contact_points = contact_points,
-            .user = user,
-            .pass = pass,
-            .keyspace = keyspace,
+            .tls_client = null,
+            .ca_bundle = .empty,
+            .reader = undefined,
+            .writer = undefined,
+            .tls_read_buf = tls_read_buf,
+            .tls_write_buf = tls_write_buf,
+            .contact_points = opts.contact_points,
+            .user = opts.user,
+            .pass = opts.pass,
+            .keyspace = opts.keyspace,
+            .tls_enabled = opts.tls_enabled,
+            .tls_verify = opts.tls_verify,
+            .tls_ca_path = opts.tls_ca_path,
         };
         return self;
     }
@@ -151,6 +191,10 @@ pub const Connection = struct {
     pub fn deinit(self: *Connection) void {
         if (self.connected) {
             self.stream.close(utils.io);
+        }
+        self.ca_bundle.deinit(self.allocator);
+        if (self.tls_ca_path) |p| {
+            self.allocator.free(p);
         }
         self.allocator.free(self.buf);
     }
@@ -183,7 +227,18 @@ pub const Connection = struct {
             self.stream = stream;
             self.stream_reader = stream.reader(utils.io, self.read_buf);
             self.stream_writer = stream.writer(utils.io, self.write_buf);
+            self.reader = &self.stream_reader.interface;
+            self.writer = &self.stream_writer.interface;
+
+            if (self.tls_enabled) {
+                self.setupTls(host) catch {
+                    stream.close(utils.io);
+                    continue;
+                };
+            }
+
             self.handshake() catch {
+                self.tls_client = null;
                 stream.close(utils.io);
                 continue;
             };
@@ -275,7 +330,7 @@ pub const Connection = struct {
     }
 
     fn writeFrame(self: *Connection, opcode: u8, body: []const u8) !void {
-        const writer = &self.stream_writer.interface;
+        const writer = self.writer;
         var header: [9]u8 = undefined;
         header[0] = 0x04; // protocol version 4 (request)
         header[1] = 0x00; // flags
@@ -289,7 +344,7 @@ pub const Connection = struct {
     }
 
     fn readFrame(self: *Connection) !struct { opcode: u8, body: []u8 } {
-        const reader = &self.stream_reader.interface;
+        const reader = self.reader;
         var header: [9]u8 = undefined;
         try reader.readSliceAll(&header);
         const opcode = header[4];
@@ -298,6 +353,38 @@ pub const Connection = struct {
         errdefer self.allocator.free(body);
         try reader.readSliceAll(body);
         return .{ .opcode = opcode, .body = body };
+    }
+
+    /// Negotiate TLS over the already-connected stream and repoint `reader`/
+    /// `writer` at the TLS client. Mirrors `mongodbClient.zig`.
+    fn setupTls(self: *Connection, host: []const u8) !void {
+        var rand: [crypto.tls.Client.Options.entropy_len]u8 = undefined;
+        utils.io.random(&rand);
+        const now = Io.Timestamp.now(utils.io, .real);
+
+        self.tls_client = try crypto.tls.Client.init(
+            &self.stream_reader.interface,
+            &self.stream_writer.interface,
+            .{
+                .host = if (self.tls_verify) .{ .explicit = host } else .no_verification,
+                .ca = if (self.tls_verify and self.tls_ca_path != null) ca: {
+                    self.ca_bundle.addCertsFromFilePathAbsolute(self.allocator, utils.io, now, self.tls_ca_path.?) catch return error.CassandraTlsCaLoadFailed;
+                    break :ca .{ .bundle = .{
+                        .gpa = self.allocator,
+                        .io = utils.io,
+                        .lock = &self.ca_lock,
+                        .bundle = &self.ca_bundle,
+                    } };
+                } else .no_verification,
+                .write_buffer = self.write_buf,
+                .read_buffer = self.tls_read_buf,
+                .entropy = &rand,
+                .realtime_now = now,
+                .allow_truncation_attacks = true,
+            },
+        );
+        self.reader = &self.tls_client.?.reader;
+        self.writer = &self.tls_client.?.writer;
     }
 };
 
@@ -543,7 +630,12 @@ test "cassandra live round-trip (set CASSANDRA_TEST=1 to run)" {
     // Connect without a keyspace: a fresh container has none, so the client must
     // not issue `USE` until this test creates it. Statements qualify the
     // keyspace explicitly instead.
-    var conn = Connection.init(std.testing.allocator, hostport, "cassandra", "cassandra", null);
+    var conn = Connection.init(std.testing.allocator, .{
+        .contact_points = hostport,
+        .user = "cassandra",
+        .pass = "cassandra",
+        .keyspace = null,
+    });
     defer conn.deinit();
 
     // Skip cleanly if a Cassandra instance isn't actually reachable (e.g. the

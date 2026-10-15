@@ -30,6 +30,10 @@ pub const Options = struct {
     /// Optional auth.
     user: ?[]const u8 = null,
     password: ?[]const u8 = null,
+    /// Optional TLS (Cassandra backend only; ignored by others).
+    tls_enabled: bool = false,
+    tls_verify: bool = false,
+    tls_ca_path: ?[]const u8 = null,
 };
 
 /// Unified, type-erased NoSQL interface.
@@ -84,6 +88,9 @@ pub const NoSQL = struct {
                     .keyspace = opts.keyspace,
                     .user = opts.user,
                     .password = opts.password,
+                    .tls_enabled = opts.tls_enabled,
+                    .tls_verify = opts.tls_verify,
+                    .tls_ca_path = opts.tls_ca_path,
                 });
                 break :blk @as(*anyopaque, c);
             },
