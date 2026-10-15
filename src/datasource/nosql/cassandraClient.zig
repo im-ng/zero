@@ -124,6 +124,10 @@ pub const Connection = struct {
     tls_enabled: bool,
     tls_verify: bool,
     tls_ca_path: ?[]const u8,
+    /// Hostname used for certificate verification. When null the contact-point
+    /// host is used; set it to a `dNSName` from the server cert (e.g. `localhost`)
+    /// when connecting via an IP literal, since Zig only matches `dNSName` SANs.
+    tls_server_name: ?[]const u8 = null,
     connected: bool = false,
     mutex: std.atomic.Mutex = .unlocked,
 
@@ -151,6 +155,7 @@ pub const Connection = struct {
         tls_enabled: bool = false,
         tls_verify: bool = false,
         tls_ca_path: ?[]const u8 = null,
+        tls_server_name: ?[]const u8 = null,
     }) Connection {
         const alloc_len = read_buffer_size + write_buffer_size + (tls_buffer_size * 2);
         const buf = allocator.alloc(u8, alloc_len) catch @panic("oom");
@@ -184,6 +189,7 @@ pub const Connection = struct {
             .tls_enabled = opts.tls_enabled,
             .tls_verify = opts.tls_verify,
             .tls_ca_path = opts.tls_ca_path,
+            .tls_server_name = opts.tls_server_name,
         };
         return self;
     }
@@ -194,6 +200,9 @@ pub const Connection = struct {
         }
         self.ca_bundle.deinit(self.allocator);
         if (self.tls_ca_path) |p| {
+            self.allocator.free(p);
+        }
+        if (self.tls_server_name) |p| {
             self.allocator.free(p);
         }
         self.allocator.free(self.buf);
@@ -231,13 +240,15 @@ pub const Connection = struct {
             self.writer = &self.stream_writer.interface;
 
             if (self.tls_enabled) {
-                self.setupTls(host) catch {
+                self.setupTls(self.tls_server_name orelse host) catch |e| {
+                    std.log.err("cassandra tls setup failed for {s}:{d}: {any}", .{ host, port, e });
                     stream.close(utils.io);
                     continue;
                 };
             }
 
-            self.handshake() catch {
+            self.handshake() catch |e| {
+                std.log.err("cassandra handshake failed for {s}:{d}: {any}", .{ host, port, e });
                 self.tls_client = null;
                 stream.close(utils.io);
                 continue;

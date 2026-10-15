@@ -20,10 +20,12 @@ pub const Cassandra = struct {
         tls_enabled: bool = false,
         tls_verify: bool = false,
         tls_ca_path: ?[]const u8 = null,
+        tls_server_name: ?[]const u8 = null,
     }) !*Cassandra {
         // The connection owns `tls_ca_path`; dupe it so the config buffer's
         // lifetime does not constrain the connection.
         const tls_ca: ?[]u8 = if (opts.tls_ca_path) |p| try allocator.dupe(u8, p) else null;
+        const tls_server_name: ?[]u8 = if (opts.tls_server_name) |p| try allocator.dupe(u8, p) else null;
         const self = try allocator.create(Cassandra);
         self.* = .{
             .conn = client.Connection.init(allocator, .{
@@ -34,6 +36,7 @@ pub const Cassandra = struct {
                 .tls_enabled = opts.tls_enabled,
                 .tls_verify = opts.tls_verify,
                 .tls_ca_path = tls_ca,
+                .tls_server_name = tls_server_name,
             }),
         };
         return self;

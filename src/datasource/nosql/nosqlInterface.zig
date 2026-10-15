@@ -34,6 +34,12 @@ pub const Options = struct {
     tls_enabled: bool = false,
     tls_verify: bool = false,
     tls_ca_path: ?[]const u8 = null,
+    /// Optional TLS server name used for certificate verification. Zig's TLS
+    /// client only matches `dNSName` SANs (not `iPAddress`), so when the contact
+    /// point is an IP literal the cert must be verified against a hostname that
+    /// appears as a `dNSName` (e.g. `localhost`). Defaults to the contact-point
+    /// host when unset.
+    tls_server_name: ?[]const u8 = null,
 };
 
 /// Unified, type-erased NoSQL interface.
@@ -91,6 +97,7 @@ pub const NoSQL = struct {
                     .tls_enabled = opts.tls_enabled,
                     .tls_verify = opts.tls_verify,
                     .tls_ca_path = opts.tls_ca_path,
+                    .tls_server_name = opts.tls_server_name,
                 });
                 break :blk @as(*anyopaque, c);
             },

@@ -1491,6 +1491,7 @@ fn loadNoSQL(self: *Self) !void {
         const tls_enabled = self.config.getAsBool("CASSANDRA_TLS_ENABLED");
         const tls_verify = self.config.getAsBool("CASSANDRA_TLS_VERIFY");
         const tls_ca = self.config.get("CASSANDRA_TLS_CA");
+        const tls_server_name = self.config.get("CASSANDRA_TLS_SERVER_NAME");
         const handle = try root.NoSQL.build(self, .cassandra, .{
             .contact_points = cassandra_cp,
             .keyspace = keyspace,
@@ -1499,6 +1500,7 @@ fn loadNoSQL(self: *Self) !void {
             .tls_enabled = tls_enabled,
             .tls_verify = tls_verify,
             .tls_ca_path = if (std.mem.eql(u8, tls_ca, "")) null else tls_ca,
+            .tls_server_name = if (std.mem.eql(u8, tls_server_name, "")) null else tls_server_name,
         });
         self.NoSQL = handle;
         self.nosql_backend = .cassandra;
