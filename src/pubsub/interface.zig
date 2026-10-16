@@ -8,6 +8,8 @@ pub const Message = union(enum) {
     kafka: *root.kafkaMessage,
     nats: *root.natsMessage,
     redis: *root.redisMessage,
+    sqs: *root.sqsMessage,
+    gcp: *root.gcpMessage,
 };
 
 /// Unified pub/sub interface (type-erased VTable).

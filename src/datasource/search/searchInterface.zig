@@ -8,6 +8,8 @@ const utils = root.utils;
 /// (Elasticsearch, Meilisearch, …) here and a case in the `switch`.
 pub const Backend = enum {
     solr,
+    /// Self-hosted REST search engine; see `meili.zig` / `meiliClient.zig`.
+    meilisearch,
     /// Test-only backend backed by `MockBackend`. Lets the `Search` dispatch be
     /// exercised without a running Solr.
     mock,
@@ -20,6 +22,8 @@ pub const Options = struct {
     default_collection: []const u8,
     /// Optional `?auth_user=...&auth_pass=...` style — left as a raw header here.
     basic_auth: ?[]const u8 = null,
+    /// Optional Meilisearch API key; sent as `Authorization: Bearer <key>`.
+    api_key: ?[]const u8 = null,
 };
 
 /// Unified, type-erased search interface.
@@ -45,6 +49,7 @@ pub const Search = struct {
     fn backendName(b: Backend) []const u8 {
         return switch (b) {
             .solr => "solr",
+            .meilisearch => "meilisearch",
             .mock => "mock",
         };
     }
@@ -73,6 +78,14 @@ pub const Search = struct {
                 });
                 break :blk @as(*anyopaque, c);
             },
+            .meilisearch => blk: {
+                const c = try root.Meili.create(container.allocator, .{
+                    .url = opts.url,
+                    .default_collection = opts.default_collection,
+                    .api_key = opts.api_key,
+                });
+                break :blk @as(*anyopaque, c);
+            },
             .mock => blk: {
                 const mb = try container.allocator.create(MockBackend);
                 mb.* = MockBackend{ .last_doc = "" };
@@ -93,6 +106,10 @@ pub const Search = struct {
                 const c = @as(*root.Solr, @ptrCast(@alignCast(self.ptr)));
                 c.deinit(allocator);
             },
+            .meilisearch => {
+                const c = @as(*root.Meili, @ptrCast(@alignCast(self.ptr)));
+                c.deinit(allocator);
+            },
             .mock => {
                 const mb = @as(*MockBackend, @ptrCast(@alignCast(self.ptr)));
                 allocator.destroy(mb);
@@ -107,6 +124,7 @@ pub const Search = struct {
         const start = utils.nowMonotonic();
         const r = switch (self.backend) {
             .solr => @as(*root.Solr, @ptrCast(@alignCast(self.ptr))).index(ctx, collection, doc_json),
+            .meilisearch => @as(*root.Meili, @ptrCast(@alignCast(self.ptr))).index(ctx, collection, doc_json),
             .mock => @as(*MockBackend, @ptrCast(@alignCast(self.ptr))).index(ctx, collection, doc_json),
         } catch |e| {
             if (self.breaker) |*b| {
@@ -129,6 +147,7 @@ pub const Search = struct {
         const start = utils.nowMonotonic();
         const r = switch (self.backend) {
             .solr => @as(*root.Solr, @ptrCast(@alignCast(self.ptr))).query(ctx, collection, q),
+            .meilisearch => @as(*root.Meili, @ptrCast(@alignCast(self.ptr))).query(ctx, collection, q),
             .mock => @as(*MockBackend, @ptrCast(@alignCast(self.ptr))).query(ctx, collection, q),
         } catch |e| {
             if (self.breaker) |*b| {
@@ -151,6 +170,7 @@ pub const Search = struct {
         const start = utils.nowMonotonic();
         const r = switch (self.backend) {
             .solr => @as(*root.Solr, @ptrCast(@alignCast(self.ptr))).get(ctx, collection, id),
+            .meilisearch => @as(*root.Meili, @ptrCast(@alignCast(self.ptr))).get(ctx, collection, id),
             .mock => @as(*MockBackend, @ptrCast(@alignCast(self.ptr))).get(ctx, collection, id),
         } catch |e| {
             if (self.breaker) |*b| {
@@ -172,6 +192,7 @@ pub const Search = struct {
         const start = utils.nowMonotonic();
         const r = switch (self.backend) {
             .solr => @as(*root.Solr, @ptrCast(@alignCast(self.ptr))).delete(ctx, collection, id),
+            .meilisearch => @as(*root.Meili, @ptrCast(@alignCast(self.ptr))).delete(ctx, collection, id),
             .mock => @as(*MockBackend, @ptrCast(@alignCast(self.ptr))).delete(ctx, collection, id),
         } catch |e| {
             if (self.breaker) |*b| {
@@ -195,6 +216,7 @@ pub const Search = struct {
     pub fn lastError(self: *Search) ?root.Error.DataSourceError {
         return switch (self.backend) {
             .solr => @as(*root.Solr, @ptrCast(@alignCast(self.ptr))).lastError(),
+            .meilisearch => @as(*root.Meili, @ptrCast(@alignCast(self.ptr))).lastError(),
             .mock => null,
         };
     }

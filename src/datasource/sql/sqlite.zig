@@ -7,6 +7,11 @@ allocator: std.mem.Allocator,
 log: *root.logger,
 metricz: *root.metricz,
 db: root.sqlitez.Db,
+/// Serializes access to the shared single connection. SQLite is wired as one
+/// process-wide connection (see `container.loadSQLite` / `context.zig`), so
+/// concurrent requests would otherwise race the same `sqlitez` handle and
+/// corrupt statement state. The lock guards every path that touches `db`.
+mu: std.Io.Mutex,
 
 pub fn init(
     allocator: std.mem.Allocator,
@@ -27,6 +32,7 @@ pub fn init(
         .log = l,
         .metricz = m,
         .db = undefined,
+        .mu = .init,
     };
 
     source.db = try root.sqlitez.Db.init(.{
@@ -49,6 +55,8 @@ pub fn queryRow(self: *SQLite, ctx: *root.Context, comptime Type: type, comptime
 }
 
 pub fn queryRowContext(self: *SQLite, ctx: *root.Context, comptime Type: type, comptime query: []const u8, args: anytype) !?Type {
+    self.mu.lockUncancelable(root.utils.io);
+    defer self.mu.unlock(root.utils.io);
     var stmt = try self.db.prepareDynamic(query);
     defer stmt.deinit();
     return try stmt.oneAlloc(Type, ctx.allocator, .{}, args);
@@ -65,6 +73,8 @@ pub fn queryRows(self: *SQLite, ctx: *root.Context, comptime Type: type, comptim
 }
 
 pub fn queryRowsContext(self: *SQLite, ctx: *root.Context, comptime Type: type, comptime query: []const u8, args: anytype) ![]Type {
+    self.mu.lockUncancelable(root.utils.io);
+    defer self.mu.unlock(root.utils.io);
     var stmt = try self.db.prepareDynamic(query);
     defer stmt.deinit();
     return try stmt.all(Type, ctx.allocator, .{}, args);
@@ -93,6 +103,8 @@ pub fn selectSlice(self: *SQLite, ctx: *root.Context, comptime Type: type, list:
 }
 
 pub fn execWithContext(self: *SQLite, _: *root.Context, comptime query: []const u8, args: anytype) !i64 {
+    self.mu.lockUncancelable(root.utils.io);
+    defer self.mu.unlock(root.utils.io);
     var stmt = try self.db.prepareDynamic(query);
     defer stmt.deinit();
     try stmt.exec(.{}, args);
@@ -100,21 +112,29 @@ pub fn execWithContext(self: *SQLite, _: *root.Context, comptime query: []const 
 }
 
 pub fn rowsAffected(self: *SQLite) usize {
+    self.mu.lockUncancelable(root.utils.io);
+    defer self.mu.unlock(root.utils.io);
     return self.db.rowsAffected();
 }
 
 pub fn lastInsertRowID(self: *SQLite) i64 {
+    self.mu.lockUncancelable(root.utils.io);
+    defer self.mu.unlock(root.utils.io);
     return self.db.getLastInsertRowID();
 }
 
 /// Begin a transaction. SQLite auto-commits each statement, so an explicit
 /// BEGIN/COMMIT pair is required to make a set of writes atomic.
 pub fn begin(self: *SQLite) !void {
+    self.mu.lockUncancelable(root.utils.io);
+    defer self.mu.unlock(root.utils.io);
     try self.db.execDynamic("BEGIN", .{}, .{});
 }
 
 /// Commit the active transaction.
 pub fn commit(self: *SQLite) !void {
+    self.mu.lockUncancelable(root.utils.io);
+    defer self.mu.unlock(root.utils.io);
     try self.db.execDynamic("COMMIT", .{}, .{});
 }
 
@@ -122,5 +142,7 @@ pub fn commit(self: *SQLite) !void {
 pub fn rollback(self: *SQLite) void {
     // A failed rollback cannot be recovered here; the transaction is abandoned
     // either way, so the error is intentionally ignored.
+    self.mu.lockUncancelable(root.utils.io);
+    defer self.mu.unlock(root.utils.io);
     self.db.execDynamic("ROLLBACK", .{}, .{}) catch {};
 }

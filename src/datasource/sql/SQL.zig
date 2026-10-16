@@ -240,7 +240,7 @@ pub fn select(self: *Self, comptime _type: anytype, comptime query: []const u8, 
 
 pub fn selectSlice(
     self: *Self,
-    _: *root.Context,
+    ctx: *root.Context,
     comptime _type: anytype,
     list: *std.array_list.Managed(_type),
     comptime query: []const u8,
@@ -254,7 +254,7 @@ pub fn selectSlice(
     const rows = try conn.queryOpts(query, args, .{ .column_names = true, .timeout = self.statement_timeout_ms });
     defer rows.deinit();
 
-    var res = rows.mapper(_type, .{ .dupe = true });
+    var res = rows.mapper(_type, .{ .dupe = true, .allocator = ctx.allocator });
     while (try res.next()) |T| {
         if (list.items.len >= max_query_rows) return error.ResultSetExceedsLimit;
         try list.append(T);

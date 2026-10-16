@@ -3,6 +3,8 @@ const std = @import("std");
 const parser = @import("graphql").parser;
 const ast = @import("graphql").ast;
 
+const utils = @import("zero.zig").utils;
+
 pub const error_ = error{
     GraphQLExecutionError,
     GraphQLParseError,
@@ -32,6 +34,7 @@ fn ExecCtx(comptime Ctx: type) type {
 }
 
 pub fn handle(ctx: anytype, comptime Query: type, comptime Mutation: ?type, query_root: *const Query, mutation_root: ?*const anyopaque) !void {
+    const start = utils.nowMonotonic();
     const body = ctx.request.?.body() orelse "";
     var req: GraphQLRequest = .{};
     if (body.len > 0) {
@@ -67,7 +70,15 @@ pub fn handle(ctx: anytype, comptime Query: type, comptime Mutation: ?type, quer
     };
 
     const is_mutation = op.operation == .Mutation;
+    const op_kind: []const u8 = if (is_mutation) "mutation" else "query";
+    const op_name = blk: {
+        if (req.operation_name) |n| break :blk n;
+        if (op.name) |nm| break :blk nm.value;
+        break :blk "(anonymous)";
+    };
+
     if (is_mutation and Mutation == null) {
+        try ctx.container.metricz.graphqlOperation(.{ .operation = op_name, .kind = op_kind, .status = "error" }, utils.elapsedSeconds(start));
         ctx.response.setStatus(.bad_request);
         ctx.response.header("content-type", "application/json");
         try ctx.response.json(.{ .errors = .{.{ .message = "no mutation root configured" }} }, .{});
@@ -87,6 +98,7 @@ pub fn handle(ctx: anytype, comptime Query: type, comptime Mutation: ?type, quer
     // type-level `.?` that would fail to compile under a runtime `if`.
     const data = (if (is_mutation)
         dispatch(Mutation orelse Query, mutation_root orelse {
+            try ctx.container.metricz.graphqlOperation(.{ .operation = op_name, .kind = op_kind, .status = "error" }, utils.elapsedSeconds(start));
             ctx.response.setStatus(.bad_request);
             ctx.response.header("content-type", "application/json");
             try ctx.response.json(.{ .errors = .{.{ .message = "mutation root missing" }} }, .{});
@@ -94,6 +106,7 @@ pub fn handle(ctx: anytype, comptime Query: type, comptime Mutation: ?type, quer
         }, op.selection_set.?, &ec)
     else
         dispatch(Query, query_root, op.selection_set.?, &ec)) catch {
+        try ctx.container.metricz.graphqlOperation(.{ .operation = op_name, .kind = op_kind, .status = "error" }, utils.elapsedSeconds(start));
         ctx.response.setStatus(.internal_server_error);
         ctx.response.header("content-type", "application/json");
         const o = std.json.ObjectMap.empty;
@@ -112,6 +125,9 @@ pub fn handle(ctx: anytype, comptime Query: type, comptime Mutation: ?type, quer
         }
         try out.put(ctx.allocator, "errors", std.json.Value{ .array = err_arr });
     }
+
+    const op_status: []const u8 = if (ec.errors.items.len == 0) "ok" else "error";
+    try ctx.container.metricz.graphqlOperation(.{ .operation = op_name, .kind = op_kind, .status = op_status }, utils.elapsedSeconds(start));
 
     ctx.response.setStatus(.ok);
     ctx.response.header("content-type", "application/json");

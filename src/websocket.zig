@@ -18,10 +18,7 @@ message: []const u8 = undefined,
 _req: *httpz.Request = undefined,
 _res: *httpz.Response = undefined,
 
-pub fn init(
-    conn: *Conn,
-    context: *Context,
-) !WebSocket {
+pub fn init(conn: *Conn, context: *Context) !WebSocket {
     var ws = WebSocket{
         .conn = conn,
         .context = context,

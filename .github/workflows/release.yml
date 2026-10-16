@@ -1,0 +1,93 @@
+name: Release
+
+# Build prebuilt `zero` binaries for the four supported targets and publish them
+# as assets on the GitHub Release for the pushed tag. The install script
+# (docs/install.sh, served from GitHub Pages) downloads these assets.
+#
+# Each target is built on a NATIVE runner because Zig requires the system
+# libraries it links (librdkafka, OpenSSL) to be present at link time, and those
+# are architecture-specific — so cross-compiling all four from one runner is not
+# possible. macOS and Linux/arm64 each get their own runner.
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build ${{ matrix.short }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            target: x86_64-linux-gnu
+            short: x86_64-linux
+          - runner: ubuntu-24.04-arm
+            target: aarch64-linux-gnu
+            short: aarch64-linux
+          - runner: macos-13
+            target: x86_64-macos
+            short: x86_64-macos
+          - runner: macos-latest
+            target: aarch64-macos
+            short: aarch64-macos
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Zig 0.16.0
+        uses: korandoru/setup-zig@v1
+        with:
+          version: "0.16.0"
+
+      - name: Install system libraries (Linux)
+        if: startsWith(matrix.runner, 'ubuntu')
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y librdkafka-dev libssl-dev
+
+      - name: Install system libraries (macOS)
+        if: startsWith(matrix.runner, 'macos')
+        run: brew install rdkafka openssl
+
+      - name: Build and package
+        run: |
+          set -euo pipefail
+          zig build --release=fast -Dtarget="${{ matrix.target }}"
+          mkdir -p dist
+          tar -czf "dist/zero-${{ matrix.short }}.tar.gz" -C zig-out/bin zero
+          sha256sum "dist/zero-${{ matrix.short }}.tar.gz" > "dist/zero-${{ matrix.short }}.tar.gz.sha256"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: zero-${{ matrix.short }}
+          path: dist/*
+
+  release:
+    name: Create GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+
+      - name: Flatten artifacts
+        run: |
+          set -euo pipefail
+          mkdir -p assets
+          find dist -type f -exec cp {} assets/ \;
+          ls -la assets
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: assets/*
+          generate_release_notes: true

@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
@@ -8,8 +9,6 @@ pub fn build(b: *std.Build) void {
 
     const exe = b.addExecutable(.{
         .name = "todo",
-        .use_lld = true,
-        .use_llvm = true,
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/main.zig"),
             .target = target,
@@ -18,7 +17,7 @@ pub fn build(b: *std.Build) void {
     });
 
     const debug = b.option(bool, "debug", "enable code debug mode") orelse false;
-    if (debug) {
+    if (debug and builtin.os.tag != .macos) {
         exe.use_lld = true;
         exe.use_llvm = true;
     }

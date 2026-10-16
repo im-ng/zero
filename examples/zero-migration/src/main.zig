@@ -7,7 +7,6 @@ const App = zero.App;
 const Context = zero.Context;
 const migrate = zero.migrate;
 const container = zero.container;
-const utils = zero.utils;
 
 pub const std_options: std.Options = .{
     .logFn = zero.logger.custom,
@@ -34,9 +33,10 @@ fn prepareMigrations(a: *App) !void {
         .run = addTodoTable,
     };
 
-    const key = try utils.toStringFromInt(a.container.allocator, "{d}", addTodoMigration.migrationNumber);
+    const key = try std.fmt.allocPrint(a.container.allocator, "{d}", .{addTodoMigration.migrationNumber});
 
     try a.addMigration(key, addTodoMigration);
+    a.container.allocator.free(key);
 
     // 2. add todo entries
     const todoEntries = &migrate{
@@ -44,9 +44,10 @@ fn prepareMigrations(a: *App) !void {
         .run = addTodoEntries,
     };
 
-    const key2 = try utils.toStringFromInt(a.container.allocator, "{d}", todoEntries.migrationNumber);
+    const key2 = try std.fmt.allocPrint(a.container.allocator, "{d}", .{todoEntries.migrationNumber});
 
     try a.addMigration(key2, todoEntries);
+    a.container.allocator.free(key2);
 }
 
 pub fn addTodoTable(c: *Context) anyerror!void {

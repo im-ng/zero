@@ -15,17 +15,30 @@ const std = @import("std");
 pub const integration = @import("datasource/integration_test.zig");
 pub const clickhouse = @import("datasource/sql/clickhouse_test.zig");
 pub const couchbase = @import("datasource/nosql/couchbase_tests.zig");
+pub const arangodb = @import("datasource/nosql/arangodb_tests.zig");
 pub const fakeserver = @import("datasource/fakeserver.zig");
 pub const influxdb = @import("datasource/timeseries/influxdb_test.zig");
+pub const opentsdb = @import("datasource/timeseries/opentsdb_test.zig");
 pub const solr = @import("datasource/search/solr_test.zig");
+pub const meili = @import("datasource/search/meili_test.zig");
+pub const dgraph = @import("datasource/graph/dgraph_test.zig");
+pub const gcs = @import("filestore/gcs_test.zig");
+pub const sqs = @import("pubsub/sqs_test.zig");
+pub const gcppubsub = @import("pubsub/gcppubsub_test.zig");
 pub const outboundAuth = @import("service/outboundAuth.zig");
 
 comptime {
     _ = integration;
     _ = clickhouse;
     _ = couchbase;
+    _ = arangodb;
     _ = fakeserver;
     _ = influxdb;
+    _ = opentsdb;
     _ = solr;
+    _ = meili;
+    _ = dgraph;
     _ = outboundAuth;
+    _ = sqs;
+    _ = gcppubsub;
 }

@@ -30,6 +30,8 @@ pub const natsConfig = @import("pubsub/nats/config.zig");
 pub const natsSubscriber = @import("pubsub/nats/subscriber.zig");
 pub const pubsub = @import("pubsub/interface.zig");
 pub const datasourceInterface = @import("datasource/sql/interface.zig");
+// pub const circuitBreaker = @import("service/circuitBreaker.zig");
+// pub const mongodbClient = @import("datasource/nosql/mongodbClient.zig");
 
 comptime {
     _ = zero;
@@ -62,7 +64,12 @@ comptime {
     _ = natsSubscriber;
     _ = pubsub;
     _ = datasourceInterface;
-    _ = @import("service/circuitBreaker.zig");
+
+    // _ = @import("mw/baggage.zig");
+    // _ = @import("utils/sigv4.zig");
+
+    // coverage breakers
+    // _ = mongodbClient;
+    // _ = circuitBreaker;
     // _ = @import("service/client.zig");
-    _ = @import("datasource/nosql/mongodbClient.zig");
 }

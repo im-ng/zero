@@ -14,9 +14,84 @@ config:
       bypassProxy: ''
 items:
   - info:
+      name: auth
+      type: folder
+      seq: 1
+    request:
+      auth: inherit
+    items:
+      - info:
+          name: API Auth
+          type: http
+          seq: 3
+        http:
+          method: GET
+          url: http://localhost:8081/apikey
+          headers:
+            - name: X-Api-key
+              value: '{{apiKey}}'
+              disabled: true
+        settings:
+          encodeUrl: true
+          timeout: 0
+          followRedirects: true
+          maxRedirects: 5
+          forwardAuthorizationHeader: true
+      - info:
+          name: Basic Auth
+          type: http
+          seq: 1
+        http:
+          method: GET
+          url: http://localhost:8081/apikey
+          headers:
+            - name: X-Api-key
+              value: '{{apiKey}}'
+            - name: Authorization
+              value: Basic {{basicAuth}}
+              disabled: true
+        settings:
+          encodeUrl: true
+          timeout: 0
+          followRedirects: true
+          maxRedirects: 5
+          forwardAuthorizationHeader: true
+      - info:
+          name: JWT Auth - Invalid Token
+          type: http
+          seq: 5
+        http:
+          method: GET
+          url: http://localhost:8081/oauth
+          auth:
+            type: bearer
+            token: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCIsImtpZCI6Inplcm8tZnJhbWV3b3JrLWFwcC0xIn0.eyJpc3MiOiJpc3MiLCJpYXQiOjE3NjI1OTY4MDcsImV4cCI6MjA1MTI1OTEzNywiYXVkIjoiemVyby1hcHAiLCJzdWIiOiJ0ZXN0LWtleSIsImp0aSI6Imp0aSIsIm5iZiI6MTc2MjU5NjgwN30.o5mmBhlLr6zu-OcLNesNNrNH58mBFceyyDeKYRArOhU
+        settings:
+          encodeUrl: true
+          timeout: 0
+          followRedirects: true
+          maxRedirects: 5
+          forwardAuthorizationHeader: true
+      - info:
+          name: JWT Auth - Valid Token
+          type: http
+          seq: 4
+        http:
+          method: GET
+          url: http://localhost:8082/oauth
+          auth:
+            type: bearer
+            token: eyJhbGciOiJSUzI1NiIsInR5cCIgOiAiSldUIiwia2lkIiA6ICJDclRXSjRtTF90eFBocFVOOVRtY2ZVaXZ0RF9UV3JTQ3RwWl94SFhNZWRvIn0.eyJleHAiOjE3OTA2OTYyMDUsImlhdCI6MTc5MDY5NTkwNSwianRpIjoidHJydGNjOjIyMGJkODI4LTBkMDEtYzA3NS03OWI3LTg2Zjk5OGZkNGRlMCIsImlzcyI6Imh0dHA6Ly9sb2NhbGhvc3Q6OTk5MC9yZWFsbXMvemVybyIsImF1ZCI6ImFjY291bnQiLCJzdWIiOiJhY2JkOWRhZi1iZDYyLTRiYTctOTc0Ny1mYzcwNTFkMWZiYWEiLCJ0eXAiOiJCZWFyZXIiLCJhenAiOiIyYjI1MmU0Ny01YjI2LTQwZWUtYjE2ZC01MjEwNTgyNDk0OGIiLCJhY3IiOiIxIiwiYWxsb3dlZC1vcmlnaW5zIjpbImh0dHBzOi8vd3d3LmtleWNsb2FrLm9yZyJdLCJyZWFsbV9hY2Nlc3MiOnsicm9sZXMiOlsib2ZmbGluZV9hY2Nlc3MiLCJkZWZhdWx0LXJvbGVzLXplcm8iLCJ1bWFfYXV0aG9yaXphdGlvbiJdfSwicmVzb3VyY2VfYWNjZXNzIjp7ImFjY291bnQiOnsicm9sZXMiOlsibWFuYWdlLWFjY291bnQiLCJtYW5hZ2UtYWNjb3VudC1saW5rcyIsInZpZXctcHJvZmlsZSJdfX0sInNjb3BlIjoicHJvZmlsZSBlbWFpbCIsImNsaWVudEhvc3QiOiIxOTIuMTY4LjI5LjIiLCJlbWFpbF92ZXJpZmllZCI6ZmFsc2UsInByZWZlcnJlZF91c2VybmFtZSI6InNlcnZpY2UtYWNjb3VudC0yYjI1MmU0Ny01YjI2LTQwZWUtYjE2ZC01MjEwNTgyNDk0OGIiLCJjbGllbnRBZGRyZXNzIjoiMTkyLjE2OC4yOS4yIiwiY2xpZW50X2lkIjoiMmIyNTJlNDctNWIyNi00MGVlLWIxNmQtNTIxMDU4MjQ5NDhiIn0.AYG84lOA-AnTuthRNNBk4K2-REPLP7eZpOTGkhIC3NexTcoglto8BcPQN4-IkvkXMHF99RdM4rz84xQ0XE2J7eY7F_C1faKzvqutjD8uEBEqqG7zyGrNNJiWMdAxQIR-vM4WTwRvSWJrDJLMRTC2DJ4YlaRP-93nZHR8b3MSSG-W6MKUkY76FvXURah_mMio6dHuQPg2Uc85CpxsS4MM0xq6Xo7uKEdFvkHYXN4qvdwzYCr_vPLVp_T43dB4k3Ry8Ak6bkSvVEom6imMd1ZlN-tQNM0_KjZiujR_Bn8QeHpVMpUZ5GjY581df39ePQS5FyMPR15ATUFn_UKVhJR9kw
+        settings:
+          encodeUrl: true
+          timeout: 0
+          followRedirects: true
+          maxRedirects: 5
+          forwardAuthorizationHeader: true
+  - info:
       name: autocrud
       type: folder
-      seq: 13
+      seq: 14
     request:
       auth: inherit
     items:
@@ -121,44 +196,9 @@ items:
           maxRedirects: 5
           forwardAuthorizationHeader: false
   - info:
-      name: couchbase
-      type: folder
-      seq: 10
-    request:
-      auth: inherit
-    items:
-      - info:
-          name: Get
-          type: http
-          seq: 1
-        http:
-          method: GET
-          url: http://localhost:8080/couchbase/get
-          auth: inherit
-        settings:
-          encodeUrl: true
-          timeout: 0
-          followRedirects: true
-          maxRedirects: 5
-          forwardAuthorizationHeader: false
-      - info:
-          name: Put
-          type: http
-          seq: 2
-        http:
-          method: GET
-          url: http://localhost:8080/couchbase/put
-          auth: inherit
-        settings:
-          encodeUrl: true
-          timeout: 0
-          followRedirects: true
-          maxRedirects: 5
-          forwardAuthorizationHeader: false
-  - info:
       name: clickhouse
       type: folder
-      seq: 9
+      seq: 10
     request:
       auth: inherit
     items:
@@ -191,9 +231,44 @@ items:
           maxRedirects: 5
           forwardAuthorizationHeader: false
   - info:
+      name: couchbase
+      type: folder
+      seq: 11
+    request:
+      auth: inherit
+    items:
+      - info:
+          name: Get
+          type: http
+          seq: 1
+        http:
+          method: GET
+          url: http://localhost:8080/couchbase/get
+          auth: inherit
+        settings:
+          encodeUrl: true
+          timeout: 0
+          followRedirects: true
+          maxRedirects: 5
+          forwardAuthorizationHeader: false
+      - info:
+          name: Put
+          type: http
+          seq: 2
+        http:
+          method: GET
+          url: http://localhost:8080/couchbase/put
+          auth: inherit
+        settings:
+          encodeUrl: true
+          timeout: 0
+          followRedirects: true
+          maxRedirects: 5
+          forwardAuthorizationHeader: false
+  - info:
       name: duckdb
       type: folder
-      seq: 8
+      seq: 9
     request:
       auth: inherit
     items:
@@ -236,7 +311,7 @@ items:
   - info:
       name: duckgres
       type: folder
-      seq: 18
+      seq: 19
     request:
       auth: inherit
     items:
@@ -277,55 +352,9 @@ items:
           maxRedirects: 5
           forwardAuthorizationHeader: false
   - info:
-      name: fileStore
-      type: folder
-      seq: 3
-    request:
-      auth: inherit
-    items:
-      - info:
-          name: Get File
-          type: http
-          seq: 1
-        http:
-          method: GET
-          url: http://localhost:8080/filestore?key=text.txt
-          params:
-            - name: key
-              value: text.txt
-              type: query
-          auth: inherit
-        settings:
-          encodeUrl: true
-          timeout: 0
-          followRedirects: true
-          maxRedirects: 5
-          forwardAuthorizationHeader: false
-      - info:
-          name: Post File
-          type: http
-          seq: 2
-        http:
-          method: POST
-          url: http://localhost:8080/filestore?key=text1.txt
-          params:
-            - name: key
-              value: text1.txt
-              type: query
-          body:
-            type: text
-            data: Post this content to the file
-          auth: inherit
-        settings:
-          encodeUrl: true
-          timeout: 0
-          followRedirects: true
-          maxRedirects: 5
-          forwardAuthorizationHeader: false
-  - info:
       name: graphQL
       type: folder
-      seq: 1
+      seq: 2
     request:
       auth: inherit
     items:
@@ -478,9 +507,55 @@ items:
           maxRedirects: 5
           forwardAuthorizationHeader: false
   - info:
+      name: fileStore
+      type: folder
+      seq: 4
+    request:
+      auth: inherit
+    items:
+      - info:
+          name: Get File
+          type: http
+          seq: 1
+        http:
+          method: GET
+          url: http://localhost:8080/filestore?key=text.txt
+          params:
+            - name: key
+              value: text.txt
+              type: query
+          auth: inherit
+        settings:
+          encodeUrl: true
+          timeout: 0
+          followRedirects: true
+          maxRedirects: 5
+          forwardAuthorizationHeader: false
+      - info:
+          name: Post File
+          type: http
+          seq: 2
+        http:
+          method: POST
+          url: http://localhost:8080/filestore?key=text1.txt
+          params:
+            - name: key
+              value: text1.txt
+              type: query
+          body:
+            type: text
+            data: Post this content to the file
+          auth: inherit
+        settings:
+          encodeUrl: true
+          timeout: 0
+          followRedirects: true
+          maxRedirects: 5
+          forwardAuthorizationHeader: false
+  - info:
       name: mongodb
       type: folder
-      seq: 17
+      seq: 18
     request:
       auth: inherit
     items:
@@ -569,7 +644,7 @@ items:
   - info:
       name: nosql
       type: folder
-      seq: 4
+      seq: 5
     request:
       auth: inherit
     items:
@@ -598,7 +673,7 @@ items:
             type: json
             data: |-
               {
-                "name": "sashti"
+                "name": "sashtika"
               }
           auth: inherit
         settings:
@@ -610,7 +685,7 @@ items:
   - info:
       name: proto
       type: folder
-      seq: 2
+      seq: 3
     request:
       auth: inherit
     items:
@@ -654,7 +729,7 @@ items:
   - info:
       name: redis
       type: folder
-      seq: 12
+      seq: 13
     request:
       auth: inherit
     items:
@@ -690,9 +765,51 @@ items:
           maxRedirects: 5
           forwardAuthorizationHeader: false
   - info:
+      name: s3 filestore
+      type: folder
+      seq: 20
+    request:
+      auth: inherit
+    items:
+      - info:
+          name: Get File
+          type: http
+          seq: 1
+        http:
+          method: GET
+          url: http://localhost:8080/file/test.txt
+          auth: inherit
+        settings:
+          encodeUrl: true
+          timeout: 0
+          followRedirects: true
+          maxRedirects: 5
+          forwardAuthorizationHeader: false
+      - info:
+          name: Post File
+          type: http
+          seq: 2
+        http:
+          method: POST
+          url: http://localhost:8080/upload
+          body:
+            type: multipart-form
+            data:
+              - name: file
+                type: file
+                value:
+                  - /run/user/1000/doc/50193e9c/test.txt
+          auth: inherit
+        settings:
+          encodeUrl: true
+          timeout: 0
+          followRedirects: true
+          maxRedirects: 5
+          forwardAuthorizationHeader: false
+  - info:
       name: search
       type: folder
-      seq: 5
+      seq: 6
     request:
       auth: inherit
     items:
@@ -769,17 +886,49 @@ items:
   - info:
       name: service-client
       type: folder
-      seq: 14
+      seq: 15
     request:
       auth: inherit
     items:
+      - info:
+          name: Keycloak token request
+          type: http
+          seq: 2
+        http:
+          method: post
+          url: http://localhost:9990/realms/zero/protocol/openid-connect/token
+          headers:
+            - name: Content-Type
+              value: application/x-www-form-urlencoded
+          body:
+            type: form-urlencoded
+            data:
+              - name: client_id
+                value: 2b252e47-5b26-40ee-b16d-52105824948b
+              - name: client_secret
+                value: sqColE54y2rGY52KzheGGDOPxnEuBpO9t7j9f1NNra5IJjvaaZFtE2k4HzhhHlg4g759Yd3NgJ0ZSsZulnL7YW
+              - name: username
+                value: user
+                disabled: true
+              - name: password
+                value: password
+                disabled: true
+              - name: grant_type
+                value: client_credentials
+          auth: inherit
+        settings:
+          encodeUrl: false
+          timeout: 0
+          followRedirects: true
+          maxRedirects: 5
+          forwardAuthorizationHeader: false
       - info:
           name: Service Status
           type: http
           seq: 1
         http:
           method: GET
-          url: http://localhost:8085/keys
+          url: http://localhost:9090/keys
           auth: inherit
         settings:
           encodeUrl: true
@@ -790,7 +939,7 @@ items:
   - info:
       name: sql
       type: folder
-      seq: 7
+      seq: 8
     request:
       auth: inherit
     items:
@@ -811,7 +960,7 @@ items:
   - info:
       name: sqlite
       type: folder
-      seq: 11
+      seq: 12
     request:
       auth: inherit
     items:
@@ -842,7 +991,7 @@ items:
           seq: 6
         http:
           method: DELETE
-          url: http://localhost:8082/sqlite/users/1
+          url: http://localhost:8080/sqlite/users/1
           auth: inherit
         settings:
           encodeUrl: true
@@ -856,11 +1005,7 @@ items:
           seq: 4
         http:
           method: GET
-          url: http://localhost:8082/sqlite/users/1
-          params:
-            - name: id
-              value: '1'
-              type: query
+          url: http://localhost:8080/sqlite/users/1
           auth: inherit
         settings:
           encodeUrl: true
@@ -902,7 +1047,7 @@ items:
           seq: 7
         http:
           method: GET
-          url: http://localhost:8082/memory
+          url: http://localhost:8080/memory
           auth: inherit
         settings:
           encodeUrl: true
@@ -916,7 +1061,7 @@ items:
           seq: 5
         http:
           method: PUT
-          url: http://localhost:8082/sqlite/users/1
+          url: http://localhost:8080/sqlite/users/1
           body:
             type: json
             data: |-
@@ -934,7 +1079,7 @@ items:
   - info:
       name: stream
       type: folder
-      seq: 15
+      seq: 16
     request:
       auth: inherit
     items:
@@ -983,7 +1128,7 @@ items:
   - info:
       name: timeseries
       type: folder
-      seq: 6
+      seq: 7
     request:
       auth: inherit
     items:
@@ -1006,8 +1151,30 @@ items:
                 "db": "demo"
               }
           auth: inherit
+        runtime:
+          variables:
+            - name: influxToken
+              value: apiv3_Kbu48sK9Zi4TZ83vzjQnT_oSr3yXty_sDk41IIffqe8lOrieT7YBxU9Vk1vhX6XxRfqa72-1GqvEiiX8eo1AlQ
         settings:
           encodeUrl: false
+          timeout: 0
+          followRedirects: true
+          maxRedirects: 5
+          forwardAuthorizationHeader: false
+      - info:
+          name: Get Data (bench) copy
+          type: http
+          seq: 5
+        http:
+          method: GET
+          url: http://localhost:8080/query?q='select * from cpu'
+          params:
+            - name: q
+              value: '''select * from cpu'''
+              type: query
+          auth: inherit
+        settings:
+          encodeUrl: true
           timeout: 0
           followRedirects: true
           maxRedirects: 5
@@ -1017,8 +1184,11 @@ items:
           type: http
           seq: 3
         http:
-          method: GET
-          url: http://localhost:8080/ts/query
+          method: POST
+          url: http://localhost:8080/query
+          body:
+            type: text
+            data: select * from cpu
           auth: inherit
         settings:
           encodeUrl: true
@@ -1055,8 +1225,17 @@ items:
           type: http
           seq: 2
         http:
-          method: GET
-          url: http://localhost:8080/ts/write
+          method: POST
+          url: http://localhost:8080/points
+          body:
+            type: json
+            data: |-
+              {
+                "measurement": "cpu",
+                "tags": "host=server1",
+                "fields": "usage=42.1",
+                "ts": 1790485939
+              }
           auth: inherit
         settings:
           encodeUrl: true
@@ -1067,7 +1246,7 @@ items:
   - info:
       name: todo-htmx
       type: folder
-      seq: 16
+      seq: 17
     request:
       auth: inherit
     items:
@@ -1183,128 +1362,11 @@ items:
           followRedirects: true
           maxRedirects: 5
           forwardAuthorizationHeader: false
-  - info:
-      name: s3 filestore
-      type: folder
-      seq: 19
-    request:
-      auth: inherit
-    items:
-      - info:
-          name: Get File
-          type: http
-          seq: 1
-        http:
-          method: GET
-          url: http://localhost:8080/file/test.txt
-          auth: inherit
-        settings:
-          encodeUrl: true
-          timeout: 0
-          followRedirects: true
-          maxRedirects: 5
-          forwardAuthorizationHeader: false
-      - info:
-          name: Post File
-          type: http
-          seq: 2
-        http:
-          method: POST
-          url: http://localhost:8080/upload
-          body:
-            type: multipart-form
-            data:
-              - name: file
-                type: file
-                value:
-                  - /run/user/1000/doc/50193e9c/test.txt
-          auth: inherit
-        settings:
-          encodeUrl: true
-          timeout: 0
-          followRedirects: true
-          maxRedirects: 5
-          forwardAuthorizationHeader: false
-  - info:
-      name: auth
-      type: folder
-      seq: 20
-    request:
-      auth: inherit
-    items:
-      - info:
-          name: Basic Auth
-          type: http
-          seq: 1
-        http:
-          method: GET
-          url: http://localhost:8081/apikey
-          headers:
-            - name: X-Api-key
-              value: '{{apiKey}}'
-            - name: Authorization
-              value: Basic {{basicAuth}}
-              disabled: true
-        settings:
-          encodeUrl: true
-          timeout: 0
-          followRedirects: true
-          maxRedirects: 5
-          forwardAuthorizationHeader: true
-      - info:
-          name: API Auth
-          type: http
-          seq: 3
-        http:
-          method: GET
-          url: http://localhost:8081/apikey
-          headers:
-            - name: X-Api-key
-              value: '{{apiKey}}'
-              disabled: true
-        settings:
-          encodeUrl: true
-          timeout: 0
-          followRedirects: true
-          maxRedirects: 5
-          forwardAuthorizationHeader: true
-      - info:
-          name: JWT Auth - Valid Token
-          type: http
-          seq: 4
-        http:
-          method: GET
-          url: http://localhost:8081/oauth
-          auth:
-            type: bearer
-            token: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCIsImtpZCI6Inplcm8tZnJhbWV3b3JrLWFwcCJ9.eyJpc3MiOiJpc3MiLCJpYXQiOjE3NjI1OTY4MDcsImV4cCI6MjA1MTI1OTEzNywiYXVkIjoiemVyby1hcHAiLCJzdWIiOiJ0ZXN0LWtleSIsImp0aSI6Imp0aSIsIm5iZiI6MTc2MjU5NjgwN30.ww0_A-vNXnl7_tsCChPrbh12vj5zGA3UAZPjyN6A0wI
-        settings:
-          encodeUrl: true
-          timeout: 0
-          followRedirects: true
-          maxRedirects: 5
-          forwardAuthorizationHeader: true
-      - info:
-          name: JWT Auth - Invalid Token
-          type: http
-          seq: 5
-        http:
-          method: GET
-          url: http://localhost:8081/oauth
-          auth:
-            type: bearer
-            token: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCIsImtpZCI6Inplcm8tZnJhbWV3b3JrLWFwcC0xIn0.eyJpc3MiOiJpc3MiLCJpYXQiOjE3NjI1OTY4MDcsImV4cCI6MjA1MTI1OTEzNywiYXVkIjoiemVyby1hcHAiLCJzdWIiOiJ0ZXN0LWtleSIsImp0aSI6Imp0aSIsIm5iZiI6MTc2MjU5NjgwN30.o5mmBhlLr6zu-OcLNesNNrNH58mBFceyyDeKYRArOhU
-        settings:
-          encodeUrl: true
-          timeout: 0
-          followRedirects: true
-          maxRedirects: 5
-          forwardAuthorizationHeader: true
 bundled: true
 extensions:
   bruno:
     ignore:
       - node_modules
       - .git
-    exportedAt: '2026-09-26T13:14:51.076Z'
+    exportedAt: '2026-10-05T00:31:20.319Z'
     exportedUsing: Bruno

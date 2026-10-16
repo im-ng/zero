@@ -119,6 +119,7 @@ test "KVMemory get/set/delete/exists/expire" {
     defer _ = gpa.deinit();
 
     const store = try KVMemory.create(allocator);
+    defer store.deinit();
     var ctx: root.Context = .{ .allocator = allocator };
 
     try store.set(&ctx, "a", "1");
@@ -136,6 +137,9 @@ test "KVMemory get/set/delete/exists/expire" {
     // ttl
     try store.set(&ctx, "t", "x");
     try store.expire(&ctx, "t", 1);
-    std.Thread.sleep(std.time.ns_per_ms * 5);
+    // 0.16 removed std.Thread.sleep; busy-wait on the monotonic clock until
+    // the 1ms TTL has elapsed so the expiry branch below is exercised.
+    const ttl_deadline = utils.nowMonotonic().nanoseconds + std.time.ns_per_ms * 5;
+    while (utils.nowMonotonic().nanoseconds < ttl_deadline) {}
     try std.testing.expect((try store.get(&ctx, "t")) == null);
 }

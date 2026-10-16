@@ -10,6 +10,7 @@ const utils = root.utils;
 
 const AuthError = root.AuthProvider.AuthError;
 const AuthMode = root.AuthProvider.AuthMode;
+const Context = root.Context;
 
 allocator: std.mem.Allocator,
 container: ?*root.container = undefined,
@@ -50,7 +51,17 @@ pub fn execute(self: *const authz, req: *httpz.Request, res: *httpz.Response, ex
                     return;
                 }
 
-                provider.validateBasicAuth(req.arena, header.?) catch |err| switch (err) {
+                // Build a transient Context only when a KV store is configured,
+                // so Basic credentials can be augmented from KV (e.g. Redis)
+                // without paying for it on deployments that don't use KV auth.
+                var kv_ctx: ?Context = if (self.container.?.defaultKV != null)
+                    Context.init(req.arena, self.container.?, req, res) catch null
+                else
+                    null;
+                defer if (kv_ctx) |*c| req.arena.destroy(c);
+                const kv_ctx_ptr: ?*root.Context = if (kv_ctx) |*c| c else null;
+
+                provider.validateBasicAuth(req.arena, header.?, kv_ctx_ptr) catch |err| switch (err) {
                     AuthError.InvalidAuthKeyHeader => {
                         self.deny(res, req.arena, "invalid authorization header found");
                         return;
@@ -68,7 +79,16 @@ pub fn execute(self: *const authz, req: *httpz.Request, res: *httpz.Response, ex
                     return;
                 }
 
-                provider.validateAPIKeyAuth(req.arena, header.?) catch |err| switch (err) {
+                // Transient Context for KV-augmented API-key lookups (only when a
+                // KV store is configured), mirroring the Basic arm above.
+                var kv_ctx: ?Context = if (self.container.?.defaultKV != null)
+                    Context.init(req.arena, self.container.?, req, res) catch null
+                else
+                    null;
+                defer if (kv_ctx) |*c| req.arena.destroy(c);
+                const kv_ctx_ptr: ?*root.Context = if (kv_ctx) |*c| c else null;
+
+                provider.validateAPIKeyAuth(req.arena, header.?, kv_ctx_ptr) catch |err| switch (err) {
                     AuthError.InvalidAuthAPIHeader => {
                         self.deny(res, req.arena, "invalid jwt header found");
                         return;

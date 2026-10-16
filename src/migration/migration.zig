@@ -111,13 +111,35 @@ pub fn run(self: *Self) anyerror!void {
         const value = self.map.get(keyAsString);
 
         if (value) |m| {
+            // Per-dialect scoping: a relational migration tagged with a specific
+            // dialect only runs when that dialect is the active `ctx.SQL`. A pack
+            // ships postgres/sqlite/duckdb/clickhouse DDL together; only the
+            // live dialect's version is applied, the rest are skipped (not
+            // recorded) so they stay pending for when that backend is selected.
+            if (m.target == .relational and m.dialect != null and
+                m.dialect != self.container.datasource.dialect)
+            {
+                self.migrationSkipped(ctx, m);
+                continue;
+            }
+
+            // Per-backend scoping: a NoSQL migration tagged with a backend only
+            // runs when that backend is the active `ctx.NoSQL`. Keeps CQL and
+            // N1QL DDL from cross-applying across Cassandra and Couchbase.
+            if (m.target == .nosql and m.backend != null and
+                m.backend != self.container.nosql_backend)
+            {
+                self.migrationSkipped(ctx, m);
+                continue;
+            }
+
             const last = if (m.target == .relational) rel_last else nosql_last;
             if (m.migrationNumber <= last) {
                 self.migrationSkipped(ctx, m);
                 continue;
             }
 
-            const start = util.nowReal();
+            const start = utils.nowMonotonic();
 
             if (m.target == .relational) {
                 if (!relational_configured) {
@@ -141,7 +163,7 @@ pub fn run(self: *Self) anyerror!void {
                     continue;
                 };
 
-                const duration: u64 = @as(u64, @intCast(@divFloor(start.nanoseconds, 1_000_000)));
+                const duration: u64 = @as(u64, @intCast(@divFloor(utils.elapsedNanos(start), 1_000_000)));
 
                 _ = sqlMigrator.insertMigration(ctx, m, duration) catch |err| {
                     ctx.any(err);
@@ -170,7 +192,7 @@ pub fn run(self: *Self) anyerror!void {
                     continue;
                 };
 
-                const duration: u64 = @as(u64, @intCast(@divFloor(start.nanoseconds, 1_000_000)));
+                const duration: u64 = @as(u64, @intCast(@divFloor(utils.elapsedNanos(start), 1_000_000)));
 
                 nosqlMigrator.insertMigration(ctx, m, duration) catch |err| {
                     ctx.any(err);

@@ -1,4 +1,4 @@
-<img src="./static/zero-framework-backdrop.png">
+<img src="./static/zero-framework-backdrop.jpg">
 <br/>
 
 <p align="center">
@@ -20,8 +20,6 @@
 <br/>
 
 # Zero Framework
-
-![mascot](./static/zero-mascot-1.svg)
 
 **One binary. No GC. Build config-driven microservices in Zig.**
 
@@ -80,6 +78,43 @@ curl localhost:8080/json   # => {"msg":"hello zero!"}
 That's the whole app. Everything else — Postgres, Redis, Kafka, auth, and metrics — is opt-in through configuration.
 
 Full walkthrough in [Hello Zero](https://zerofmk.in/hello-zero) and [Getting Started](https://zerofmk.in/started).
+
+## Install
+
+Zero ships as a single prebuilt binary — no Zig toolchain required. The installer
+detects your platform, downloads the matching binary from GitHub Releases,
+verifies its checksum, and installs to `/usr/local/bin`:
+
+```bash
+curl -fsSL https://im-ng.github.io/zero/install.sh | sh
+```
+
+Install a specific version:
+
+```bash
+sh install.sh v0.5.3
+```
+
+The prebuilt binary dynamically links libc plus `librdkafka` and OpenSSL
+(`libssl`/`libcrypto`). If `zero --version` fails with a missing shared library,
+install them:
+
+```bash
+apt install librdkafka-dev libssl-dev   # Debian/Ubuntu
+brew install rdkafka openssl            # macOS
+```
+
+`duckdb` is only needed for `zero migrator` and DuckDB-backed features:
+
+```bash
+apt install duckdb   # Debian/Ubuntu
+brew install duckdb   # macOS
+```
+
+On macOS, Gatekeeper may block the unsigned binary the first time it runs —
+clear the quarantine with `xattr -dr com.apple.quarantine $(which zero)`.
+
+To build from source instead, see [Quick Start](#quick-start).
 
 ## Why Zero?
 

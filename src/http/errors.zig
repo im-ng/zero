@@ -75,6 +75,7 @@ pub const ClientError = error{
     CircuitOpen,
     RateLimited,
     OAuthTokenFetchFailed,
+    ResponseParseFailed,
 } || std.http.Client.FetchError || HttpError;
 
 pub const CronError = error{

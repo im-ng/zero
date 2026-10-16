@@ -108,8 +108,8 @@ pub const Provider = struct {
         try p.tracer_provider.?.addSpanProcessor(p.batch_processor.?.asSpanProcessor());
 
         p.server_scope = .{
-            .name = "zero.server",
-            .version = root.constants.SERVER_VERSION, // TODO: derive this from build step
+            .name = "zero",
+            .version = root.constants.FRAMEWORK_VERSION, // TODO: derive this from build step
             .schema_url = "https://opentelemetry.io/schemas/1.21.0",
         };
         p.tracer = try p.tracer_provider.?.getTracer(p.server_scope);

@@ -29,6 +29,7 @@ pub const Context = struct {
     Timeseries: ?*root.Timeseries = null,
     Search: ?*root.Search = null,
     NoSQL: ?*root.NoSQL = null,
+    Graph: ?*root.Graph = null,
     provider: *root.AuthProvider = undefined,
     MQ: *root.MQTT = undefined,
     KF: *root.kafka = undefined,
@@ -48,6 +49,11 @@ pub const Context = struct {
     /// before dispatch). Null when OTEL_EXPERIMENTAL is off or outside a request.
     otel_span: ?otel.ActiveSpan = null,
 
+    /// W3C Baggage parsed from the inbound `baggage` header. Handlers read and
+    /// mutate members; the outbound service client re-serializes them onto
+    /// downstream calls. Null when no baggage header was present.
+    baggage: ?root.baggage.Baggage = null,
+
     /// initialize context
     pub fn init(
         allocator: std.mem.Allocator,
@@ -64,12 +70,18 @@ pub const Context = struct {
         };
 
         if (container.SQL != null) {
-            // Postgres/MySQL: hand each request its own session that borrows the
+            // Postgres: hand each request its own session that borrows the
             // shared (thread-safe) connection pool but isolates transaction_conn
             // /lastId/rows so concurrent requests can't share a transaction or
             // clobber each other's last-insert-id.
             const session = try root.SQL.createSession(allocator, container.SQL.?);
             c.SQL = root.Datasource.init(session, .postgres, container.datasource.breaker, container.metricz);
+        } else if (container.MySQL != null) {
+            // MySQL: same per-request session model as Postgres. Each request
+            // borrows a pooled connection (pinned for transactions) so concurrent
+            // requests never share a socket or a transaction.
+            const session = try root.MySQL.createSession(allocator, container.MySQL.?);
+            c.SQL = root.Datasource.init(session, .mysql, container.datasource.breaker, container.metricz);
         } else if (container.SQLite != null or container.DuckDB != null or container.ClickHouse != null or container.DuckGres != null) {
             // SQLite/DuckDB backends reuse a single shared connection; the
             // per-request session does not apply (see ZIG_LEARNINGS.md — their
@@ -93,6 +105,10 @@ pub const Context = struct {
             c.NoSQL = n;
         }
 
+        if (container.Graph) |g| {
+            c.Graph = g;
+        }
+
         if (container.defaultFileStore) |fs| {
             c.FileStore = fs;
         }
@@ -114,6 +130,14 @@ pub const Context = struct {
         }
 
         c.otel_span = otel.currentSpan();
+
+        // Parse the inbound W3C Baggage header so handlers can read/modify
+        // members and the outbound service client re-emits them downstream.
+        if (c.request) |r| {
+            if (r.header("baggage")) |bg| {
+                c.baggage = root.baggage.Baggage.parse(allocator, bg);
+            }
+        }
 
         return c;
     }
@@ -142,6 +166,9 @@ pub const Context = struct {
         }
         if (container.NoSQL) |n| {
             c.NoSQL = n;
+        }
+        if (container.Graph) |g| {
+            c.Graph = g;
         }
         if (container.defaultFileStore) |fs| {
             c.FileStore = fs;
@@ -219,6 +246,9 @@ pub const Context = struct {
 
     /// deinit context from parent allocator
     pub fn deinit(self: *Context) void {
+        if (self.baggage) |*b| {
+            b.deinit();
+        }
         self.allocator.destroy(self);
     }
 

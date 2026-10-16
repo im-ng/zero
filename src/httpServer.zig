@@ -11,6 +11,7 @@ const rbac_mw = root.rbac;
 const utils = root.utils;
 const ws_mw = root.WSMiddleware;
 const rateLimiter_mw = root.rateLimiter;
+const rediz = root.rediz;
 
 const server = @This();
 const Self = @This();
@@ -182,6 +183,22 @@ pub fn create(allocator: std.mem.Allocator, container: *root.container) !*server
     const rlWindowRaw = hzs.container.config.getAsInt("RATE_LIMIT_WINDOW") catch 0;
     const rlWindowS: i64 = if (rlWindowRaw == 0) constants.DEFAULT_RATE_LIMIT_WINDOW_MS / 1000 else rlWindowRaw;
 
+    // `RATE_LIMIT_STORE` selects the counter backend. `redis` enforces a single
+    // limit across replicas via a shared Redis key; falls back to the in-process
+    // limiter if Redis is not configured.
+    const rlStoreRaw = hzs.container.config.getOrDefault("RATE_LIMIT_STORE", "memory");
+    const rlStoreWanted: rateLimiter_mw.Store = if (std.mem.eql(u8, rlStoreRaw, "redis")) .redis else .memory;
+    var rlRedis: ?rediz.Client = null;
+    var rlStore = rlStoreWanted;
+    if (rlStoreWanted == .redis) {
+        if (hzs.container.redis) |r| {
+            rlRedis = r;
+        } else {
+            hzs.container.log.warn("RATE_LIMIT_STORE=redis but Redis is not configured; using in-memory limiter");
+            rlStore = .memory;
+        }
+    }
+
     const rateLimitMW = try hzs.http.middleware(rateLimiter_mw, .{
         .allocator = allocator,
         .enabled = rlEnabled,
@@ -189,6 +206,8 @@ pub fn create(allocator: std.mem.Allocator, container: *root.container) !*server
         .window_ms = @as(i64, rlWindowS) * 1000,
         .key_mode = rlKeyMode,
         .header_name = rlHeaderName,
+        .store = rlStore,
+        .redis = rlRedis,
     });
 
     hzs.router = try hzs.http.router(.{

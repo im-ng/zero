@@ -8,11 +8,12 @@ const SQLite = root.SQLite;
 const DuckDB = root.DuckDB;
 const ClickHouse = root.ClickHouse;
 const DuckGres = root.DuckGres;
+const MySQL = root.MySQL;
 const Datasource = root.Datasource;
 const MockBackend = root.datasourceInterface.MockBackend;
 
 /// Options for `addRestHandlers`. `resource` is the URL segment (e.g. `"users"`
-/// registers `/users`, `/users/:id`, …). `table` defaults to `resource`; the
+/// registers `/users`, `/users/:id`, …). `table` defaults to `resource`
 /// primary key is `id` unless `id_field` says otherwise.
 pub const AutoCrudOptions = struct {
     resource: []const u8,
@@ -145,6 +146,10 @@ fn backendDuckGres(ctx: *Context) *DuckGres {
     return @as(*DuckGres, @ptrCast(@alignCast(ctx.SQL.ptr)));
 }
 
+fn backendMysql(ctx: *Context) *MySQL {
+    return @as(*MySQL, @ptrCast(@alignCast(ctx.SQL.ptr)));
+}
+
 fn listHandler(comptime T: type, comptime st: Stmts) *const fn (*Context) anyerror!void {
     const impl = struct {
         fn call(ctx: *Context) anyerror!void {
@@ -167,6 +172,10 @@ fn listHandler(comptime T: type, comptime st: Stmts) *const fn (*Context) anyerr
                 },
                 .clickhouse => {
                     const rows = try backendClickHouse(ctx).queryRows(ctx, T, st.list, .{});
+                    try ctx.json(rows);
+                },
+                .mysql => {
+                    const rows = try backendMysql(ctx).queryRows(ctx, T, st.list, .{});
                     try ctx.json(rows);
                 },
                 .mock => {
@@ -195,6 +204,7 @@ fn getHandler(comptime T: type, comptime st: Stmts, comptime id_idx: usize) *con
                 .sqlite => try backendSqlite(ctx).queryRow(ctx, T, st.get_q, .{idv}),
                 .duckdb => try backendDuckDB(ctx).queryRow(ctx, T, st.get_q, .{idv}),
                 .clickhouse => try backendClickHouse(ctx).queryRow(ctx, T, st.get_q, .{idv}),
+                .mysql => try backendMysql(ctx).queryRow(ctx, T, st.get_q, .{idv}),
                 .mock => try @as(*MockBackend, @ptrCast(@alignCast(ctx.SQL.ptr))).queryRow(ctx, T, st.get_q, .{idv}),
             };
             if (row) |r| {
@@ -228,6 +238,7 @@ fn createHandler(comptime T: type, comptime st: Stmts) *const fn (*Context) anye
                 .sqlite => _ = try backendSqlite(ctx).execWithContext(ctx, st.insert_q, args),
                 .duckdb => _ = try backendDuckDB(ctx).execWithContext(ctx, st.insert_q, args),
                 .clickhouse => _ = try backendClickHouse(ctx).execWithContext(ctx, st.insert_q, args),
+                .mysql => _ = try backendMysql(ctx).execWithContext(ctx, st.insert_q, args),
                 .mock => _ = try @as(*MockBackend, @ptrCast(@alignCast(ctx.SQL.ptr))).execWithContext(ctx, st.insert_q, args),
             }
             try ctx.json(o);
@@ -264,6 +275,7 @@ fn updateHandler(comptime T: type, comptime st: Stmts, comptime id_idx: usize) *
                 .sqlite => (try backendSqlite(ctx).execWithContext(ctx, st.update_q, args)) > 0,
                 .duckdb => (try backendDuckDB(ctx).execWithContext(ctx, st.update_q, args)) > 0,
                 .clickhouse => (try backendClickHouse(ctx).execWithContext(ctx, st.update_q, args)) > 0,
+                .mysql => (try backendMysql(ctx).execWithContext(ctx, st.update_q, args)) > 0,
                 .mock => (try @as(*MockBackend, @ptrCast(@alignCast(ctx.SQL.ptr))).execWithContext(ctx, st.update_q, args)) > 0,
             };
             if (!updated) {
@@ -277,6 +289,7 @@ fn updateHandler(comptime T: type, comptime st: Stmts, comptime id_idx: usize) *
                 .sqlite => try backendSqlite(ctx).queryRow(ctx, T, st.get_q, .{idv}),
                 .duckdb => try backendDuckDB(ctx).queryRow(ctx, T, st.get_q, .{idv}),
                 .clickhouse => try backendClickHouse(ctx).queryRow(ctx, T, st.get_q, .{idv}),
+                .mysql => try backendMysql(ctx).queryRow(ctx, T, st.get_q, .{idv}),
                 .mock => try @as(*MockBackend, @ptrCast(@alignCast(ctx.SQL.ptr))).queryRow(ctx, T, st.get_q, .{idv}),
             };
             if (row) |r| {
@@ -321,6 +334,10 @@ fn deleteHandler(comptime T: type, comptime st: Stmts, comptime id_idx: usize) *
                     _ = try backendClickHouse(ctx).execWithContext(ctx, st.delete_q, .{idv});
                     break :blk backendClickHouse(ctx).rowsAffected();
                 },
+                .mysql => blk: {
+                    _ = try backendMysql(ctx).execWithContext(ctx, st.delete_q, .{idv});
+                    break :blk backendMysql(ctx).rowsAffected();
+                },
                 .mock => blk: {
                     _ = try @as(*MockBackend, @ptrCast(@alignCast(ctx.SQL.ptr))).execWithContext(ctx, st.delete_q, .{idv});
                     break :blk @as(*MockBackend, @ptrCast(@alignCast(ctx.SQL.ptr))).rowsAffected();
@@ -338,8 +355,8 @@ fn deleteHandler(comptime T: type, comptime st: Stmts, comptime id_idx: usize) *
 }
 
 /// Registers list/get/create/update/delete REST handlers for struct `T` against
-/// the configured SQL datasource (Postgres, SQLite, DuckDB, or DuckGres — all are
-/// generated and dispatched at runtime on `ctx.SQL.dialect`).
+/// the configured SQL datasource (Postgres, SQLite, DuckDB, DuckGres, or MySQL —
+/// all are generated and dispatched at runtime on `ctx.SQL.dialect`).
 pub fn addRestHandlers(self: *App, comptime T: type, comptime opts: AutoCrudOptions) !void {
     const table = if (opts.table.len > 0) opts.table else opts.resource;
     const id_field = opts.id_field;
