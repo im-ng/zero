@@ -40,6 +40,10 @@ pub const Options = struct {
     /// appears as a `dNSName` (e.g. `localhost`). Defaults to the contact-point
     /// host when unset.
     tls_server_name: ?[]const u8 = null,
+    /// Optional client certificate (PEM) for mutual TLS (Cassandra/MongoDB).
+    tls_cert_file: ?[]const u8 = null,
+    /// Optional client private key (PEM) for mutual TLS.
+    tls_key_file: ?[]const u8 = null,
 };
 
 /// Unified, type-erased NoSQL interface.
@@ -98,6 +102,8 @@ pub const NoSQL = struct {
                     .tls_verify = opts.tls_verify,
                     .tls_ca_path = opts.tls_ca_path,
                     .tls_server_name = opts.tls_server_name,
+                    .tls_cert_file = opts.tls_cert_file,
+                    .tls_key_file = opts.tls_key_file,
                 });
                 break :blk @as(*anyopaque, c);
             },
@@ -122,6 +128,12 @@ pub const NoSQL = struct {
                     .pass = opts.password orelse "",
                     .auth_source = "admin",
                     .db = opts.keyspace,
+                    .tls_enabled = opts.tls_enabled,
+                    .tls_verify = opts.tls_verify,
+                    .tls_ca_path = opts.tls_ca_path,
+                    .tls_server_name = opts.tls_server_name,
+                    .tls_cert_file = opts.tls_cert_file,
+                    .tls_key_file = opts.tls_key_file,
                 });
                 break :blk @as(*anyopaque, m);
             },

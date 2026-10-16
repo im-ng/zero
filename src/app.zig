@@ -1251,8 +1251,16 @@ pub fn addStaticFiles(self: *Self, prefix: []const u8, dir: []const u8) !void {
         self.container.log.err("static mount prefix must start with '/'");
         return error.InvalidStaticPrefix;
     }
+
     try self.container.staticMounts.append(.{ .prefix = prefix, .dir = dir });
-    const msg = try utils.toString(self.container.allocator, "registered static mount {s} -> {s}", .{ prefix, dir });
+
+    const msg = std.fmt.allocPrint(
+        self.container.allocator,
+        "registered static mount {s} -> {s}",
+        .{ prefix, dir },
+    ) catch return;
+    defer self.container.allocator.free(msg);
+
     self.container.log.info(msg);
 }
 

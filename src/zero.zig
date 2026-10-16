@@ -140,6 +140,11 @@ pub const WSHandler = @import("websocket.zig");
 pub const WSMiddleware = @import("mw/ws.zig");
 pub const WSClient = httpz.websocket.Conn;
 
+/// System OpenSSL-backed TLS layer (see `src/tls/openssl.zig`). Used by the
+/// MongoDB/Cassandra datasources, which wrap the `std.Io` reader/writer
+/// interfaces it produces over the system OpenSSL library.
+pub const tlso = @import("tls/openssl.zig");
+
 // swagger files
 pub const favIcon = @embedFile("static/favicon.ico");
 pub const indexCss = @embedFile("static/index.css");

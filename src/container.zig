@@ -241,12 +241,14 @@ pub fn create(self: Self) anyerror!*container {
 
     // initialize specialized datasources (time-series / search) when configured
     try c.loadTimeseries();
+
     try c.loadTimeseriesOpenTSDB();
 
     try c.loadSearch();
 
     // initialize nosql datasource (document / wide-column) when configured
     try c.loadNoSQL();
+
     try c.loadNoSQLArango();
 
     // initialize graph datasource (Dgraph) when configured
@@ -1486,12 +1488,16 @@ fn loadNoSQL(self: *Self) !void {
             self.log.err("nosql connection failed: CASSANDRA_KEYSPACE must be set.");
             return;
         }
+
         const user_val = self.config.get("CASSANDRA_USER");
         const pass_val = self.config.get("CASSANDRA_PASSWORD");
         const tls_enabled = self.config.getAsBool("CASSANDRA_TLS_ENABLED");
         const tls_verify = self.config.getAsBool("CASSANDRA_TLS_VERIFY");
         const tls_ca = self.config.get("CASSANDRA_TLS_CA");
         const tls_server_name = self.config.get("CASSANDRA_TLS_SERVER_NAME");
+        const tls_cert_file = self.config.get("CASSANDRA_TLS_CERT_FILE");
+        const tls_key_file = self.config.get("CASSANDRA_TLS_KEY_FILE");
+
         const handle = try root.NoSQL.build(self, .cassandra, .{
             .contact_points = cassandra_cp,
             .keyspace = keyspace,
@@ -1501,10 +1507,18 @@ fn loadNoSQL(self: *Self) !void {
             .tls_verify = tls_verify,
             .tls_ca_path = if (std.mem.eql(u8, tls_ca, "")) null else tls_ca,
             .tls_server_name = if (std.mem.eql(u8, tls_server_name, "")) null else tls_server_name,
+            .tls_cert_file = if (std.mem.eql(u8, tls_cert_file, "")) null else tls_cert_file,
+            .tls_key_file = if (std.mem.eql(u8, tls_key_file, "")) null else tls_key_file,
         });
+
         self.NoSQL = handle;
         self.nosql_backend = .cassandra;
-        self.log.info(try std.fmt.allocPrint(self.bootstrap, "connected to cassandra at '{s}' (keyspace '{s}')", .{ cassandra_cp, keyspace }));
+        self.log.info(try std.fmt.allocPrint(
+            self.bootstrap,
+            "connected to cassandra at '{s}' (keyspace '{s}')",
+            .{ cassandra_cp, keyspace },
+        ));
+
         return;
     }
 
@@ -1536,12 +1550,17 @@ fn loadNoSQL(self: *Self) !void {
             self.log.err("nosql connection failed: MONGODB_DB must be set.");
             return;
         }
+
         const mongo_user = self.config.get("MONGODB_USER");
         const mongo_pass = self.config.get("MONGODB_PASSWORD");
         const mongo_tls = std.mem.eql(u8, self.config.get("MONGODB_TLS"), "true");
         const mongo_verify = std.mem.eql(u8, self.config.get("MONGODB_TLS_VERIFY"), "true");
         const mongo_ca = self.config.get("MONGODB_TLS_CA");
         const mongo_auth = self.config.get("MONGODB_AUTH_SOURCE");
+        const mongo_tls_sni = self.config.get("MONGODB_TLS_SERVER_NAME");
+        const mongo_cert = self.config.get("MONGODB_TLS_CERT_FILE");
+        const mongo_key = self.config.get("MONGODB_TLS_KEY_FILE");
+
         const m = root.MongoDB.create(self.allocator, .{
             .contact_points = mongo_cp,
             .user = if (std.mem.eql(u8, mongo_user, "")) "" else mongo_user,
@@ -1551,16 +1570,25 @@ fn loadNoSQL(self: *Self) !void {
             .tls_enabled = mongo_tls,
             .tls_verify = mongo_verify,
             .tls_ca_path = if (std.mem.eql(u8, mongo_ca, "")) null else mongo_ca,
+            .tls_server_name = if (std.mem.eql(u8, mongo_tls_sni, "")) null else mongo_tls_sni,
+            .tls_cert_file = if (std.mem.eql(u8, mongo_cert, "")) null else mongo_cert,
+            .tls_key_file = if (std.mem.eql(u8, mongo_key, "")) null else mongo_key,
         }) catch |err| {
             self.log.err("could not initialize mongodb backend");
             self.log.any(err);
             return;
         };
+
         const handle = try self.allocator.create(root.NoSQL);
         handle.* = root.NoSQL.init(m, .mongodb, null, self.metricz);
         self.NoSQL = handle;
         self.nosql_backend = .mongodb;
-        self.log.info(try std.fmt.allocPrint(self.bootstrap, "connected to mongodb at '{s}' (db '{s}'){s}", .{ mongo_cp, mongo_db, if (mongo_tls) " (tls)" else "" }));
+
+        self.log.info(try std.fmt.allocPrint(
+            self.bootstrap,
+            "connected to mongodb at '{s}' (db '{s}'){s}",
+            .{ mongo_cp, mongo_db, if (mongo_tls) " (tls)" else "" },
+        ));
         return;
     }
 
@@ -1589,9 +1617,14 @@ fn loadNoSQLArango(self: *Self) !void {
         .user = if (std.mem.eql(u8, user_val, "")) null else user_val,
         .password = if (std.mem.eql(u8, pass_val, "")) null else pass_val,
     });
+
     self.NoSQL = handle;
     self.nosql_backend = .arangodb;
-    self.log.info(try std.fmt.allocPrint(self.bootstrap, "connected to arangodb at '{s}' (db '{s}')", .{ host, db }));
+    self.log.info(try std.fmt.allocPrint(
+        self.bootstrap,
+        "connected to arangodb at '{s}' (db '{s}')",
+        .{ host, db },
+    ));
 }
 
 // Auto-wire the Dgraph graph backend when DGRAPH_URL is set.

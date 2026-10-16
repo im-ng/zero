@@ -82,6 +82,27 @@ pub fn build(b: *std.Build) void {
     module.addRPath(.{ .cwd_relative = "/usr/local/lib" });
     module.linkSystemLibrary("duckdb", .{ .weak = true });
 
+    // System OpenSSL-backed TLS for the MongoDB/Cassandra datasources.
+    const openssl_translator = @import("translate_c").Translator;
+    const openssl_dep = b.dependency("translate_c", .{});
+    const openssl_mod = blk: {
+        var t = openssl_translator.init(openssl_dep, .{
+            .c_source_file = b.path("src/tls/openssl.h"),
+            .target = target,
+            .optimize = optimize,
+        });
+        if (builtin.os.tag == .macos) {
+            t.addIncludePath(.{ .cwd_relative = "/usr/local/opt/openssl@3/include" });
+        }
+        break :blk t.mod;
+    };
+    module.addImport("openssl", openssl_mod);
+    module.linkSystemLibrary("ssl", .{});
+    module.linkSystemLibrary("crypto", .{});
+    if (builtin.os.tag == .macos) {
+        module.addLibraryPath(.{ .cwd_relative = "/usr/local/opt/openssl@3/lib" });
+    }
+
     const test_module = b.createModule(.{
         .root_source_file = b.path("src/tests.zig"),
         .target = target,
@@ -114,6 +135,13 @@ pub fn build(b: *std.Build) void {
     test_module.addLibraryPath(.{ .cwd_relative = "/usr/local/lib" });
     test_module.addRPath(.{ .cwd_relative = "/usr/local/lib" });
     test_module.linkSystemLibrary("duckdb", .{ .weak = true });
+
+    test_module.addImport("openssl", openssl_mod);
+    test_module.linkSystemLibrary("ssl", .{});
+    test_module.linkSystemLibrary("crypto", .{});
+    if (builtin.os.tag == .macos) {
+        test_module.addLibraryPath(.{ .cwd_relative = "/usr/local/opt/openssl@3/lib" });
+    }
 
     const unit_tests = b.addTest(.{
         .root_module = test_module,
@@ -154,6 +182,13 @@ pub fn build(b: *std.Build) void {
     integration_module.addLibraryPath(.{ .cwd_relative = "/usr/local/lib" });
     integration_module.addRPath(.{ .cwd_relative = "/usr/local/lib" });
     integration_module.linkSystemLibrary("duckdb", .{ .weak = true });
+
+    integration_module.addImport("openssl", openssl_mod);
+    integration_module.linkSystemLibrary("ssl", .{});
+    integration_module.linkSystemLibrary("crypto", .{});
+    if (builtin.os.tag == .macos) {
+        integration_module.addLibraryPath(.{ .cwd_relative = "/usr/local/opt/openssl@3/lib" });
+    }
 
     const integration_tests = b.addTest(.{
         .root_module = integration_module,

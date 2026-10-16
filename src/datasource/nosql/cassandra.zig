@@ -21,11 +21,15 @@ pub const Cassandra = struct {
         tls_verify: bool = false,
         tls_ca_path: ?[]const u8 = null,
         tls_server_name: ?[]const u8 = null,
+        tls_cert_file: ?[]const u8 = null,
+        tls_key_file: ?[]const u8 = null,
     }) !*Cassandra {
         // The connection owns `tls_ca_path`; dupe it so the config buffer's
         // lifetime does not constrain the connection.
         const tls_ca: ?[]u8 = if (opts.tls_ca_path) |p| try allocator.dupe(u8, p) else null;
         const tls_server_name: ?[]u8 = if (opts.tls_server_name) |p| try allocator.dupe(u8, p) else null;
+        const tls_cert_file: ?[]u8 = if (opts.tls_cert_file) |p| try allocator.dupe(u8, p) else null;
+        const tls_key_file: ?[]u8 = if (opts.tls_key_file) |p| try allocator.dupe(u8, p) else null;
         const self = try allocator.create(Cassandra);
         self.* = .{
             .conn = client.Connection.init(allocator, .{
@@ -37,6 +41,8 @@ pub const Cassandra = struct {
                 .tls_verify = opts.tls_verify,
                 .tls_ca_path = tls_ca,
                 .tls_server_name = tls_server_name,
+                .tls_cert_file = tls_cert_file,
+                .tls_key_file = tls_key_file,
             }),
         };
         return self;
@@ -47,10 +53,19 @@ pub const Cassandra = struct {
     pub fn get(self: *Cassandra, ctx: *root.Context, statement: []const u8) !?[]const u8 {
         var res = try self.conn.query(statement);
         defer res.deinit();
-        if (res.rows.len == 0) return null;
-        if (res.rows[0].cells.len == 0) return null;
+        if (res.rows.len == 0) {
+            return null;
+        }
+
+        if (res.rows[0].cells.len == 0) {
+            return null;
+        }
+
         const cell = res.rows[0].cells[0];
-        if (cell.data == null) return null;
+        if (cell.data == null) {
+            return null;
+        }
+
         return try ctx.allocator.dupe(u8, cell.data.?);
     }
 

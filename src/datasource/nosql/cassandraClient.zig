@@ -1,6 +1,7 @@
 const std = @import("std");
 const utils = @import("../../utils.zig");
 const constants = @import("../../constants.zig");
+const tlso = @import("../../tls/openssl.zig");
 
 const Io = std.Io;
 const net = Io.net;
@@ -106,11 +107,12 @@ pub const Connection = struct {
     read_buf: []u8,
     write_buf: []u8,
     /// When TLS is enabled, the CQL frames are written/read through this
-    /// `crypto.tls.Client` instead of the raw stream. `reader`/`writer` always
-    /// point at the active layer (raw stream before the handshake, TLS after).
-    tls_client: ?crypto.tls.Client = null,
-    ca_bundle: crypto.Certificate.Bundle,
-    ca_lock: Io.RwLock = .init,
+    /// OpenSSL-backed `tlso.TlsStream` instead of the raw stream. `reader`/
+    /// `writer` always point at the active layer (raw stream before the
+    /// handshake, TLS after).
+    tls: ?tlso.TlsStream = null,
+    tls_cert_file: ?[]const u8 = null,
+    tls_key_file: ?[]const u8 = null,
     reader: *Io.Reader,
     writer: *Io.Writer,
     tls_read_buf: []u8,
@@ -133,7 +135,7 @@ pub const Connection = struct {
 
     const read_buffer_size = 1 << 16;
     const write_buffer_size = 1 << 16;
-    const tls_buffer_size = crypto.tls.Client.min_buffer_len;
+    const tls_buffer_size = 1 << 16;
 
     fn lock(self: *Connection) void {
         while (!self.mutex.tryLock()) {
@@ -156,6 +158,8 @@ pub const Connection = struct {
         tls_verify: bool = false,
         tls_ca_path: ?[]const u8 = null,
         tls_server_name: ?[]const u8 = null,
+        tls_cert_file: ?[]const u8 = null,
+        tls_key_file: ?[]const u8 = null,
     }) Connection {
         const alloc_len = read_buffer_size + write_buffer_size + (tls_buffer_size * 2);
         const buf = allocator.alloc(u8, alloc_len) catch @panic("oom");
@@ -176,8 +180,9 @@ pub const Connection = struct {
             .buf = buf,
             .read_buf = read_buf,
             .write_buf = write_buf,
-            .tls_client = null,
-            .ca_bundle = .empty,
+            .tls = null,
+            .tls_cert_file = opts.tls_cert_file,
+            .tls_key_file = opts.tls_key_file,
             .reader = undefined,
             .writer = undefined,
             .tls_read_buf = tls_read_buf,
@@ -195,14 +200,23 @@ pub const Connection = struct {
     }
 
     pub fn deinit(self: *Connection) void {
+        if (self.tls) |*t| {
+            t.close();
+            self.tls = null;
+        }
         if (self.connected) {
             self.stream.close(utils.io);
         }
-        self.ca_bundle.deinit(self.allocator);
         if (self.tls_ca_path) |p| {
             self.allocator.free(p);
         }
         if (self.tls_server_name) |p| {
+            self.allocator.free(p);
+        }
+        if (self.tls_cert_file) |p| {
+            self.allocator.free(p);
+        }
+        if (self.tls_key_file) |p| {
             self.allocator.free(p);
         }
         self.allocator.free(self.buf);
@@ -249,7 +263,10 @@ pub const Connection = struct {
 
             self.handshake() catch |e| {
                 std.log.err("cassandra handshake failed for {s}:{d}: {any}", .{ host, port, e });
-                self.tls_client = null;
+                if (self.tls) |*t| {
+                    t.close();
+                    self.tls = null;
+                }
                 stream.close(utils.io);
                 continue;
             };
@@ -367,35 +384,22 @@ pub const Connection = struct {
     }
 
     /// Negotiate TLS over the already-connected stream and repoint `reader`/
-    /// `writer` at the TLS client. Mirrors `mongodbClient.zig`.
+    /// `writer` at the OpenSSL-backed TLS stream. Mirrors `mongodbClient.zig`.
     fn setupTls(self: *Connection, host: []const u8) !void {
-        var rand: [crypto.tls.Client.Options.entropy_len]u8 = undefined;
-        utils.io.random(&rand);
-        const now = Io.Timestamp.now(utils.io, .real);
-
-        self.tls_client = try crypto.tls.Client.init(
-            &self.stream_reader.interface,
-            &self.stream_writer.interface,
+        self.tls = try tlso.TlsStream.handshake(
+            self.stream,
+            self.tls_read_buf,
+            self.tls_write_buf,
             .{
-                .host = if (self.tls_verify) .{ .explicit = host } else .no_verification,
-                .ca = if (self.tls_verify and self.tls_ca_path != null) ca: {
-                    self.ca_bundle.addCertsFromFilePathAbsolute(self.allocator, utils.io, now, self.tls_ca_path.?) catch return error.CassandraTlsCaLoadFailed;
-                    break :ca .{ .bundle = .{
-                        .gpa = self.allocator,
-                        .io = utils.io,
-                        .lock = &self.ca_lock,
-                        .bundle = &self.ca_bundle,
-                    } };
-                } else .no_verification,
-                .write_buffer = self.write_buf,
-                .read_buffer = self.tls_read_buf,
-                .entropy = &rand,
-                .realtime_now = now,
-                .allow_truncation_attacks = true,
+                .verify = self.tls_verify,
+                .ca_path = self.tls_ca_path,
+                .server_name = if (self.tls_server_name) |sn| sn else host,
+                .cert_file = self.tls_cert_file,
+                .key_file = self.tls_key_file,
             },
         );
-        self.reader = &self.tls_client.?.reader;
-        self.writer = &self.tls_client.?.writer;
+        self.reader = &self.tls.?.reader.interface;
+        self.writer = &self.tls.?.writer.interface;
     }
 };
 
