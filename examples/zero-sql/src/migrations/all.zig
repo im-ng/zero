@@ -9,6 +9,7 @@ const create_users_postgres = @import("create_users_postgres.zig");
 const create_users_sqlite = @import("create_users_sqlite.zig");
 const create_users_duckdb = @import("create_users_duckdb.zig");
 const create_users_clickhouse = @import("create_users_clickhouse.zig");
+const create_users_mysql = @import("create_users_mysql.zig");
 
 /// Register every dialect's `users` migration. The runner applies only the one
 /// whose `.dialect` matches the active `DB_DIALECT`; the others are scoped out
@@ -32,6 +33,11 @@ pub fn all(app: *App) !void {
     {
         const k = try Key(app, create_users_clickhouse._migrate);
         try app.addMigration(k, create_users_clickhouse._migrate);
+        app.container.allocator.free(k);
+    }
+    {
+        const k = try Key(app, create_users_mysql._migrate);
+        try app.addMigration(k, create_users_mysql._migrate);
         app.container.allocator.free(k);
     }
 }

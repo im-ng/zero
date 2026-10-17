@@ -313,6 +313,13 @@ pub fn destroy(self: *Self) void {
         allocator.destroy(sql);
     }
 
+    // MySQL datasource: closes the pooled connections and frees the struct
+    // allocated by `loadMySQL` / `MySQL.create`. `MySQL.deinit` frees the struct
+    // itself, so no separate `allocator.destroy` is needed here.
+    if (self.MySQL) |m| {
+        m.deinit();
+    }
+
     // In-process OLAP engine (DuckDB): closes the C database/connection and the
     // struct allocated by `create` / `addDuckDB`.
     if (self.DuckDB) |db| {
@@ -1274,6 +1281,8 @@ fn loadMySQL(self: *Self) !void {
     var buffer: []u8 = undefined;
     buffer = try self.bootstrap.alloc(u8, 512);
 
+    // MySQL reuses the shared `DB_*` SQL credentials (only one SQL dialect is
+    // active per process); its TLS/pool settings use the `MYSQL_*` prefix.
     const hostname = self.config.get("DB_HOST");
     if (std.mem.eql(u8, hostname, "") == true) {
         buffer = try std.fmt.bufPrint(buffer, "connection to mysql failed: host name is empty.", .{});
@@ -1445,26 +1454,35 @@ fn loadSearch(self: *Self) !void {
             self.log.err("search connection failed: MEILI_INDEX must be set.");
             return;
         }
+
         const key = self.config.get("MEILI_API_KEY");
         const handle = try root.Search.build(self, .meilisearch, .{
             .url = meili_host,
             .default_collection = index,
             .api_key = if (std.mem.eql(u8, key, "")) null else key,
         });
+
         self.Search = handle;
-        self.log.info(try std.fmt.allocPrint(self.bootstrap, "connected to meilisearch at '{s}' (index '{s}')", .{ meili_host, index }));
+        self.log.info(try std.fmt.allocPrint(
+            self.bootstrap,
+            "connected to meilisearch at '{s}' (index '{s}')",
+            .{ meili_host, index },
+        ));
+
         return;
     }
 
     const url = self.config.get("SOLR_URL");
     if (std.mem.eql(u8, url, "")) {
         self.log.debug("search is disabled, as SOLR_URL is not provided.");
+
         return;
     }
 
     const collection = self.config.get("SOLR_DEFAULT_COLLECTION");
     if (std.mem.eql(u8, collection, "")) {
         self.log.err("search connection failed: SOLR_DEFAULT_COLLECTION must be set.");
+
         return;
     }
 
@@ -1475,7 +1493,12 @@ fn loadSearch(self: *Self) !void {
         .basic_auth = if (std.mem.eql(u8, auth_val, "")) null else auth_val,
     });
     self.Search = handle;
-    self.log.info(try std.fmt.allocPrint(self.bootstrap, "connected to solr at '{s}' (default collection '{s}')", .{ url, collection }));
+
+    self.log.info(try std.fmt.allocPrint(
+        self.bootstrap,
+        "connected to solr at '{s}' (default collection '{s}')",
+        .{ url, collection },
+    ));
 }
 
 // Auto-wire the NoSQL datasource when CASSANDRA_CONTACT_POINTS or
@@ -1515,8 +1538,8 @@ fn loadNoSQL(self: *Self) !void {
         self.nosql_backend = .cassandra;
         self.log.info(try std.fmt.allocPrint(
             self.bootstrap,
-            "connected to cassandra at '{s}' (keyspace '{s}')",
-            .{ cassandra_cp, keyspace },
+            "connected to cassandra at '{s}' (keyspace '{s}'){s}",
+            .{ cassandra_cp, keyspace, if (tls_enabled) " (tls)" else "" },
         ));
 
         return;
@@ -1529,6 +1552,7 @@ fn loadNoSQL(self: *Self) !void {
             self.log.err("nosql connection failed: COUCHBASE_BUCKET must be set.");
             return;
         }
+
         const user_val = self.config.get("COUCHBASE_USER");
         const pass_val = self.config.get("COUCHBASE_PASSWORD");
         const handle = try root.NoSQL.build(self, .couchbase, .{
@@ -1537,9 +1561,15 @@ fn loadNoSQL(self: *Self) !void {
             .user = if (std.mem.eql(u8, user_val, "")) null else user_val,
             .password = if (std.mem.eql(u8, pass_val, "")) null else pass_val,
         });
+
         self.NoSQL = handle;
         self.nosql_backend = .couchbase;
-        self.log.info(try std.fmt.allocPrint(self.bootstrap, "connected to couchbase at '{s}' (bucket '{s}') via N1QL/HTTP", .{ couchbase_cp, bucket }));
+        self.log.info(try std.fmt.allocPrint(
+            self.bootstrap,
+            "connected to couchbase at '{s}' (bucket '{s}') via N1QL/HTTP",
+            .{ couchbase_cp, bucket },
+        ));
+
         return;
     }
 

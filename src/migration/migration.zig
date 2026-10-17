@@ -64,13 +64,20 @@ pub fn run(self: *Self) anyerror!void {
     // need no cleanup. (This mirrors what the per-request arena does for HTTP
     // traffic — the arena just resets instead of an explicit free.)
     defer {
+        // Postgres and MySQL each hand the migration context its own heap session
+        // (borrowing the shared pool); free it here. SQLite/DuckDB/ClickHouse reuse
+        // a single borrowed connection and need no cleanup. The free must match the
+        // session's concrete type — `destroy` sizes the free from the pointer type.
         if (self.container.SQL != null) {
             const session = @as(*root.SQL, @ptrCast(@alignCast(ctx.SQL.ptr)));
+            ctx.allocator.destroy(session);
+        } else if (self.container.MySQL != null) {
+            const session = @as(*root.MySQL, @ptrCast(@alignCast(ctx.SQL.ptr)));
             ctx.allocator.destroy(session);
         }
     }
 
-    const relational_configured = self.container.SQL != null or self.container.SQLite != null or self.container.DuckDB != null or self.container.ClickHouse != null or self.container.DuckGres != null;
+    const relational_configured = self.container.SQL != null or self.container.MySQL != null or self.container.SQLite != null or self.container.DuckDB != null or self.container.ClickHouse != null or self.container.DuckGres != null;
     const nosql_configured = self.container.NoSQL != null;
 
     var rel_last: i64 = 0;

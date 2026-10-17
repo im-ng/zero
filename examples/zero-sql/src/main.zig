@@ -50,7 +50,7 @@ pub fn main(init: std.process.Init) !void {
 pub fn index(ctx: *Context) !void {
     ctx.response.setStatus(.ok);
     ctx.response.body =
-        \\ zero-sql: multi-dialect SQL pack (Postgres / SQLite / DuckDB / ClickHouse).
+        \\ zero-sql: multi-dialect SQL pack (Postgres / SQLite / DuckDB / ClickHouse / MySQL).
         \\ One backend binds to ctx.SQL, chosen by DB_DIALECT in configs/.env.
         \\ Each dialect's `users` migration ships under src/migrations/ and the
         \\ runner applies only the active dialect's version.
