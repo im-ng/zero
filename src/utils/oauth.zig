@@ -7,9 +7,18 @@ pub const TokenResp = struct {
     expires_in: u64 = 3600,
 };
 
+/// Result of `fetchToken`: the caller-owned access token plus the actual
+/// `expires_in` the provider returned (so callers refresh on the real lifetime
+/// instead of assuming 3600s).
+pub const TokenResult = struct {
+    access_token: []const u8,
+    expires_in: u64 = 3600,
+};
+
 /// Fetches an OAuth2 access token via the client-credentials grant and returns
-/// a caller-owned token (free with `allocator.free`). Used by both the GCS
-/// file store and GCP Pub/Sub so the token-fetch logic lives in one place.
+/// a caller-owned token (free with `allocator.free`) plus its real `expires_in`.
+/// Used by both the GCS file store and GCP Pub/Sub so the token-fetch logic
+/// lives in one place.
 pub fn fetchToken(
     allocator: std.mem.Allocator,
     io: std.Io,
@@ -17,7 +26,7 @@ pub fn fetchToken(
     client_id: []const u8,
     client_secret: []const u8,
     scope: []const u8,
-) ![]const u8 {
+) !TokenResult {
     var body = std.array_list.Managed(u8).init(allocator);
     defer body.deinit();
     try body.appendSlice("grant_type=client_credentials");
@@ -46,5 +55,6 @@ pub fn fetchToken(
     };
     defer parsed.deinit();
 
-    return try allocator.dupe(u8, parsed.value.access_token);
+    const tok = try allocator.dupe(u8, parsed.value.access_token);
+    return .{ .access_token = tok, .expires_in = parsed.value.expires_in };
 }

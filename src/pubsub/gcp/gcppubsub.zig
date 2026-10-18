@@ -27,6 +27,9 @@ pub const GCP = struct {
     access_token_override: []const u8,
     token: ?[]const u8 = null,
     token_expires_at_ns: i128 = 0,
+    // Serializes token refresh so concurrent publish/subscribe/poll threads can't
+    // free-and-replace `token` underneath each other (audit #9).
+    token_mutex: std.Io.Mutex = .init,
     subscription: []const u8,
     subscribers: std.array_list.Managed(Subscriber),
     running: std.atomic.Value(bool),
@@ -112,6 +115,9 @@ pub const GCP = struct {
 
     fn ensureToken(self: *GCP) ![]const u8 {
         if (self.access_token_override.len > 0) return self.access_token_override;
+        self.token_mutex.lock(utils.io) catch {};
+        defer self.token_mutex.unlock(utils.io);
+        // Re-check after taking the lock: another thread may have refreshed.
         if (self.token) |t| {
             if (utils.nowMonotonic().nanoseconds < self.token_expires_at_ns) return t;
         }
@@ -129,9 +135,12 @@ pub const GCP = struct {
         if (self.token) |old| {
             self.allocator.free(old);
         }
-        self.token_expires_at_ns = utils.nowMonotonic().nanoseconds + 3600 * 1_000_000_000 - 30_000_000_000;
-        self.token = tok;
-        return tok;
+        // Refresh 30s before the real `expires_in` lapses (audit #9: previously a
+        // hardcoded 3600s with the actual `expires_in` ignored).
+        self.token_expires_at_ns = utils.nowMonotonic().nanoseconds +
+            @as(i128, tok.expires_in) * 1_000_000_000 - 30_000_000_000;
+        self.token = tok.access_token;
+        return tok.access_token;
     }
 
     pub fn publish(self: *GCP, subject: []const u8, payload: []const u8) !void {

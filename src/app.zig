@@ -803,6 +803,39 @@ fn favIcon(ctx: *Context) !void {
     ctx.response.body = buffer;
 }
 
+/// Join `root` with a URL-relative `rel` and return an owned path that is
+/// guaranteed to stay inside `root`. Any `..` segment is rejected (path
+/// traversal) and `.`/empty segments are collapsed. This is the single guard
+/// against static-file traversal (audit #5); every static-serving path must go
+/// through it rather than concatenating `url.path` directly.
+fn safeStaticPath(allocator: std.mem.Allocator, base: []const u8, rel: []const u8) ![]const u8 {
+    var out = std.array_list.Managed(u8).init(allocator);
+    errdefer out.deinit();
+    try out.appendSlice(base);
+    var it = std.mem.splitScalar(u8, rel, '/');
+    while (it.next()) |seg| {
+        if (seg.len == 0 or std.mem.eql(u8, seg, ".")) continue;
+        if (std.mem.eql(u8, seg, "..")) return error.PathTraversal;
+        try out.append('/');
+        try out.appendSlice(seg);
+    }
+    return out.toOwnedSlice();
+}
+
+test "safeStaticPath rejects traversal and stays under root" {
+    const a = std.testing.allocator;
+    // No `..` escapes the root.
+    try std.testing.expectError(error.PathTraversal, safeStaticPath(a, "/srv/static", "/../etc/passwd"));
+    try std.testing.expectError(error.PathTraversal, safeStaticPath(a, "/srv/static", "a/../../b"));
+    // Normal paths are joined and contained.
+    const p1 = try safeStaticPath(a, "/srv/static", "/foo/bar.css");
+    defer a.free(p1);
+    try std.testing.expectEqualStrings("/srv/static/foo/bar.css", p1);
+    const p2 = try safeStaticPath(a, "/srv/static", "foo/./bar");
+    defer a.free(p2);
+    try std.testing.expectEqualStrings("/srv/static/foo/bar", p2);
+}
+
 fn readFile(ctx: *Context, path: []const u8) ![]const u8 {
     var f = try std.Io.Dir.cwd().openFile(ctx.io, path, .{});
     defer f.close(ctx.io);
@@ -871,11 +904,10 @@ fn swaggerHandler(ctx: *Context) !void {
 }
 
 fn swaggerDirectory(ctx: *Context) !void {
-    var urlPath: []u8 = undefined;
-    urlPath = try ctx.allocator.alloc(u8, 100);
-    urlPath = try std.fmt.bufPrint(urlPath, "{s}/{s}", .{ constants.STATIC_DIR, ctx.request.?.url.path });
+    const safe = try safeStaticPath(ctx.allocator, constants.STATIC_DIR, ctx.request.?.url.path);
+    defer ctx.allocator.free(safe);
 
-    const buffer = try readFile(ctx, urlPath);
+    const buffer = try readFile(ctx, safe);
 
     ctx.response.setStatus(.ok);
     ctx.response.body = buffer;
@@ -896,7 +928,12 @@ fn staticDirectory(ctx: *Context) !void {
                 hit.mount.dir[0 .. hit.mount.dir.len - 1]
             else
                 hit.mount.dir;
-            const fp = try std.fmt.allocPrint(ctx.allocator, "{s}/{s}", .{ dir, name });
+            // `name` comes from the URL and may try `..` traversal into the mount
+            // root; route it through the same guard as the embedded static dir.
+            const fp = safeStaticPath(ctx.allocator, dir, name) catch {
+                ctx.response.setStatus(.not_found);
+                return;
+            };
             defer ctx.allocator.free(fp);
 
             const buffer = readFile(ctx, fp) catch {
@@ -910,11 +947,10 @@ fn staticDirectory(ctx: *Context) !void {
         }
     }
 
-    var urlPath: []u8 = undefined;
-    urlPath = try ctx.allocator.alloc(u8, 100);
-    urlPath = try std.fmt.bufPrint(urlPath, "{s}/{s}", .{ constants.STATIC_DIR, ctx.request.?.url.path });
+    const safe = try safeStaticPath(ctx.allocator, constants.STATIC_DIR, ctx.request.?.url.path);
+    defer ctx.allocator.free(safe);
 
-    const buffer = readFile(ctx, urlPath) catch {
+    const buffer = readFile(ctx, safe) catch {
         ctx.response.setStatus(.not_found);
         return;
     };

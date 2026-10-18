@@ -451,8 +451,12 @@ fn createAndSendRequest(
     payload: ?[]const u8,
     comptime response: type,
 ) !?response {
-    var absoluteURL = self.url.?;
-    defer ctx.allocator.destroy(&absoluteURL);
+    // `absoluteURL` is either `self.url` (owned by `self`, never freed here) or
+    // the result of `utils.combine`, which returns an unfreeable subslice whose
+    // 256-byte backing buffer is intentionally leaked by design. We must not free
+    // either, so there is deliberately no `defer free` here: freeing `&absoluteURL`
+    // would corrupt the heap by destroying a stack-local slice header (audit #7).
+    var absoluteURL: []const u8 = self.url.?;
 
     if (path.len > 0) {
         absoluteURL = try utils.combine(
@@ -612,10 +616,15 @@ fn createAndSendRequest(
         // count against the circuit breaker.
         if (res.status == 401 and self.auth != null and self.auth.?.mode == .oauth and !replayed) {
             replayed = true;
+            // Clear the cached token under the oauth mutex so concurrent requests
+            // reading `self.oauth_token` in `ensureOAuthToken` can't dereference a
+            // token we're about to free (use-after-free, audit #8).
+            self.oauth_mutex.lock(self.container.io) catch {};
             if (self.oauth_token) |old| {
                 self.container.allocator.free(old);
             }
             self.oauth_token = null;
+            self.oauth_mutex.unlock(self.container.io);
             const backoff = self.retryBackoffMs(attempt + 1);
             std.Io.sleep(self.container.io, std.Io.Duration.fromMilliseconds(backoff), .awake) catch {};
             continue;
@@ -625,11 +634,19 @@ fn createAndSendRequest(
     }
 
     const responseTraceID = res.header("X-Correlation-ID");
-    var traceID = try self.getResponseTraceIDBuffer(ctx.allocator);
-    defer ctx.allocator.destroy(&traceID);
+    // `traceID` is either the caller-owned buffer from `getResponseTraceIDBuffer`
+    // (which we free) or the response header slice `_id` (owned by the response
+    // and freed by `res.deinit`, so we must NOT free it). Destroying `&traceID`
+    // would corrupt the heap (it is a stack-local slice header), audit #7.
+    var free_trace: bool = false;
+    var traceID: []const u8 = undefined;
     if (responseTraceID) |_id| {
         traceID = _id;
+    } else {
+        traceID = try self.getResponseTraceIDBuffer(ctx.allocator);
+        free_trace = true;
     }
+    defer if (free_trace) ctx.allocator.free(traceID);
 
     // Read the response body once so we can both parse it and, on failure, log a
     // snippet for diagnosis. The default `res.json` options reject unknown fields
@@ -662,7 +679,13 @@ fn createAndSendRequest(
         ctx.err(msg);
         return ClientError.ResponseParseFailed;
     };
-    defer parsed.deinit();
+
+    // On success we return `parsed.value`, whose slices point into the arena that
+    // `std.json.parseFromSlice` built inside `parsed`. Deinitializing `parsed`
+    // here would free that arena before the caller reads the value (use-after-free,
+    // audit #6). The arena lives in `ctx.allocator` and is reclaimed by the
+    // per-request arena at request end, so the returned value stays valid for the
+    // caller and the memory is not leaked past the request.
 
     try self.metric(
         elapsed_s,

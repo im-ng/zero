@@ -27,6 +27,9 @@ pub const FileStoreGCS = struct {
 
     token: ?[]const u8 = null,
     token_expires_at_ns: i128 = 0,
+    // Serializes token refresh so concurrent file ops can't free-and-replace
+    // `token` underneath each other (audit #9).
+    token_mutex: std.Io.Mutex = .init,
 
     max_bytes: usize = constants.DEFAULT_FILESTORE_MAX_BYTES_S3,
 
@@ -104,6 +107,9 @@ pub const FileStoreGCS = struct {
         if (self.access_token_override.len > 0) {
             return self.access_token_override;
         }
+        self.token_mutex.lock(utils.io) catch {};
+        defer self.token_mutex.unlock(utils.io);
+        // Re-check after taking the lock: another op may have refreshed.
         if (self.token) |t| {
             if (utils.nowMonotonic().nanoseconds < self.token_expires_at_ns) {
                 return t;
@@ -125,10 +131,12 @@ pub const FileStoreGCS = struct {
         if (self.token) |old| {
             self.allocator.free(old);
         }
-        // 30s skew so we refresh before the token actually lapses.
-        self.token_expires_at_ns = utils.nowMonotonic().nanoseconds + 3600 * 1_000_000_000 - 30_000_000_000;
-        self.token = tok;
-        return tok;
+        // Refresh 30s before the real `expires_in` lapses (audit #9: previously a
+        // hardcoded 3600s with the actual `expires_in` ignored).
+        self.token_expires_at_ns = utils.nowMonotonic().nanoseconds +
+            @as(i128, tok.expires_in) * 1_000_000_000 - 30_000_000_000;
+        self.token = tok.access_token;
+        return tok.access_token;
     }
 
     pub fn create(self: *FileStoreGCS, ctx: *root.Context, key: []const u8, data: []const u8) !void {

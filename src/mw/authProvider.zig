@@ -244,7 +244,10 @@ pub fn validateOAuthToken(self: *Self, allocator: std.mem.Allocator, authHeader:
     };
     defer jwtHeader.deinit();
 
-    var kid: []const u8 = undefined;
+    // `kid` is optional: absent in many tokens. Keep it optional so we never
+    // compare an uninitialized slice against the key set (the old code left
+    // `kid` undefined and read garbage when the header omitted it).
+    var kid: ?[]const u8 = null;
     if (jwtHeader.value.object.get("kid")) |k| {
         kid = k.string;
     }
@@ -253,7 +256,8 @@ pub fn validateOAuthToken(self: *Self, allocator: std.mem.Allocator, authHeader:
     var publicKey: *publiKey = undefined;
     var iterator = self.pubKeys.iterator();
     while (iterator.next()) |pk| {
-        if (std.mem.eql(u8, kid, pk.key_ptr.*)) {
+        const match = if (kid) |k| std.mem.eql(u8, k, pk.key_ptr.*) else false;
+        if (match) {
             kidFound = true;
             publicKey = pk.value_ptr;
             break;
@@ -261,18 +265,26 @@ pub fn validateOAuthToken(self: *Self, allocator: std.mem.Allocator, authHeader:
     }
 
     if (kidFound == false) {
-        self.container.log.Err(self.container.allocator, "oauth validate: kid not found in pubKeys");
+        self.logErr("oauth validate: kid not found in pubKeys");
+        return AuthError.TokenInvalidClaims;
+    }
+
+    // Verify the signature against the matched JWKS public key before trusting
+    // any claims. Without this, a token with valid claims but no (or a forged)
+    // signature was accepted — anyone could mint a JWT with arbitrary claims.
+    if (!self.verifyTokenSignature(allocator, token, publicKey)) {
+        self.logErr("oauth validate: signature verification failed");
         return AuthError.TokenInvalidClaims;
     }
 
     const claims = jwtTokenizer.getClaims() catch {
-        self.container.log.Err(self.container.allocator, "oauth validate: getClaims failed");
+        self.logErr("oauth validate: getClaims failed");
         return AuthError.TokenInvalidClaims;
     };
     defer claims.deinit();
 
     var validator = jwt.Validator.init(allocator, &jwtTokenizer) catch {
-        self.container.log.Err(self.container.allocator, "oauth validate: validator init failed");
+        self.logErr("oauth validate: validator init failed");
         return AuthError.TokenInvalidClaims;
     };
     defer validator.deinit();
@@ -308,6 +320,56 @@ pub fn validateOAuthToken(self: *Self, allocator: std.mem.Allocator, authHeader:
     }
 
     return;
+}
+
+/// Log an error against the wired container; the container is always present in
+/// production and in the tests (which pass a stack container).
+fn logErr(self: *Self, msg: []const u8) void {
+    self.container.log.Err(self.container.allocator, msg);
+}
+
+/// Verify a JWT's RSA signature against a JWKS `publiKey`. Only the `RS*` family
+/// is accepted; anything else (none/HS/EC) returns false so a token is never
+/// trusted under an algorithm we can't actually verify. The returned bool is the
+/// verdict: `true` means the signature checked out for `key`.
+fn verifyTokenSignature(self: *Self, allocator: std.mem.Allocator, token: []const u8, key: *publiKey) bool {
+    _ = self;
+    // Be explicit about the algorithm: refuse to verify anything we don't support
+    // rather than risk an alg-confusion downgrade (e.g. `none` or `HS256` with
+    // the public key treated as an HMAC secret).
+    if (key.alg.len < 2 or !std.mem.eql(u8, key.alg[0..2], "RS")) {
+        return false;
+    }
+
+    const n = jwt.utils.base64UrlDecode(allocator, key.n) catch return false;
+    defer allocator.free(n);
+    const e = jwt.utils.base64UrlDecode(allocator, key.e) catch return false;
+    defer allocator.free(e);
+
+    // Reject obviously unusable keys before handing them to the crypto layer,
+    // which asserts (panics) on empty/malformed modulus/exponent.
+    if (n.len == 0 or e.len == 0) return false;
+
+    const rsa_pub = jwt.crypto_rsa.PublicKey.fromBytes(n, e) catch return false;
+    // A `SigningMethodRS256` instance re-parses the token and validates the
+    // header (`typ`, `alg`) plus the RS256 signature against `rsa_pub`. Any
+    // mismatch returns an error → reject.
+    var method = jwt.SigningMethodRS256.init(allocator);
+    // `parse` validates the header (`typ`, `alg`) and the RS256 signature
+    // against `rsa_pub`; on success it returns a Token allocated from the
+    // request arena (freed when the request ends), so we don't deinit it here.
+    _ = method.parse(token, rsa_pub) catch return false;
+    return true;
+}
+
+/// Free the heap copies made by `refreshKeys` for one JWKS key.
+fn freePubKey(allocator: std.mem.Allocator, key: publiKey) void {
+    allocator.free(key.kid);
+    allocator.free(key.kty);
+    allocator.free(key.use);
+    allocator.free(key.n);
+    allocator.free(key.e);
+    allocator.free(key.alg);
 }
 
 pub fn retrieveUserName(_: *Self, allocator: std.mem.Allocator, authHeader: []const u8) AuthError!?[]const u8 {
@@ -404,9 +466,43 @@ pub fn refreshKeys(ctx: *Context) !void {
     );
     defer parsed.deinit();
 
+    // The `parsed` JSON doc (and every slice inside `key`) is owned by the
+    // response allocator and freed by `parsed.deinit()` below. Store heap copies
+    // instead of the dangling slices, or every later verification reads freed
+    // memory. Use the same allocator that initialized `pubKeys`.
     for (parsed.value.keys) |key| {
+        const owned = publiKey{
+            .kid = ctx.container.bootstrap.dupe(u8, key.kid) catch |e| {
+                ctx.container.log.Err(ctx.container.allocator, "oauth refresh: dupe kid failed");
+                return e;
+            },
+            .kty = ctx.container.bootstrap.dupe(u8, key.kty) catch |e| {
+                ctx.container.log.Err(ctx.container.allocator, "oauth refresh: dupe kty failed");
+                return e;
+            },
+            .use = ctx.container.bootstrap.dupe(u8, key.use) catch |e| {
+                ctx.container.log.Err(ctx.container.allocator, "oauth refresh: dupe use failed");
+                return e;
+            },
+            .n = ctx.container.bootstrap.dupe(u8, key.n) catch |e| {
+                ctx.container.log.Err(ctx.container.allocator, "oauth refresh: dupe n failed");
+                return e;
+            },
+            .e = ctx.container.bootstrap.dupe(u8, key.e) catch |e| {
+                ctx.container.log.Err(ctx.container.allocator, "oauth refresh: dupe e failed");
+                return e;
+            },
+            .alg = ctx.container.bootstrap.dupe(u8, key.alg) catch |e| {
+                ctx.container.log.Err(ctx.container.allocator, "oauth refresh: dupe alg failed");
+                return e;
+            },
+        };
         ap.mutex.lock(ctx.io) catch {};
-        try ap.pubKeys.put(key.kid, key);
+        // Replace any prior copy for this kid and free the old one to avoid leak.
+        if (ap.pubKeys.fetchRemove(key.kid)) |old| {
+            freePubKey(ctx.container.bootstrap, old.value);
+        }
+        try ap.pubKeys.put(key.kid, owned);
         ap.mutex.unlock(ctx.io);
     }
 
@@ -632,7 +728,7 @@ fn makeOAuthJwt(
     return std.fmt.allocPrint(alloc, "{s}.{s}.deadbeef", .{ h, p });
 }
 
-fn makeOAuthProvider(alloc: std.mem.Allocator, aud: ?[]const u8, iss: ?[]const u8) !AuthProvider {
+fn makeOAuthProvider(alloc: std.mem.Allocator, container: *root.container, aud: ?[]const u8, iss: ?[]const u8) !AuthProvider {
     var pub_keys = std.StringHashMap(publiKey).init(alloc);
     try pub_keys.put("test-kid", publiKey{
         .kid = "test-kid",
@@ -644,16 +740,23 @@ fn makeOAuthProvider(alloc: std.mem.Allocator, aud: ?[]const u8, iss: ?[]const u
     });
     return AuthProvider{
         .mode = AuthMode.OAuth,
-        .container = undefined,
+        .container = container,
         .pubKeys = pub_keys,
         .expected_audience = aud,
         .expected_issuer = iss,
     };
 }
 
-test "validateOAuthToken accepts token with matching audience and issuer" {
+// Regression test for the signature-verification gate (audit item 2): a JWT
+// whose claims are otherwise valid but whose RSA signature cannot be verified
+// against the configured JWKS key must be rejected. Before the fix this token
+// was accepted, letting anyone mint a JWT with arbitrary claims.
+test "validateOAuthToken rejects token with unverifiable signature" {
     const alloc = std.testing.allocator;
-    var auth = try makeOAuthProvider(alloc, "my-audience", "issuer");
+    var c = root.container{ .allocator = alloc, .log = try root.logger.create(alloc) };
+    c.log.logLevel = 4;
+    defer c.log.deinit();
+    var auth = try makeOAuthProvider(alloc, &c, "my-audience", "issuer");
     defer auth.pubKeys.deinit();
 
     const jwt_str = try makeOAuthJwt(alloc, "my-audience", "issuer", 9999999999, 1);
@@ -661,13 +764,15 @@ test "validateOAuthToken accepts token with matching audience and issuer" {
     const header = try std.fmt.allocPrint(alloc, "Bearer {s}", .{jwt_str});
     defer alloc.free(header);
 
-    // No error => audience + issuer + expiry + not-before all accepted.
-    try auth.validateOAuthToken(alloc, header);
+    try std.testing.expectError(AuthError.TokenInvalidClaims, auth.validateOAuthToken(alloc, header));
 }
 
 test "validateOAuthToken rejects token with wrong audience" {
     const alloc = std.testing.allocator;
-    var auth = try makeOAuthProvider(alloc, "my-audience", "issuer");
+    var c = root.container{ .allocator = alloc, .log = try root.logger.create(alloc) };
+    c.log.logLevel = 4;
+    defer c.log.deinit();
+    var auth = try makeOAuthProvider(alloc, &c, "my-audience", "issuer");
     defer auth.pubKeys.deinit();
 
     const jwt_str = try makeOAuthJwt(alloc, "other-audience", "issuer", 9999999999, 1);
@@ -680,7 +785,10 @@ test "validateOAuthToken rejects token with wrong audience" {
 
 test "validateOAuthToken rejects token with wrong issuer" {
     const alloc = std.testing.allocator;
-    var auth = try makeOAuthProvider(alloc, "my-audience", "issuer");
+    var c = root.container{ .allocator = alloc, .log = try root.logger.create(alloc) };
+    c.log.logLevel = 4;
+    defer c.log.deinit();
+    var auth = try makeOAuthProvider(alloc, &c, "my-audience", "issuer");
     defer auth.pubKeys.deinit();
 
     const jwt_str = try makeOAuthJwt(alloc, "my-audience", "evil-issuer", 9999999999, 1);
@@ -693,7 +801,10 @@ test "validateOAuthToken rejects token with wrong issuer" {
 
 test "validateOAuthToken rejects expired token" {
     const alloc = std.testing.allocator;
-    var auth = try makeOAuthProvider(alloc, "my-audience", "issuer");
+    var c = root.container{ .allocator = alloc, .log = try root.logger.create(alloc) };
+    c.log.logLevel = 4;
+    defer c.log.deinit();
+    var auth = try makeOAuthProvider(alloc, &c, "my-audience", "issuer");
     defer auth.pubKeys.deinit();
 
     // exp in the past (1s after epoch); nbf also past so not-before passes.
@@ -703,4 +814,29 @@ test "validateOAuthToken rejects expired token" {
     defer alloc.free(header);
 
     try std.testing.expectError(AuthError.TokenInvalidClaims, auth.validateOAuthToken(alloc, header));
+}
+
+// Audit item 3: a token whose header omits `kid` must be rejected cleanly. The
+// previous code left `kid` undefined and compared garbage against the key set
+// (reading uninitialized memory) instead of denying.
+test "validateOAuthToken rejects token without kid" {
+    const alloc = std.testing.allocator;
+    var c = root.container{ .allocator = alloc, .log = try root.logger.create(alloc) };
+    c.log.logLevel = 4;
+    defer c.log.deinit();
+    var auth = try makeOAuthProvider(alloc, &c, "my-audience", "issuer");
+    defer auth.pubKeys.deinit();
+
+    const header_json = "{\"alg\":\"RS256\",\"typ\":\"JWT\"}";
+    const payload_json = "{\"aud\":\"my-audience\",\"issuer\":\"issuer\",\"exp\":9999999999,\"nbf\":1}";
+    const h = try b64url(alloc, header_json);
+    defer alloc.free(h);
+    const p = try b64url(alloc, payload_json);
+    defer alloc.free(p);
+    const jwt_str = try std.fmt.allocPrint(alloc, "{s}.{s}.deadbeef", .{ h, p });
+    defer alloc.free(jwt_str);
+    const auth_header = try std.fmt.allocPrint(alloc, "Bearer {s}", .{jwt_str});
+    defer alloc.free(auth_header);
+
+    try std.testing.expectError(AuthError.TokenInvalidClaims, auth.validateOAuthToken(alloc, auth_header));
 }

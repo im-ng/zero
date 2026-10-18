@@ -82,7 +82,11 @@ pub fn create(
     c.client = client;
     c.topic = topic;
     c.kafkaMode = mode;
-    c.isPubSubSet = true;
+    // Only advertise pub/sub as configured when we actually got a client. If
+    // `rd_kafka_new` failed (client == null) we must not set the flag, otherwise
+    // the dispatcher would route publishes to a null `client` and crash
+    // (audit #10).
+    c.isPubSubSet = (client != null);
 
     return c;
 }
