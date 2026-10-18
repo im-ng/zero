@@ -386,6 +386,10 @@ test "mysql pool, ssl and transaction integration" {
         .required
     else if (std.mem.eql(u8, ssl_mode_str, "preferred"))
         .preferred
+    else if (std.mem.eql(u8, ssl_mode_str, "verify_ca"))
+        .verify_ca
+    else if (std.mem.eql(u8, ssl_mode_str, "verify_identity"))
+        .verify_identity
     else
         .disabled;
     const ssl_ca = envGet("MYSQL_SSL_CA");

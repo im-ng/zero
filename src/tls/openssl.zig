@@ -22,10 +22,15 @@ pub const TlsOpts = struct {
     verify: bool = false,
     /// PEM file (or directory) of trusted CA certificates.
     ca_path: ?[]const u8 = null,
-    /// SNI + certificate-verification name. Sent as SNI only when it is a DNS
-    /// name (never an IP literal, which OpenSSL rejects); used for hostname
-    /// verification in either case.
+    /// SNI name. Sent as SNI only when it is a DNS name (never an IP literal,
+    /// which OpenSSL rejects). With `identity` it is also the hostname used for
+    /// certificate verification.
     server_name: ?[]const u8 = null,
+    /// When true (and `verify` is set), the peer certificate must also match
+    /// `server_name` (hostname or IP). Chain validation alone (`verify_ca` in
+    /// MySQL terms) needs CA trust only, because self-signed server certificates
+    /// commonly carry no usable SAN for the host they serve.
+    identity: bool = false,
     /// Client certificate (PEM) for mutual TLS.
     cert_file: ?[]const u8 = null,
     /// Client private key (PEM) for mutual TLS.
@@ -143,9 +148,13 @@ pub const TlsStream = struct {
                     return error.SSLHostNameFailed;
                 }
             }
-            // Enforce hostname (or IP) verification against this name. Older
-            // OpenSSL without SSL_set1_host falls back to chain-only validation.
-            _ = openssl.SSL_set1_host(ssl, snz.ptr);
+            // Enforce hostname (or IP) verification only when identity checking
+            // is requested; older OpenSSL without SSL_set1_host falls back to
+            // chain-only validation. Chain-only mode (`verify_ca`) keys off the
+            // CA trust store and does not pin the server name.
+            if (opts.identity) {
+                _ = openssl.SSL_set1_host(ssl, snz.ptr);
+            }
         }
 
         if (opts.verify) {
@@ -306,7 +315,7 @@ fn nullTerm(buf: []u8, path: []const u8) [:0]u8 {
     std.debug.assert(path.len < buf.len);
     @memcpy(buf[0..path.len], path);
     buf[path.len] = 0;
-    return buf[0 .. path.len :0];
+    return buf[0..path.len :0];
 }
 
 /// A host is a DNS name (not an IP literal) when it contains a non-digit/dot

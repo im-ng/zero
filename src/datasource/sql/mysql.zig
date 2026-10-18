@@ -1,12 +1,16 @@
 const std = @import("std");
 const root = @import("../../zero.zig");
+const tlso = root.tlso;
 
-// Pure-Zig MySQL / MariaDB client (text protocol, `mysql_native_password`
-// auth). No native driver or C library is required.
+// Pure-Zig MySQL / MariaDB client (text protocol). Supports both
+// `mysql_native_password` (SHA1) and `caching_sha2_password` (SHA256 fast-auth;
+// full-auth as cleartext over TLS, or RSA-OAEP over a plain socket via the
+// server's public key) so it works against MySQL 8.0+ defaults with and
+// without TLS. No native driver or C library is required.
 //
 // Two layers:
-//   * `Connection` — one TCP socket (optionally upgraded to TLS via
-//     `std.crypto.tls.Client`) speaking the COM_QUERY text protocol, with
+//   * `Connection` — one TCP socket (optionally upgraded to TLS via the
+//     framework's OpenSSL layer `tlso`) speaking the COM_QUERY text protocol, with
 //     reflection-based row decode, basic transactions, lastInsertRowID and
 //     rowsAffected. This is the unit of a connection pool.
 //   * `MySQL` — a thread-safe connection pool AND a per-request session. The
@@ -18,13 +22,15 @@ const root = @import("../../zero.zig");
 
 const capProtocol41: u32 = 0x200;
 const capSecureConnection: u32 = 0x8000;
-const capPluginAuth: u32 = 0x800000;
+const capPluginAuth: u32 = 0x80000;
 const capConnectWithDb: u32 = 0x8;
-// Request a TLS upgrade after the initial handshake. The auth credentials are
-// still sent in the (cleartext) SSL-request packet, which is the de-facto
-// behaviour of the reference Go driver; the TLS handshake immediately follows
-// and all subsequent traffic is encrypted.
+// Request a TLS upgrade after the initial handshake. The upgrade is
+// protocol-correct: first a bare SSL-request packet (no credentials on the
+// wire), then the TLS handshake, then the full handshake response through the
+// encrypted channel.
 const capSsl: u32 = 0x0800;
+
+const rsa = @import("rsa.zig");
 
 pub const Config = struct {
     host: []const u8,
@@ -47,7 +53,7 @@ pub const Connection = struct {
     socket_writer: std.Io.net.Stream.Writer,
     recv_buf: []u8,
     send_buf: []u8,
-    tls_client: ?std.crypto.tls.Client = null,
+    tls_stream: ?tlso.TlsStream = null,
     tls_read_buf: []u8 = &[_]u8{},
     tls_write_buf: []u8 = &[_]u8{},
     // Active read/write interfaces. Point at the socket until TLS is negotiated,
@@ -55,8 +61,6 @@ pub const Connection = struct {
     // the protocol code is TLS-agnostic.
     read_if: *std.Io.Reader,
     write_if: *std.Io.Writer,
-    ca_bundle: std.crypto.Certificate.Bundle = .empty,
-    ca_lock: std.Io.RwLock = .init,
     seq: u8,
     last_insert_id: i64,
     rows_affected: usize,
@@ -71,6 +75,7 @@ pub const Connection = struct {
 
     const Handshake = struct {
         scramble: [20]u8,
+        auth_plugin: []const u8,
     };
 
     // Establish a connection, performing the handshake (and TLS upgrade when
@@ -109,15 +114,13 @@ pub const Connection = struct {
             .last_insert_id = 0,
             .rows_affected = 0,
             .connected = false,
-            .tls_client = null,
+            .tls_stream = null,
             .tls_read_buf = &[_]u8{},
             .tls_write_buf = &[_]u8{},
             .read_if = undefined,
             .write_if = undefined,
             .socket_reader = undefined,
             .socket_writer = undefined,
-            .ca_bundle = .empty,
-            .ca_lock = .init,
         };
         self.socket_reader = stream.reader(io, recv_buf);
         self.socket_writer = stream.writer(io, send_buf);
@@ -133,95 +136,314 @@ pub const Connection = struct {
     }
 
     fn handshake(self: *Self, cfg: Config) !void {
+        if (cfg.password.len > 255) {
+            // The auth-response length encodes into one length-encoded byte
+            // in every plugin this client speaks, so absurdly long passwords
+            // would overflow the wire format; reject them up-front.
+            return error.MySqlPasswordTooLong;
+        }
         const packet = try self.readPacket();
         defer self.allocator.free(packet);
         const hs = try self.parseHandshake(packet);
+        defer self.allocator.free(hs.auth_plugin);
+
+        // The server advertises its auth plugin in the handshake. MySQL 8.0+
+        // defaults to caching_sha2_password, which needs a separate (SHA256)
+        // flow from the legacy mysql_native_password (SHA1) one.
+        const use_caching = std.mem.eql(u8, hs.auth_plugin, "caching_sha2_password");
+        const plugin = if (use_caching) "caching_sha2_password" else "mysql_native_password";
+        const token = if (cfg.password.len == 0)
+            try self.allocator.dupe(u8, "")
+        else if (use_caching)
+            try self.scrambleSha256(&hs.scramble, cfg.password)
+        else
+            try self.scrambleFromHandshake(&hs.scramble, cfg.password);
+        defer self.allocator.free(token);
 
         const with_ssl = cfg.ssl_mode != .disabled;
-        const resp = try self.buildHandshakeResponse(&hs, cfg.user, cfg.password, cfg.database, with_ssl);
-        defer self.allocator.free(resp);
-        try self.writePacket(resp);
-
         if (with_ssl) {
+            // Protocol-correct TLS upgrade: a bare SSL-request packet (no
+            // credentials) first, then the TLS handshake, then the full
+            // handshake response re-sent through the encrypted channel.
+            // Sending credentials before the upgrade (as some drivers
+            // historically did) leaks the password scramble in cleartext,
+            // and the server never consumes auth data that early anyway.
+            const sreq = try self.buildSslRequest();
+            defer self.allocator.free(sreq);
+            try self.writePacket(sreq);
             try self.setupTls(cfg);
         }
 
-        const auth_result = try self.readPacket();
-        defer self.allocator.free(auth_result);
-        if (auth_result.len == 0) return error.MySqlProtocol;
-        const t = auth_result[0];
-        if (t == 0xFF) return error.MySqlAccessDenied;
-        if (t == 0x01) return error.MySqlAuthMore;
-        if (t != 0x00) return error.MySqlProtocol;
+        const resp = try self.buildHandshakeResponse(cfg.user, cfg.database, with_ssl, plugin, token);
+        defer self.allocator.free(resp);
+        try self.writePacket(resp);
+
+        // Auth-result loop: after the handshake response the server walks us
+        // through a small state machine — an OK packet (fast path), an ERR
+        // packet, an AuthSwitchRequest (0xFE — cold-cache servers ask the
+        // client to re-derive its token against a fresh scramble before any
+        // 0x01 traffic flows), or AuthMoreData (caching_sha2 fast-auth /
+        // full-auth subcodes). Every non-terminal reply is followed by
+        // another packet, so respond and loop until OK or ERR arrives.
+        //
+        // `scramble_current` tracks which scramble the server considered when
+        // evaluating every subsequent token: the greeting's until a switch
+        // request replaces it, and the one a full-auth encrypt must XOR
+        // against.
+        var scramble_current = hs.scramble;
+        var rounds: usize = 0;
+
+        while (rounds < 8) : (rounds += 1) {
+            const auth_result = try self.readPacket();
+            defer self.allocator.free(auth_result);
+            if (auth_result.len == 0) return error.MySqlProtocol;
+            const t = auth_result[0];
+            if (t == 0x00) {
+                return; // terminal OK — authentication succeeded
+            }
+            if (t == 0xFF) {
+                // Surface the server's own text (errno + message) so a
+                // mis-numbered protocol step is not indistinguishable from
+                // a wrong password.
+                self.logServerErr(auth_result, "handshake auth rejected");
+                return error.MySqlAccessDenied;
+            }
+            if (t == 0xFE) {
+                // AuthSwitchRequest: plugin name (NUL-terminated) then the
+                // server's scramble (NUL-terminated). Re-derive the token
+                // with the plugin's hashing scheme and resend it as a bare
+                // AuthSwitchResponse (no status-prefixed payload).
+                scramble_current = try self.authSwitchResponse(cfg, auth_result[1..]);
+                continue;
+            }
+            if (t == 0x01) {
+                // AuthMoreData: only expected during caching_sha2 negotiation.
+                if (!use_caching or auth_result.len < 2) return error.MySqlAuthMore;
+                switch (auth_result[1]) {
+                    // 0x03 = fast auth succeeded (server had the cached hash;
+                    // confirmed against libmysqlclient wire captures). The
+                    // trailing OK packet is the loop's next read.
+                    0x03 => {},
+                    // 0x04 = full auth required (cold cache): over TLS the
+                    // password travels as cleartext inside the encrypted
+                    // channel; without TLS it is RSA-OAEP-encrypted with the
+                    // server's public key. The next reply (consumed by the
+                    // loop) is the terminal OK.
+                    0x04 => {
+                        try self.cachingSha2FullAuth(cfg, with_ssl, scramble_current);
+                    },
+                    0x01 => {
+                        // Fast auth succeeded; the server still sends a
+                        // trailing OK packet, which the loop reads next.
+                    },
+                    else => return error.MySqlProtocol,
+                }
+                continue;
+            }
+            return error.MySqlProtocol;
+        }
+        return error.MySqlProtocol; // auth loop exceeded its step budget
     }
 
-    // Upgrade the active socket to TLS. The ClientHello is written during
-    // `crypto.tls.Client.init`; the first subsequent read completes the
-    // handshake and decrypts the server's auth result.
-    fn setupTls(self: *Self, cfg: Config) !void {
-        const tls_size = std.crypto.tls.Client.min_buffer_len;
-        self.tls_read_buf = try self.allocator.alloc(u8, tls_size + (1 << 16));
-        self.tls_write_buf = try self.allocator.alloc(u8, tls_size + (1 << 16));
+    // Answer an AuthSwitchRequest (0xFE packet body). Parses the plugin name
+    // and scramble, rebuilds the per-plugin token, and sends it. Returns the
+    // scramble the caller should use for any later full-auth exchange.
+    fn authSwitchResponse(self: *Self, cfg: Config, body: []const u8) ![20]u8 {
+        var off: usize = 0;
+        const nul_plugin = std.mem.indexOfScalar(u8, body, 0) orelse return error.MySqlProtocol;
+        const switch_plugin = body[0..nul_plugin];
+        off = nul_plugin + 1;
+        if (off >= body.len) return error.MySqlProtocol;
+        const nul_scramble_end = std.mem.indexOfScalarPos(u8, body, off, 0) orelse body.len;
+        if (nul_scramble_end - off != 20) return error.MySqlProtocol;
+        var scramble: [20]u8 = undefined;
+        @memcpy(scramble[0..20], body[off..nul_scramble_end]);
 
-        var rand: [std.crypto.tls.Client.Options.entropy_len]u8 = undefined;
-        self.io.random(&rand);
-        const now = std.Io.Timestamp.now(self.io, .real);
+        const token = if (std.mem.eql(u8, switch_plugin, "caching_sha2_password"))
+            try self.scrambleSha256(&scramble, cfg.password)
+        else if (std.mem.eql(u8, switch_plugin, "mysql_native_password"))
+            try self.scrambleFromHandshake(&scramble, cfg.password)
+        else
+            return error.MySqlAuthMore;
+        defer self.allocator.free(token);
+        try self.writePacket(token);
+        return scramble;
+    }
+
+    // Complete a caching_sha2_password full-auth exchange. The server sends
+    // AuthMoreData (0x01 0x03) when the password hash isn't cached. The
+    // exchange matches go-sql-driver/mysql `encryptPassword`: over TLS the
+    // NUL-terminated password is sent in cleartext into the encrypted channel;
+    // without TLS the client requests the server's RSA public key and sends
+    // the NUL-terminated password (XORed with the cycled handshake scramble)
+    // RSA-OAEP-SHA1-encrypted with it.
+    fn cachingSha2FullAuth(self: *Self, cfg: Config, with_ssl: bool, scramble: [20]u8) !void {
+        if (with_ssl) {
+            var buf: std.ArrayList(u8) = .empty;
+            defer buf.deinit(self.allocator);
+            try buf.appendSlice(self.allocator, cfg.password);
+            try buf.append(self.allocator, 0); // the protocol includes a NUL terminator
+            try self.writePacket(buf.items);
+        } else {
+            // Ask the server for its RSA public key: payload is a single 0x02
+            // byte, and the answer is an AuthMoreData packet carrying the key.
+            try self.writePacket(&[_]u8{0x02});
+            const key_pkt = try self.readPacket();
+            defer self.allocator.free(key_pkt);
+            if (key_pkt.len < 2 or key_pkt[0] != 0x01) return error.MySqlProtocol;
+
+            // The server wraps the key in PEM; tolerate a bare DER body too.
+            const pem_or_der = try rsa.pemDecode(self.allocator, key_pkt[1..]);
+            defer if (pem_or_der) |der| self.allocator.free(der);
+            const der = pem_or_der orelse key_pkt[1..];
+            const key = try rsa.parseSpki(der);
+
+            // plain = NUL-terminated password XOR the 20-byte handshake
+            // scramble cycled to the password length.
+            const plain = try self.allocator.alloc(u8, cfg.password.len + 1);
+            defer self.allocator.free(plain);
+            @memcpy(plain[0..cfg.password.len], cfg.password);
+            plain[cfg.password.len] = 0;
+            for (plain, 0..) |b, i| {
+                plain[i] = b ^ scramble[i % scramble.len];
+            }
+
+            var seed: [rsa.oaepSeedLen]u8 = undefined;
+            self.io.random(&seed);
+            const enc = try rsa.encryptOaep(self.allocator, key, plain, seed);
+            defer self.allocator.free(enc);
+            try self.writePacket(enc);
+        }
+        const r = try self.readPacket();
+        defer self.allocator.free(r);
+        if (r.len == 0) return error.MySqlProtocol;
+        if (r[0] == 0xFF) {
+            self.logServerErr(r, "full-auth rejected");
+            return error.MySqlAccessDenied;
+        }
+        if (r[0] != 0x00) return error.MySqlProtocol;
+    }
+
+    // Decode a MySQL ERR packet (0xFF || errno LE u16 || optional '#'+5-byte
+    // sqlstate || message) and print it with the phase that failed. This
+    // writes to stderr because the Connection layer has no logger handle —
+    // the app logger is threaded only from App down through SQL/container, and
+    // adding one here would pull in modules outside this file.
+    fn logServerErr(self: *Self, packet: []const u8, phase: []const u8) void {
+        _ = self;
+        if (packet.len < 3) return;
+        const errno = std.mem.readInt(u16, packet[1..3], .little);
+        var msg_start: usize = 3;
+        if (packet.len > 9 and packet[3] == '#') {
+            msg_start = 9;
+        }
+        const msg = packet[msg_start..];
+        std.debug.print("[mysql] {s}: server error {d}: {s}\n", .{ phase, errno, msg });
+    }
+
+    // Upgrade the active socket to TLS via the framework's OpenSSL layer
+    // (`tlso.TlsStream`). std.crypto.tls.Client cannot speak to this server:
+    // MySQL's TLS 1.3 flow carries a CertificateRequest handshake message
+    // (peer captures confirm it for both libmysqlclient and Go clients),
+    // which std's client has no case for and fails with TlsUnexpectedMessage.
+    // OpenSSL answers it with an empty client certificate, so the upgrade
+    // completes normally. The ClientHello is written during `handshake`; the
+    // first subsequent read completes it and decrypts the server's auth
+    // result.
+    fn setupTls(self: *Self, cfg: Config) !void {
+        self.tls_read_buf = try self.allocator.alloc(u8, 1 << 16);
+        self.tls_write_buf = try self.allocator.alloc(u8, 1 << 16);
 
         // When a CA path is supplied we verify the server cert (and hostname);
         // otherwise we accept the cert without verification (the channel is
         // still encrypted). Prefer setting MYSQL_SSL_CA in production.
-        self.tls_client = try std.crypto.tls.Client.init(
-            &self.socket_reader.interface,
-            &self.socket_writer.interface,
-            .{
-                .host = if (cfg.ssl_ca != null) .{ .explicit = cfg.host } else .no_verification,
-                .ca = if (cfg.ssl_ca) |ca_path| blk: {
-                    try self.ca_bundle.addCertsFromFilePathAbsolute(self.allocator, self.io, now, ca_path);
-                    break :blk .{ .bundle = .{
-                        .gpa = self.allocator,
-                        .io = self.io,
-                        .lock = &self.ca_lock,
-                        .bundle = &self.ca_bundle,
-                    } };
-                } else .no_verification,
-                .write_buffer = self.tls_write_buf,
-                .read_buffer = self.tls_read_buf,
-                .entropy = &rand,
-                .realtime_now = now,
-                .allow_truncation_attacks = true,
-            },
-        );
-        self.read_if = &self.tls_client.?.reader;
-        self.write_if = &self.tls_client.?.writer;
+        // `verify_ca` validates the certificate chain against `ssl_ca` (or the
+        // system default bundle when null) without pinning the server host —
+        // MySQL's self-signed certificates carry no SAN for the serving host.
+        // `verify_identity` additionally enforces hostname/IP match.
+        const verify_only = cfg.ssl_mode == .verify_ca;
+        const verify_identity = cfg.ssl_mode == .verify_identity;
+        self.tls_stream = try tlso.TlsStream.handshake(self.stream, self.tls_read_buf, self.tls_write_buf, .{
+            .verify = verify_only or verify_identity,
+            .identity = verify_identity,
+            .ca_path = cfg.ssl_ca,
+            .server_name = cfg.host,
+        });
+        self.read_if = &self.tls_stream.?.reader.interface;
+        self.write_if = &self.tls_stream.?.writer.interface;
     }
 
     fn parseHandshake(self: *Self, packet: []const u8) !Handshake {
-        _ = self;
         var off: usize = 0;
+        if (packet.len < 1) return error.MySqlProtocol;
         // protocol version (1) + server version (null-terminated) + thread id (4)
         off += 1;
         while (off < packet.len and packet[off] != 0) off += 1;
+        if (off == packet.len) return error.MySqlProtocol; // no NUL terminator
         off += 1;
         off += 4;
+        // From here on everything up to part2's end is fixed-size: the greeting
+        // must carry 8 scramble bytes + 1 filler + 2 low caps + 1 charset +
+        // 2 status + 2 high caps + 1 plugin-data length + 10 reserved + 12
+        // part2 bytes. A shorter packet (garbled server/proxy) is rejected
+        // instead of read out of bounds.
+        if (packet.len < off + 8 + 1 + 2 + 1 + 2 + 2 + 1 + 10 + 12) return error.MySqlProtocol;
         const part1 = packet[off .. off + 8];
         off += 8;
         off += 1; // filler
         off += 2; // capability flags (lower 2 bytes)
+        off += 1; // character set
+        off += 2; // status flags
+        off += 2; // capability flags (upper 2 bytes)
+        off += 1; // length of auth-plugin-data
+        off += 10; // reserved
         const part2 = packet[off .. off + 12];
+        // auth-plugin-name: null-terminated string immediately after part2
+        // (part2 is 12 data bytes + 1 null terminator in the wire format).
+        var plugin_off = off + 13;
+        if (plugin_off > packet.len) {
+            plugin_off = packet.len;
+        }
+        var pend = plugin_off;
+        while (pend < packet.len and packet[pend] != 0) pend += 1;
+        const plugin = if (pend > plugin_off)
+            try self.allocator.dupe(u8, packet[plugin_off..pend])
+        else
+            try self.allocator.dupe(u8, "mysql_native_password");
 
         var scramble: [20]u8 = undefined;
         @memcpy(scramble[0..8], part1);
         @memcpy(scramble[8..20], part2);
-        return Handshake{ .scramble = scramble };
+        return Handshake{ .scramble = scramble, .auth_plugin = plugin };
+    }
+
+    // Bare SSL-request packet (32 bytes): capability flags with CLIENT_SSL,
+    // max packet size, charset, 23 reserved zero bytes — never credentials.
+    // The full handshake response travels through TLS after the upgrade.
+    fn buildSslRequest(self: *Self) ![]u8 {
+        var cap: u32 = capProtocol41 | capSecureConnection | capPluginAuth;
+        cap |= capSsl;
+
+        var buf: std.ArrayList(u8) = .empty;
+        try buf.appendSlice(self.allocator, std.mem.toBytes(cap)[0..4]);
+        // max packet size (4 bytes): 1 << 16
+        try buf.appendSlice(self.allocator, &[_]u8{ 0, 0, 1, 0 });
+        // charset (utf8mb4 = 0x21)
+        try buf.append(self.allocator, 0x21);
+        // reserved (23 bytes)
+        var filler: [23]u8 = undefined;
+        @memset(&filler, 0);
+        try buf.appendSlice(self.allocator, &filler);
+        return try buf.toOwnedSlice(self.allocator);
     }
 
     fn buildHandshakeResponse(
         self: *Self,
-        hs: *const Handshake,
         user: []const u8,
-        password: []const u8,
         database: []const u8,
         with_ssl: bool,
+        plugin: []const u8,
+        token: []const u8,
     ) ![]u8 {
         var cap: u32 = capProtocol41 | capSecureConnection | capPluginAuth;
         if (with_ssl) {
@@ -244,22 +466,25 @@ pub const Connection = struct {
         // username (null-terminated)
         try buf.appendSlice(self.allocator, user);
         try buf.append(self.allocator, 0);
-        // auth response (length-encoded)
-        if (password.len == 0) {
+        // auth response (length-encoded). An empty token (no password) is a single
+        // 0x00 length byte.
+        if (token.len == 0) {
             try buf.append(self.allocator, 0);
         } else {
-            const token = try self.scrambleFromHandshake(&hs.scramble, password);
-            defer self.allocator.free(token);
             try buf.append(self.allocator, @intCast(token.len));
             try buf.appendSlice(self.allocator, token);
         }
-        // database (length-encoded, only when CONNECT_WITH_DB)
+        // database (NUL-terminated string, only when CONNECT_WITH_DB). The
+        // 4.1 handshake response declares the default schema as string[NUL] —
+        // not length-encoded — verified byte-for-byte against libmysqlclient:
+        // a length byte here makes the server fold our plugin name and any
+        // trailing bytes into a garbled unknown-database name.
         if (database.len > 0) {
-            try buf.append(self.allocator, @intCast(database.len));
             try buf.appendSlice(self.allocator, database);
+            try buf.append(self.allocator, 0);
         }
         // auth plugin name (null-terminated)
-        try buf.appendSlice(self.allocator, "mysql_native_password");
+        try buf.appendSlice(self.allocator, plugin);
         try buf.append(self.allocator, 0);
 
         return try buf.toOwnedSlice(self.allocator);
@@ -290,13 +515,52 @@ pub const Connection = struct {
         return try self.allocator.dupe(u8, &token);
     }
 
+    // caching_sha2_password fast-auth token:
+    //   SHA256(password) XOR SHA256(SHA256(SHA256(password)) ++ scramble)
+    // Note the nesting order differs from mysql_native_password: here the
+    // double-hashed password is prepended to the scramble (PyMySQL, the Go
+    // driver and the C client all do it in this order). Building it as
+    // SHA256(scramble ++ double_hash) — the native convention — makes the
+    // server treat the token as a wrong password and return AccessDenied.
+    fn scrambleSha256(self: *Self, hand: []const u8, password: []const u8) ![]u8 {
+        var hash1 = std.crypto.hash.sha2.Sha256.init(.{});
+        hash1.update(password);
+        var h1: [32]u8 = undefined;
+        hash1.final(&h1);
+
+        var hash2 = std.crypto.hash.sha2.Sha256.init(.{});
+        hash2.update(&h1);
+        var h2: [32]u8 = undefined;
+        hash2.final(&h2);
+
+        var hash3 = std.crypto.hash.sha2.Sha256.init(.{});
+        hash3.update(&h2);
+        hash3.update(hand);
+        var h3: [32]u8 = undefined;
+        hash3.final(&h3);
+
+        var token: [32]u8 = undefined;
+        var i: usize = 0;
+        while (i < 32) : (i += 1) {
+            token[i] = h1[i] ^ h3[i];
+        }
+        return try self.allocator.dupe(u8, &token);
+    }
+
     fn readPacket(self: *Self) ![]u8 {
         var hdr: [4]u8 = undefined;
         try self.read_if.readSliceAll(&hdr);
         const len: u32 = @as(u32, hdr[0]) |
             (@as(u32, hdr[1]) << 8) |
             (@as(u32, hdr[2]) << 16);
-        self.seq = hdr[3];
+        // Track the *client's* next sequence: each side's packet must be one
+        // past the peer's last packet, so ingesting the server's seq + 1 makes
+        // the next writePacket (and every full-auth/COM_QUERY exchange) land on
+        // the number the server expects. Storing the server's raw seq instead
+        // sent every client packet one short and MySQL mis-handshakes with
+        // spurious ER_ACCESS_DENIED. `sendComQuery` resets to 0 to start the
+        // command phase.
+        self.seq = hdr[3] +% 1;
         if (len == 0) return &[_]u8{};
         return try self.read_if.readAlloc(self.allocator, len);
     }
@@ -314,17 +578,19 @@ pub const Connection = struct {
         if (payload.len > 0) {
             try self.write_if.writeAll(payload);
         }
+        // The 0.16 Writer interface is buffered (64 KB socket buffer here);
+        // without an explicit drain the packet sits unsent and the server
+        // times out with ER_NET_READ_TIMEOUT instead of replying.
+        try self.write_if.flush();
     }
 
     fn sendComQuery(self: *Self, query: []const u8) !void {
         self.seq = 0;
+        // Payload only: COM_QUERY + text. `writePacket` supplies the 4-byte
+        // length/sequence header (building one here as well double-wrapped the
+        // header on the wire, which the server saw as an unknown command).
         var buf: std.ArrayList(u8) = .empty;
         defer buf.deinit(self.allocator);
-        const len: u32 = @intCast(query.len + 1);
-        try buf.append(self.allocator, @intCast(len & 0xFF));
-        try buf.append(self.allocator, @intCast((len >> 8) & 0xFF));
-        try buf.append(self.allocator, @intCast((len >> 16) & 0xFF));
-        try buf.append(self.allocator, 0); // sequence
         try buf.append(self.allocator, 0x03); // COM_QUERY
         try buf.appendSlice(self.allocator, query);
         try self.writePacket(buf.items);
@@ -332,6 +598,7 @@ pub const Connection = struct {
 
     fn readLenEncInt(self: *Self, buf: []const u8, off: *usize) !u64 {
         _ = self;
+        if (off.* >= buf.len) return error.MySqlProtocol;
         const first = buf[off.*];
         if (first < 0xFB) {
             off.* += 1;
@@ -342,15 +609,18 @@ pub const Connection = struct {
             return 0;
         }
         if (first == 0xFC) {
+            if (off.* + 3 > buf.len) return error.MySqlProtocol;
             const v = std.mem.readInt(u16, buf[off.* + 1 ..][0..2], .little);
             off.* += 3;
             return v;
         }
         if (first == 0xFD) {
+            if (off.* + 4 > buf.len) return error.MySqlProtocol;
             const v = std.mem.readInt(u24, buf[off.* + 1 ..][0..3], .little);
             off.* += 4;
             return v;
         }
+        if (off.* + 9 > buf.len) return error.MySqlProtocol;
         const v = std.mem.readInt(u64, buf[off.* + 1 ..][0..8], .little);
         off.* += 9;
         return v;
@@ -377,11 +647,20 @@ pub const Connection = struct {
             self.allocator.free(col);
         }
         var rows: std.ArrayList([]const u8) = .empty;
+        // Without CLIENT_DEPRECATE_EOF the server sends an EOF after the column
+        // definitions and a second one after the rows. Only the second one
+        // terminates the row set; breaking at the first returned zero rows.
+        var saw_column_eof = false;
         while (true) {
             const packet = try self.readPacket();
             if (packet.len > 0 and packet[0] == 0xFE and packet.len < 9) {
+                if (saw_column_eof) {
+                    self.allocator.free(packet);
+                    break;
+                }
+                saw_column_eof = true;
                 self.allocator.free(packet);
-                break;
+                continue;
             }
             if (packet.len > 0 and packet[0] == 0xFF) {
                 self.allocator.free(packet);
@@ -400,7 +679,13 @@ pub const Connection = struct {
         defer self.allocator.free(packet);
         if (packet.len == 0) return error.MySqlProtocol;
         const first = packet[0];
-        if (first == 0xFF) return error.MySqlError;
+        if (first == 0xFF) {
+            // Surface the server's text (errno + message) so protocol-level
+            // rejections during command phase are not indistinguishable from
+            // application SQL errors.
+            self.logServerErr(packet, "sql exec rejected");
+            return error.MySqlError;
+        }
         if (first == 0x00) return self.handleOk(packet, drain);
         if (first == 0xFE) return error.MySqlProtocol;
         var off: usize = 0;
@@ -429,11 +714,18 @@ pub const Connection = struct {
         inline for (fields) |field| {
             if (off < packet.len and packet[off] == 0xFB) {
                 off += 1;
-                if (@typeInfo(field.type) == .optional) {
-                    @field(row, field.name) = null;
+                if (@typeInfo(field.type) != .optional) {
+                    // A NULL column landing in a non-optional field would
+                    // otherwise leave the field holding undefined memory;
+                    // fail instead of returning poison (same rule duckdb.zig
+                    // applies via NonNullColumnIsNull).
+                    return error.NonNullColumnIsNull;
                 }
+                @field(row, field.name) = null;
             } else {
+                if (off >= packet.len) return error.MySqlProtocol;
                 const len = try self.readLenEncInt(packet, &off);
+                if (off + len > packet.len) return error.MySqlProtocol;
                 const value = packet[off .. off + len];
                 off += len;
                 try self.parseField(&@field(row, field.name), value, field.type);
@@ -507,10 +799,20 @@ pub const Connection = struct {
         const q = try interpolateSql(self.allocator, stmt, args);
         defer self.allocator.free(q);
         const res = try self.execInternal(q, false);
+        // `exec` only reports affected rows; the raw text rows (`res.rows`)
+        // belong to the caller of `execInternal`, so release them here.
+        for (res.rows) |r| {
+            self.allocator.free(r);
+        }
+        self.allocator.free(res.rows);
         return @intCast(res.affected);
     }
 
     pub fn deinit(self: *Self) void {
+        if (self.tls_stream) |*ts| {
+            ts.close();
+            self.tls_stream = null;
+        }
         if (self.connected) {
             self.stream.close(self.io);
         }
@@ -522,7 +824,6 @@ pub const Connection = struct {
         if (self.tls_write_buf.len > 0) {
             self.allocator.free(self.tls_write_buf);
         }
-        self.ca_bundle.deinit(self.allocator);
         self.allocator.destroy(self);
     }
 };
@@ -534,6 +835,12 @@ pub const MySQL = struct {
         disabled,
         preferred,
         required,
+        // TLS always, and the server certificate chain is verified against
+        // `ssl_ca` (or the system default bundle when `ssl_ca` is null).
+        verify_ca,
+        // Like verify_ca, plus hostname/IP identity validation of the
+        // certificate against the configured host.
+        verify_identity,
     };
 
     allocator: std.mem.Allocator,
@@ -887,7 +1194,19 @@ fn appendLiteral(allocator: std.mem.Allocator, buf: *std.ArrayList(u8), value: a
             };
             if (is_u8_seq) {
                 const s: []const u8 = if (p.size == .slice) value else value[0..];
-                try buf.appendSlice(allocator, s);
+                // String values are interpolated as SQL string literals; wrap in
+                // single quotes and double any embedded quote so values like
+                // statuses/timestamps (and user input) are valid, not bare
+                // identifiers that the server rejects as a syntax error.
+                try buf.append(allocator, '\'');
+                for (s) |ch| {
+                    if (ch == '\'') {
+                        try buf.appendSlice(allocator, "''");
+                    } else {
+                        try buf.append(allocator, ch);
+                    }
+                }
+                try buf.append(allocator, '\'');
             } else {
                 @compileError("unsupported interpolation pointer: " ++ @typeName(@TypeOf(value)));
             }
