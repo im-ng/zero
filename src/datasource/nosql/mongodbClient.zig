@@ -192,6 +192,9 @@ pub const Connection = struct {
                 .verify = self.tls_verify,
                 .ca_path = self.tls_ca_path,
                 .server_name = if (self.tls_server_name) |sn| sn else host,
+                // Preserve the pre-`identity`-flag behavior: verified
+                // connections also match the server name host.
+                .identity = self.tls_verify,
                 .cert_file = self.tls_cert_file,
                 .key_file = self.tls_key_file,
             },

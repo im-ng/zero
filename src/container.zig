@@ -1107,7 +1107,11 @@ fn loadSQL(self: *Self) !void {
     self.log.info(buffer);
 
     buffer = try self.bootstrap.alloc(u8, 256);
-    buffer = try std.fmt.bufPrint(buffer, "connected to {s} user to {s} database at '{s}:{s}'", .{ user, db, hostname, port });
+    buffer = try std.fmt.bufPrint(
+        buffer,
+        "connected to {s} user to {s} database at '{s}:{s}'{s}",
+        .{ user, db, hostname, port, if (tlsMode != .off) " (tls)" else "" },
+    );
     self.log.info(buffer);
 
     // Auto-register a SQL dependency health probe so /.well-known/health reflects
