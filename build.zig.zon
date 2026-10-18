@@ -24,8 +24,8 @@
             .hash = "dotenv-0.3.0-hfaNFtm3AACGiIZx5jDPHB4Q1QGs9BEMKH-sq32ZxRXa",
         },
         .httpz = .{
-            .url = "git+https://github.com/im-ng/http.zig#a150c6228fdcf5a4ae4cb38f6e0c2e7040acf7cb",
-            .hash = "httpz-0.0.0-PNVzrPYUCQCsmlsCu1UW6CWzwLann2nDqlwM-olFXom2",
+            .url = "git+https://github.com/im-ng/http.zig#ec92c9cd404edc4446d41bcfb5e873aec950fc17",
+            .hash = "httpz-0.0.0-PNVzrPoUCQBcShb3c8vpxqyySWvnjvEs-AwXxaRHPQnz",
         },
         .pg = .{
             .url = "git+https://github.com/karlseguin/pg.zig.git#2e15df7c3b635977bc2733bacd921f3395383860",

@@ -22,7 +22,7 @@ pub fn runHook(
     message: root.pubsubInterface.Message,
 ) DispatchStatus {
     const allocator = container.allocator;
-    const ca = allocator.create(std.heap.ArenaAllocator) catch return;
+    const ca = allocator.create(std.heap.ArenaAllocator) catch return .failed;
     ca.* = std.heap.ArenaAllocator.init(allocator);
     errdefer {
         ca.deinit();
@@ -32,8 +32,8 @@ pub fn runHook(
     // A valid, non-socket response for the subscriber hook's Context (audit #15):
     // an undefined `*httpz.Response` is UB if the hook touches it. Backed by the
     // per-message arena, freed when `ca` is deinited at the end of this function.
-    const res = root.context.makeSyntheticResponse(ca.allocator()) catch return;
-    var ctx = root.Context.init(ca.allocator(), container, null, res) catch return;
+    const res = root.context.makeSyntheticResponse(ca.allocator()) catch return .failed;
+    var ctx = root.Context.init(ca.allocator(), container, null, res) catch return .failed;
     const context = &ctx;
     context.message = message;
 
