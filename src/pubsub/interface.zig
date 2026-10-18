@@ -20,6 +20,12 @@ pub const Message = union(enum) {
 pub const Interface = struct {
     ptr: *anyopaque,
     vtable: *const VTable,
+    /// Backends with a native dead-letter mechanism (SQS redrive policy, GCP
+    /// dead-letter subscriptions) set this so `dispatch.runHook` does NOT also
+    /// do an app-level DLQ republish. The app-level republish posts to
+    /// `<subject>.dlq`, which for a single-queue SQS client would re-enter the
+    /// same queue and loop forever.
+    native_dlq: bool = false,
 
     pub const VTable = struct {
         publish: *const fn (*anyopaque, []const u8, []const u8) anyerror!void,

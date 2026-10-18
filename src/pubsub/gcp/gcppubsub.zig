@@ -223,9 +223,13 @@ pub const GCP = struct {
             for (self.subscribers.items) |sub| {
                 var m = Message{ .context = undefined, .subject = sub.topic, .payload = dec };
                 const union_msg: root.pubsubInterface.Message = .{ .gcp = &m };
-                dispatch.runHook(self.container.?, sub.hook, union_msg);
+                // Only ACK once every subscriber hook has handled the message.
+                // On failure we leave it so GCP redelivers / applies its native
+                // dead-letter subscription instead of dropping it (audit #14).
+                if (dispatch.runHook(self.container.?, sub.hook, union_msg) == .handled) {
+                    self.acknowledge(token, rm.ackId) catch {};
+                }
             }
-            self.acknowledge(token, rm.ackId) catch {};
         }
     }
 

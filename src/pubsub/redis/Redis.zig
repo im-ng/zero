@@ -156,6 +156,9 @@ pub fn destroy(self: *Self) void {
 }
 
 pub fn Publish(self: *Self, subject: []const u8, payload: []const u8) !void {
+    // Serialize concurrent publishes from HTTP handlers / cron (audit #11).
+    self.mu.lock(self.container.io) catch {};
+    defer self.mu.unlock(self.container.io);
     var w = self.writer.?;
     try encodeCommand(&w, &.{ "PUBLISH", subject, payload });
     const reply = (try takeLine(&self.reader.?, self.allocator)) orelse return error.RedisPublishFailed;
@@ -250,7 +253,11 @@ fn runHook(self: *Self, hook: *const fn (*root.Context) anyerror!void, channel: 
         self.allocator.destroy(ca);
     }
 
-    var ctx = Context.init(ca.allocator(), self.container, null, @as(*httpz.Response, undefined)) catch return;
+    // A valid, non-socket response for the subscriber hook's Context (audit #15):
+    // an undefined `*httpz.Response` is UB if the hook touches it. Backed by the
+    // per-message arena, freed when `ca` is deinited.
+    const res = root.context.makeSyntheticResponse(ca.allocator()) catch return;
+    var ctx = Context.init(ca.allocator(), self.container, null, res) catch return;
     const context = &ctx;
 
     var message = root.redisMessage{

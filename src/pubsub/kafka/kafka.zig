@@ -156,6 +156,12 @@ pub fn destroy(self: *Self) void {
 }
 
 pub fn publish(self: *Self, ctx: *Context, topic: *kafkaTopic, key: []const u8, payload: []const u8) !void {
+    // Guard fan-in: Publish is called concurrently from HTTP handlers and cron
+    // jobs (audit #11). Serialize on the shared client state via the per-client
+    // mutex (also used by the subscriber dispatch path).
+    self.mu.lock(self.container.io) catch {};
+    defer self.mu.unlock(self.container.io);
+
     const message_ptr: ?*anyopaque = @constCast(payload.ptr);
     const key_ptr: ?*anyopaque = @constCast(key.ptr);
 
@@ -238,11 +244,17 @@ pub fn publishOnSubject(self: *Self, subject: []const u8, payload: []const u8) !
     };
     defer self.destroryChildAllocator(ca);
 
+    // A valid, non-socket response for the subscriber/handler Context (audit #15):
+    // `_res` is an undefined `*httpz.Response` and a hook touching it is UB.
+    const res = root.context.makeSyntheticResponse(ca.allocator()) catch |err| {
+        self.container.log.any(err);
+        return;
+    };
     var ctx = Context.init(
         ca.allocator(),
         self.container,
         _req,
-        _res,
+        res,
     ) catch |err| {
         self.container.log.any(err);
         return;
@@ -384,11 +396,15 @@ fn subscriptions(self: *Self) !void {
             };
             defer self.destroryChildAllocator(ca);
 
+            const res = root.context.makeSyntheticResponse(ca.allocator()) catch |err| {
+                self.container.log.Any(self.container.allocator, err);
+                continue;
+            };
             var ctx = Context.init(
                 ca.allocator(),
                 self.container,
                 _req,
-                _res,
+                res,
             ) catch |err| {
                 self.container.log.Any(self.container.allocator, err);
                 continue;

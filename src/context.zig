@@ -534,6 +534,21 @@ pub const Context = struct {
     }
 };
 
+/// Build a valid `httpz.Response` for non-HTTP contexts (cron jobs, pub/sub
+/// subscriber dispatch) so `Context` never carries an undefined response pointer
+/// (audit #15). The response accessors these contexts use — `setStatus`, `body`,
+/// `header`, `json`, `writer` — only read `status`, `body`, `headers`, and an
+/// allocating buffer; none touch the socket, so a synthetic connection with only
+/// `res_state` initialized is sufficient. The returned response (and its backing
+/// connection) is owned by `allocator` and freed when that allocator is released.
+pub fn makeSyntheticResponse(allocator: std.mem.Allocator) !*httpz.Response {
+    const conn = try allocator.create(httpz.HTTPConn);
+    conn.res_state = try httpz.Response.State.init(allocator, &httpz.Config.Response{});
+    const res = try allocator.create(httpz.Response);
+    res.* = httpz.Response.init(allocator, conn);
+    return res;
+}
+
 // ===================== Tests =====================
 
 test "context: protobuf bindProto and protobuf round-trip" {

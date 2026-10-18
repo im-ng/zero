@@ -196,9 +196,13 @@ pub const SQS = struct {
             for (self.subscribers.items) |sub| {
                 var m = Message{ .context = undefined, .subject = sub.topic, .payload = msg_body };
                 const union_msg: root.pubsubInterface.Message = .{ .sqs = &m };
-                dispatch.runHook(self.container.?, sub.hook, union_msg);
+                // Only delete once every subscriber hook has handled the message.
+                // On failure we leave it so SQS redelivers / applies its native
+                // redrive policy instead of dropping it (audit #14).
+                if (dispatch.runHook(self.container.?, sub.hook, union_msg) == .handled) {
+                    self.delete(receipt) catch {};
+                }
             }
-            self.delete(receipt) catch {};
         }
     }
 

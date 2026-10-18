@@ -302,6 +302,35 @@ pub fn destroy(self: *Self) void {
         }
     }
 
+    // Pub/sub clients: signal stop, join their background threads, and free the
+    // structures (audit #12). The unified PubSub wrapper is heap-allocated in
+    // loadPubSub and freed here too. Runs before config/log teardown because the
+    // client destroy paths log through `container.log`.
+    if (self.Kakfa) |k| {
+        k.destroy();
+        allocator.destroy(k);
+    }
+    if (self.mqtt) |m| {
+        m.destroy();
+        allocator.destroy(m);
+    }
+    if (self.Nats) |n| {
+        n.destroy();
+        allocator.destroy(n);
+    }
+    if (self.Redis) |r| {
+        r.destroy();
+        allocator.destroy(r);
+    }
+    if (self.pubSub) |ps| {
+        allocator.destroy(ps);
+    }
+    self.Kakfa = null;
+    self.mqtt = null;
+    self.Nats = null;
+    self.Redis = null;
+    self.pubSub = null;
+
     // Config and logger only wrap borrowed pointers (the env map / io), so freeing
     // the structs is sufficient.
     self.config.deinit();
@@ -734,7 +763,7 @@ fn loadSqsPubSub(self: *Self) !void {
     };
 
     const ps = try self.allocator.create(root.PubSub);
-    ps.* = .{ .ptr = @ptrCast(@alignCast(self.Sqs)), .vtable = &root.sqs.vtable };
+    ps.* = .{ .ptr = @ptrCast(@alignCast(self.Sqs)), .vtable = &root.sqs.vtable, .native_dlq = true };
     self.pubSub = ps;
 
     buffer = try std.fmt.bufPrint(buffer, "sqs pubsub enabled at '{s}'", .{queue_url});
@@ -766,7 +795,7 @@ fn loadGcpPubSub(self: *Self) !void {
     };
 
     const ps = try self.allocator.create(root.PubSub);
-    ps.* = .{ .ptr = @ptrCast(@alignCast(self.Gcp)), .vtable = &root.gcpPubSub.vtable };
+    ps.* = .{ .ptr = @ptrCast(@alignCast(self.Gcp)), .vtable = &root.gcpPubSub.vtable, .native_dlq = true };
     self.pubSub = ps;
 
     buffer = try std.fmt.bufPrint(buffer, "gcp pubsub enabled for project '{s}'", .{project});

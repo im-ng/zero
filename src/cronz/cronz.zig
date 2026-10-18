@@ -25,9 +25,6 @@ const totalDaysOfWeek: u8 = 6;
 const secondsIncluded: u8 = 6;
 const minutesIncluded: u8 = 5;
 
-const _req: *httpz.Request = undefined;
-const _res: *httpz.Response = undefined;
-
 /// Set by cronz before calling a job's exec callback. Read-only for consumers.
 pub var current_job_name: ?[]const u8 = null;
 
@@ -47,6 +44,9 @@ pub fn create(container: *root.container) !*Cronz {
     c.running = Atomic(bool).init(true);
     c.container = container;
     c.jobs = std.array_list.Managed(job).init(container.bootstrap);
+    // A valid, non-socket response for the per-job Context (audit #15): jobs must
+    // never receive an undefined `*httpz.Response`. Freed in `destroy`.
+    c.response = try root.context.makeSyntheticResponse(container.bootstrap);
     c.thread = try Thread.spawn(.{}, Cronz.runSchedules, .{ c, @as(i128, utils.nowReal().nanoseconds) });
 
     return c;
@@ -55,6 +55,12 @@ pub fn create(container: *root.container) !*Cronz {
 pub fn destroy(self: *Self) void {
     self.running.store(false, .release);
     self.thread.join();
+    // Free each job's schedule hash-map buffers (audit #15 job leak). The Job
+    // values themselves live in the bootstrap arena, reclaimed at app deinit.
+    for (self.jobs.items) |*j| {
+        j.deinit(self.container.allocator);
+    }
+    self.jobs.deinit();
 }
 
 fn prepareChildAllocator(self: *Self) !*arena {
@@ -81,8 +87,10 @@ pub fn runSchedules(self: *Self, _: i128) void {
         for (self.jobs.items) |*j| {
             if (j.compare(now)) {
                 // Serialize runs of the same job so an overrunning tick can't stack
-                // on top of itself.
-                j.mu.lock(self.container.io) catch {};
+                // on top of itself. Only unlock if we actually acquired the lock:
+                // unlocking on a failed lock would release a *different* holder
+                // (audit #15 foreign-mutex bug).
+                j.mu.lock(self.container.io) catch continue;
                 defer j.mu.unlock(self.container.io);
 
                 var attempt: u32 = 0;
