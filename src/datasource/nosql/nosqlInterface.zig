@@ -289,6 +289,32 @@ pub const NoSQL = struct {
         return r;
     }
 
+    /// Remove (drop) an existing collection by name. MongoDB issues the native
+    /// `drop` command; the other backends do not model collections this way and
+    /// return `NoSQLBackendNotImplemented`.
+    pub fn dropCollection(self: *NoSQL, ctx: *root.Context, name: []const u8) ![]const u8 {
+        if (self.breaker) |*b| {
+            b.before() catch return error.CircuitOpen;
+        }
+        const start = utils.nowMonotonic();
+        const r = switch (self.backend) {
+            .mongodb => @as(*root.MongoDB, @ptrCast(@alignCast(self.ptr))).dropCollection(ctx, name),
+            .cassandra, .couchbase, .arangodb => return error.NoSQLBackendNotImplemented,
+            .mock => @as(*MockBackend, @ptrCast(@alignCast(self.ptr))).dropCollection(ctx, name),
+        } catch |e| {
+            if (self.breaker) |*b| {
+                b.recordFailure();
+            }
+            self.dsError("dropCollection");
+            return e;
+        };
+        if (self.breaker) |*b| {
+            b.recordSuccess();
+        }
+        self.dsOk("dropCollection", start);
+        return r;
+    }
+
     /// Return the last upstream failure recorded by the backend, if any. Call
     /// Right after catching a NoSQL failure error, report the last failure
     /// class to the health probe. `lastError()` returns a *copy* of the
@@ -310,6 +336,7 @@ pub const MockBackend = struct {
     puts: u32 = 0,
     deletes: u32 = 0,
     queries: u32 = 0,
+    drop_collections: u32 = 0,
     last_value: []const u8,
 
     pub fn get(self: *MockBackend, _: *root.Context, _: []const u8) !?[]const u8 {
@@ -328,6 +355,11 @@ pub const MockBackend = struct {
 
     pub fn query(self: *MockBackend, _: *root.Context, _: []const u8) ![]const u8 {
         self.queries += 1;
+        return "";
+    }
+
+    pub fn dropCollection(self: *MockBackend, _: *root.Context, _: []const u8) ![]const u8 {
+        self.drop_collections += 1;
         return "";
     }
 };

@@ -23,6 +23,7 @@ pub fn main(init: std.process.Init) !void {
     try app.put("/users/:key", putUser);
     try app.post("/users/:key", putUser);
     try app.delete("/users/:key", deleteUser);
+    try app.delete("/collection/:name", dropCollection);
     try app.post("/query", runQuery);
 
     try app.run();
@@ -45,6 +46,7 @@ pub fn index(ctx: *Context) !void {
         \\   PUT    /users/:key       upsert a user (request body = document JSON)
         \\   POST   /users/:key       upsert a user (request body = document JSON)
         \\   DELETE /users/:key       delete a user by _id
+        \\   DELETE /collection/:name drop (remove) a collection by name
         \\   POST   /query            run a raw MongoDB command (request body = JSON)
         \\
         \\ Set MONGODB_CONTACT_POINTS / MONGODB_DB in configs/.env.
@@ -61,6 +63,13 @@ pub fn index(ctx: *Context) !void {
 /// Zig error, so this is idempotent and safe to call every startup.
 fn ensureSchema(ctx: *Context) !void {
     const n = ctx.NoSQL orelse return;
+
+    const raw = n.dropCollection(ctx, "users") catch |e| {
+        if (nosqlUpstreamError(ctx)) return;
+        return e;
+    };
+    defer ctx.allocator.free(raw);
+
     const r = n.query(ctx, "{\"create\":\"users\"}") catch return;
     ctx.allocator.free(r);
 }
@@ -217,6 +226,24 @@ pub fn deleteUser(ctx: *Context) !void {
             return e;
         };
         try ctx.response.json(.{ .status = "deleted", .key = key }, .{});
+    } else {
+        notConfigured(ctx);
+    }
+}
+
+pub fn dropCollection(ctx: *Context) !void {
+    if (ctx.NoSQL) |n| {
+        const name = ctx.request.?.params.get("name") orelse {
+            badRequest(ctx, "missing :name");
+            return;
+        };
+        const raw = n.dropCollection(ctx, name) catch |e| {
+            if (nosqlUpstreamError(ctx)) return;
+            return e;
+        };
+        defer ctx.allocator.free(raw);
+        ctx.response.content_type = .JSON;
+        try ctx.response.writer().writeAll(raw);
     } else {
         notConfigured(ctx);
     }

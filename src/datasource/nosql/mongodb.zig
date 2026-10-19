@@ -89,6 +89,15 @@ pub const MongoDB = struct {
         return try self.run(ctx, statement);
     }
 
+    /// Remove (drop) an existing collection by name via MongoDB's `drop` command.
+    /// `name` is a developer-supplied collection identifier and is interpolated as
+    /// a JSON string value, so it must not contain an unescaped `"` or `\`.
+    pub fn dropCollection(self: *MongoDB, ctx: *root.Context, name: []const u8) ![]const u8 {
+        const cmd = try std.fmt.allocPrint(ctx.allocator, "{{\"drop\":\"{s}\"}}", .{name});
+        defer ctx.allocator.free(cmd);
+        return self.run(ctx, cmd);
+    }
+
     /// Thread-safe last-failure accessor. Returns `null` when the most recent
     /// attempt succeeded (or none has been made). `code` names the `ErrorKind`
     /// and `status` is always 0 for this non-HTTP backend. The returned struct
