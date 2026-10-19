@@ -118,10 +118,14 @@ pub const Connection = struct {
     fn connectAttempt(allocator: std.mem.Allocator, io: std.Io, cfg: Config) !*Self {
         const addr = std.Io.net.IpAddress.parse(cfg.host, cfg.port) catch
             try std.Io.net.IpAddress.resolve(io, cfg.host, cfg.port);
-        const stream = try addr.connect(io, .{
-            .mode = .stream,
-            .timeout = timeoutFromMs(cfg.connect_timeout_ms),
-        });
+        // Do NOT pass `.timeout` here: on Zig 0.16's Threaded IO backend
+        // `netConnectIpPosix` panics ("TODO implement netConnectIpPosix with
+        // timeout") when a connect timeout is requested — it is unimplemented,
+        // and a blocked connect cannot be abandoned (cleanup blocks until the
+        // syscall returns). A true connect timeout is therefore unavailable on
+        // this backend; connect is bounded by the OS TCP timeout, and the pool
+        // acquire path is bounded by `pool_acquire_timeout_ms` (audit #16).
+        const stream = try addr.connect(io, .{ .mode = .stream });
 
         const recv_buf = try allocator.alloc(u8, 1 << 16);
         const send_buf = try allocator.alloc(u8, 1 << 16);
