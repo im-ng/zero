@@ -19,6 +19,21 @@ pub const ErrData = struct {
     data: Err,
 };
 
+/// Map a handler/datasource error to the HTTP status it should produce. Without
+/// this every uncaught error collapses to 500; the `HttpError` taxonomy exists
+/// precisely so 4xx-class client errors (bad/missing params, not-found,
+/// conflict) are reported as such instead of masquerading as a server fault
+/// (audit #28). Server-side faults and anything unmapped stay 500.
+pub fn statusForError(err: anyerror) std.http.Status {
+    return switch (err) {
+        error.InvalidParam, error.MissingParam => .bad_request,
+        error.EntityNotFound, error.InvalidRoute => .not_found,
+        error.EntityAlreadyExist => .conflict,
+        error.RequestTimeout => .request_timeout,
+        else => .internal_server_error,
+    };
+}
+
 /// Classifies the underlying failure of a datasource operation so the
 /// thread-safe `lastError()` accessor can report *what kind* of error occurred
 /// without sharing a heap-allocated message across threads. This is the
@@ -87,6 +102,17 @@ pub const ZeroError = error{
 };
 
 // ===================== Tests =====================
+
+test "statusForError maps HttpError taxonomy to status" {
+    try std.testing.expectEqual(std.http.Status.bad_request, statusForError(error.InvalidParam));
+    try std.testing.expectEqual(std.http.Status.bad_request, statusForError(error.MissingParam));
+    try std.testing.expectEqual(std.http.Status.not_found, statusForError(error.EntityNotFound));
+    try std.testing.expectEqual(std.http.Status.not_found, statusForError(error.InvalidRoute));
+    try std.testing.expectEqual(std.http.Status.conflict, statusForError(error.EntityAlreadyExist));
+    try std.testing.expectEqual(std.http.Status.request_timeout, statusForError(error.RequestTimeout));
+    // Anything outside the taxonomy stays a server error.
+    try std.testing.expectEqual(std.http.Status.internal_server_error, statusForError(error.OutOfMemory));
+}
 
 test "HttpError contains expected errors" {
     const fn_invalid: HttpError!void = error.InvalidParam;

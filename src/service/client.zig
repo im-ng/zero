@@ -589,6 +589,13 @@ fn createAndSendRequest(
 
         switch (res.status) {
             404 => {
+                // The downstream clearly responded, so the circuit should treat
+                // it as healthy and close (a 404 is a business error, not an
+                // outage). Without this, a terminal 404 leaves the half-open
+                // trial unresolved and pins the breaker (audit #24).
+                if (self.breaker) |*b| {
+                    b.recordSuccess();
+                }
                 return ClientError.EntityNotFound;
             },
             500...600 => {
@@ -727,26 +734,23 @@ fn applyAuth(self: *Self, ctx: *Context, req: *zul.http.Request) !void {
     }
 }
 
-fn ensureOAuthToken(self: *Self) ![]const u8 {
-    self.oauth_mutex.lock(self.container.io) catch {};
-    defer self.oauth_mutex.unlock(self.container.io);
+const OAuthFetchResult = struct {
+    token: []const u8,
+    expires_in: u64,
+};
 
-    const now = utils.nowMonotonic().nanoseconds;
-    if (self.oauth_token) |token| {
-        // 5s skew baked into expires_at so we refresh slightly early
-        if (now < self.oauth_expires_at) return token;
-    }
-
+/// Fetch a fresh OAuth token from the IdP. Does NOT touch `oauth_token` and does
+/// NOT take `oauth_mutex` — the caller handles caching/locking so the mutex is
+/// never held across the network round-trip (audit #24). On failure returns an
+/// error; the caller decides whether to fall back to a stale cached token.
+fn fetchOAuthToken(self: *Self) !OAuthFetchResult {
     const cfg = self.auth.?.oauth orelse return error.OAuthTokenFetchFailed;
 
     // Circuit breaker guards the token endpoint so a flapping IdP can't pin every
-    // outbound call in a retry storm. If it's open, fall back to the last cached
-    // token (possibly stale) so in-flight requests can still be attempted.
+    // outbound call in a retry storm. If it's open, the caller falls back to the
+    // last cached token (possibly stale) so in-flight requests can still be tried.
     if (self.oauth_breaker) |*b| {
-        b.before() catch {
-            if (self.oauth_token) |token| return token;
-            return error.OAuthTokenFetchFailed;
-        };
+        b.before() catch return error.OAuthTokenFetchFailed;
     }
 
     // A fresh HTTP client per token fetch. std.http's pool returns a dead idle
@@ -815,8 +819,7 @@ fn ensureOAuthToken(self: *Self) ![]const u8 {
             if (self.oauth_breaker) |*b| {
                 b.recordFailure();
             }
-            if (self.oauth_token) |token| return token;
-            return e;
+            return error.OAuthTokenFetchFailed;
         };
         break;
     }
@@ -825,10 +828,6 @@ fn ensureOAuthToken(self: *Self) ![]const u8 {
         if (self.oauth_breaker) |*b| {
             b.recordFailure();
         }
-        // Refresh failed: reuse the previously cached token (stale is better than
-        // hard-failing the outbound call) if one is available.
-        if (self.oauth_token) |token| return token;
-
         const dbg = res.allocBody(
             self.container.allocator,
             .{ .max_size = 16 * 1024 * 1024 },
@@ -871,45 +870,72 @@ fn ensureOAuthToken(self: *Self) ![]const u8 {
         // The token endpoint returned a payload we can't shape into a token
         // (e.g. an `{"error": ...}` body, or a missing `access_token`). Treat
         // that as a fetch failure so the caller gets a meaningful client error
-        // rather than an internal `MissingField`. Fall back to a stale token if
-        // we have one, otherwise report the failure.
+        // rather than an internal `MissingField`.
         if (self.oauth_breaker) |*b| {
             b.recordFailure();
         }
-        const dbg = res.allocBody(
-            self.container.allocator,
-            .{ .max_size = 16 * 1024 * 1024 },
-        ) catch null;
-
-        if (dbg) |*b2| {
-            const slice = b2.string();
-            const cap = if (slice.len > 512) 512 else slice.len;
-            const msg = std.fmt.allocPrint(
-                self.container.allocator,
-                "oauth token fetch parse failed: status {d} body: {s}",
-                .{ res.status, slice[0..cap] },
-            ) catch "oauth token fetch parse failed";
-            self.container.log.Err(self.container.allocator, msg);
-            b2.deinit();
-        }
-        if (self.oauth_token) |token| return token;
-
         return error.OAuthTokenFetchFailed;
     };
     defer parsed.deinit();
 
     const token = parsed.value.access_token;
     const expires_in = parsed.value.expires_in orelse 3600;
+    const owned = try self.container.allocator.dupe(u8, token);
+    return .{ .token = owned, .expires_in = expires_in };
+}
 
+/// Resolve a valid OAuth bearer token, caching it until slightly before expiry.
+/// Uses double-checked locking: the fast path reads a still-valid cache under
+/// the mutex and returns without any I/O, and the slow path fetches the token
+/// WITHOUT holding the mutex so concurrent outbound calls aren't blocked on the
+/// IdP round-trip (audit #24). A newer token produced by a concurrent refresh
+/// is preferred over the one just fetched.
+fn ensureOAuthToken(self: *Self) ![]const u8 {
+    // Fast path: return a still-valid cached token. The mutex is held only long
+    // enough to read the cache, never across the network.
+    {
+        self.oauth_mutex.lock(self.container.io) catch {};
+        const now = utils.nowMonotonic().nanoseconds;
+        if (self.oauth_token) |token| {
+            // 5s skew baked into expires_at so we refresh slightly early.
+            if (now < self.oauth_expires_at) {
+                self.oauth_mutex.unlock(self.container.io);
+                return token;
+            }
+        }
+        self.oauth_mutex.unlock(self.container.io);
+    }
+
+    const fetched = self.fetchOAuthToken() catch |e| {
+        // Refresh failed: a concurrent refresh may have produced a valid token,
+        // or we may have a stale one worth reusing. Re-check under the lock.
+        self.oauth_mutex.lock(self.container.io) catch {};
+        defer self.oauth_mutex.unlock(self.container.io);
+        if (self.oauth_token) |token| {
+            const now2 = utils.nowMonotonic().nanoseconds;
+            if (now2 < self.oauth_expires_at) return token;
+        }
+        return e;
+    };
+
+    self.oauth_mutex.lock(self.container.io) catch {};
+    defer self.oauth_mutex.unlock(self.container.io);
+    const now3 = utils.nowMonotonic().nanoseconds;
+    // Prefer a newer token a concurrent refresh may have already stored, and free
+    // the one we just fetched to avoid leaking / use-after-free of the newer one.
+    if (self.oauth_token) |existing| {
+        if (now3 < self.oauth_expires_at) {
+            self.container.allocator.free(fetched.token);
+            return existing;
+        }
+    }
     if (self.oauth_token) |old| {
         self.container.allocator.free(old);
     }
-
-    const owned = try self.container.allocator.dupe(u8, token);
-    self.oauth_token = owned;
-    self.oauth_expires_at = now + (@as(i128, expires_in) * 1_000_000_000) - (5_000 * 1_000_000);
-
-    return owned;
+    self.oauth_token = fetched.token;
+    self.oauth_expires_at = now3 +
+        (@as(i128, fetched.expires_in) * 1_000_000_000) - (5_000 * 1_000_000);
+    return fetched.token;
 }
 
 fn getResponseTraceIDBuffer(_: *Self, allocator: std.mem.Allocator) ![]const u8 {

@@ -178,10 +178,44 @@ pub const FileStoreS3 = struct {
         try req.header("x-amz-date", h.amz_date);
         try req.header("x-amz-content-sha256", h.content_sha256);
         try req.header("authorization", h.authorization);
+        // Preserve a content type derived from the key; otherwise S3 serves the
+        // object as application/octet-stream and inline viewers fall back to
+        // sniffing (audit #26).
+        try req.header("content-type", mimeForExt(key));
         req.body(data);
 
         const res = try req.getResponse(.{});
         if (res.status < 200 or res.status > 299) return error.S3PutFailed;
+    }
+
+    // Map a storage key's extension to a safe content type. Anything unknown is
+    // forced to octet-stream rather than sniffed, so a stored HTML/SVG upload
+    // can never be served with an executable type (audit #26).
+    fn mimeForExt(key: []const u8) []const u8 {
+        const ext = std.fs.path.extension(key);
+        if (ext.len == 0) return "application/octet-stream";
+        const map = [_]struct { ext: []const u8, mime: []const u8 }{
+            .{ .ext = ".txt", .mime = "text/plain" },
+            .{ .ext = ".html", .mime = "text/html" },
+            .{ .ext = ".htm", .mime = "text/html" },
+            .{ .ext = ".css", .mime = "text/css" },
+            .{ .ext = ".js", .mime = "application/javascript" },
+            .{ .ext = ".json", .mime = "application/json" },
+            .{ .ext = ".csv", .mime = "text/csv" },
+            .{ .ext = ".png", .mime = "image/png" },
+            .{ .ext = ".jpg", .mime = "image/jpeg" },
+            .{ .ext = ".jpeg", .mime = "image/jpeg" },
+            .{ .ext = ".gif", .mime = "image/gif" },
+            .{ .ext = ".webp", .mime = "image/webp" },
+            .{ .ext = ".svg", .mime = "image/svg+xml" },
+            .{ .ext = ".pdf", .mime = "application/pdf" },
+            .{ .ext = ".zip", .mime = "application/zip" },
+            .{ .ext = ".xml", .mime = "application/xml" },
+        };
+        for (map) |m| {
+            if (std.ascii.eqlIgnoreCase(m.ext, ext)) return m.mime;
+        }
+        return "application/octet-stream";
     }
 
     pub fn get(self: *FileStoreS3, ctx: *root.Context, key: []const u8) !?[]const u8 {

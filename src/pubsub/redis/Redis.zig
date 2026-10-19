@@ -80,7 +80,11 @@ pub fn create(
 
 /// Establish (or re-establish) the request/response and push connections,
 /// authenticate, and select the target DB. Closes any prior sockets first.
+/// Held under `mu` so concurrent `Publish`/`addSubscriber` (which also lock)
+/// never observe a half-mutated connection during a reconnect (audit #23).
 fn connect(self: *Self) !void {
+    self.mu.lock(self.container.io) catch {};
+    defer self.mu.unlock(self.container.io);
     self.disconnect();
 
     const addr = std.Io.net.IpAddress.parse(self.host, self.port) catch
@@ -134,10 +138,12 @@ fn disconnect(self: *Self) void {
 /// Re-issue SUBSCRIBE for every registered topic on the (re)connected push socket.
 fn resubscribe(self: *Self) void {
     for (self.subscriber.items) |sub| {
-        var w = self.sub_writer orelse break;
-        encodeCommand(&w, &.{ "SUBSCRIBE", sub.topic }) catch continue;
-        if (readSubFrame(&self.sub_reader.?, self.allocator) catch null) |frame| {
-            freeFrame(frame, self.allocator);
+        const w = if (self.sub_writer) |*sw| sw else break;
+        encodeCommand(w, &.{ "SUBSCRIBE", sub.topic }) catch continue;
+        if (self.sub_reader) |*r| {
+            if (readSubFrame(r, self.allocator) catch null) |frame| {
+                freeFrame(frame, self.allocator);
+            }
         }
     }
 }
@@ -156,12 +162,17 @@ pub fn destroy(self: *Self) void {
 }
 
 pub fn Publish(self: *Self, subject: []const u8, payload: []const u8) !void {
-    // Serialize concurrent publishes from HTTP handlers / cron (audit #11).
+    // Serialize concurrent publishes from HTTP handlers / cron (audit #11), and
+    // exclude the reconnect path which also takes `mu`.
     self.mu.lock(self.container.io) catch {};
     defer self.mu.unlock(self.container.io);
-    var w = self.writer.?;
-    try encodeCommand(&w, &.{ "PUBLISH", subject, payload });
-    const reply = (try takeLine(&self.reader.?, self.allocator)) orelse return error.RedisPublishFailed;
+    // Connection may be mid-reconnect or failed; never unwrap a null socket.
+    // `writer`/`reader` are value-type optionals; hand the callees pointers to
+    // the payload rather than the optional wrapper.
+    const w = if (self.writer) |*wr| wr else return error.RedisPublishFailed;
+    const r = if (self.reader) |*rd| rd else return error.RedisPublishFailed;
+    try encodeCommand(w, &.{ "PUBLISH", subject, payload });
+    const reply = (try takeLine(r, self.allocator)) orelse return error.RedisPublishFailed;
     defer self.allocator.free(reply);
     if (reply.len > 0 and reply[0] == '-') {
         self.container.log.info(reply);
@@ -174,11 +185,17 @@ pub fn addSubscriber(self: *Self, topic: []const u8, hook: *const fn (*root.Cont
     try self.subscriber.append(.{ .topic = topic, .exec = hook });
     self.mu.unlock(self.container.io);
 
-    var w = self.sub_writer.?;
-    try encodeCommand(&w, &.{ "SUBSCRIBE", topic });
+    // Held under `mu` so a concurrent reconnect can't null the push socket while
+    // we write to it. Bail if the connection isn't up rather than unwrapping null.
+    self.mu.lock(self.container.io) catch {};
+    defer self.mu.unlock(self.container.io);
+    const w = if (self.sub_writer) |*sw| sw else return;
+    try encodeCommand(w, &.{ "SUBSCRIBE", topic });
     // consume the initial "subscribe" confirmation frame
-    if (try readSubFrame(&self.sub_reader.?, self.allocator)) |frame| {
-        freeFrame(frame, self.allocator);
+    if (self.sub_reader) |*r| {
+        if (try readSubFrame(r, self.allocator)) |frame| {
+            freeFrame(frame, self.allocator);
+        }
     }
 
     const msg = utils.combine(self.allocator, "topic:{s} redis subscriber added", .{topic}) catch return;
@@ -229,7 +246,11 @@ fn subscriptions(self: *Self) !void {
 
 fn consume(self: *Self) !void {
     while (self.signal.load(.monotonic)) {
-        const frame = try readSubFrame(&self.sub_reader.?, self.allocator) orelse continue;
+        // The push socket is only mutated by the reconnect path, which runs after
+        // this returns an error. If it's null the connection isn't up — signal a
+        // reconnect rather than unwrapping null (audit #23).
+        const r = if (self.sub_reader) |*rd| rd else return error.RedisNotConnected;
+        const frame = try readSubFrame(r, self.allocator) orelse continue;
         if (std.mem.eql(u8, frame.kind, "message") and frame.elements.len >= 3) {
             self.dispatch(frame.elements[1], frame.elements[2]);
         }
@@ -238,11 +259,24 @@ fn consume(self: *Self) !void {
 }
 
 fn dispatch(self: *Self, channel: []const u8, payload: []const u8) void {
-    for (self.subscriber.items) |sub| {
-        if (std.mem.eql(u8, sub.topic, channel)) {
-            self.runHook(sub.exec, channel, payload);
+    // Snapshot the matching hooks under the lock, then release before invoking
+    // them. `addSubscriber` appends under the same lock, and a hook may
+    // republish via `Publish` (which also takes `mu`), so we must not hold the
+    // lock across the invocation (audit #23).
+    var matched = std.array_list.Managed(*const fn (*root.Context) anyerror!void).init(self.allocator);
+    {
+        self.mu.lock(self.container.io) catch {};
+        for (self.subscriber.items) |sub| {
+            if (std.mem.eql(u8, sub.topic, channel)) {
+                matched.append(sub.exec) catch {};
+            }
         }
+        self.mu.unlock(self.container.io);
     }
+    for (matched.items) |hook| {
+        self.runHook(hook, channel, payload);
+    }
+    matched.deinit();
 }
 
 fn runHook(self: *Self, hook: *const fn (*root.Context) anyerror!void, channel: []const u8, payload: []const u8) void {

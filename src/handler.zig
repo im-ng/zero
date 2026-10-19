@@ -202,7 +202,10 @@ pub const Handler = struct {
         };
         defer req.arena.destroy(&ctx);
 
-        res.setStatus(.internal_server_error);
+        // Report the error with a status that matches its class instead of
+        // always 500 (audit #28). The body stays generic so internal failure
+        // detail is never leaked to the client.
+        res.setStatus(root.Error.statusForError(err));
         res.content_type = .JSON;
         res.body =
             \\ {"error": "something went wrong"}

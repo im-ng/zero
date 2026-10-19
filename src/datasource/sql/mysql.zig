@@ -22,6 +22,16 @@ const tlso = root.tlso;
 
 const capProtocol41: u32 = 0x200;
 const capSecureConnection: u32 = 0x8000;
+// Cap on how long `poolAcquire` blocks waiting for a free connection before
+// failing fast (audit #16). A saturated pool should not hang a request forever.
+const pool_acquire_timeout_ms: u64 = 30_000;
+
+// Build an `Io.Timeout` from a millisecond budget. `Clock.Duration` carries a
+// clock tag, but for a relative timeout only the raw nanoseconds matter, so any
+// clock is valid (audit #16).
+fn timeoutFromMs(ms: u64) std.Io.Timeout {
+    return .{ .duration = .{ .raw = std.Io.Duration.fromMilliseconds(@intCast(ms)), .clock = .real } };
+}
 const capPluginAuth: u32 = 0x80000;
 const capConnectWithDb: u32 = 0x8;
 // Request a TLS upgrade after the initial handshake. The upgrade is
@@ -41,6 +51,9 @@ pub const Config = struct {
     ssl_mode: MySQL.SslMode = .disabled,
     ssl_ca: ?[]const u8 = null,
     max: usize = 10,
+    // Cap on the TCP connect + handshake; a dead/unreachable host must not hang a
+    // request thread or pin a pool slot forever (audit #16).
+    connect_timeout_ms: u64 = 10_000,
 };
 
 // One live MySQL connection: a socket (optionally wrapped in TLS) plus the
@@ -99,7 +112,10 @@ pub const Connection = struct {
     fn connectAttempt(allocator: std.mem.Allocator, io: std.Io, cfg: Config) !*Self {
         const addr = std.Io.net.IpAddress.parse(cfg.host, cfg.port) catch
             try std.Io.net.IpAddress.resolve(io, cfg.host, cfg.port);
-        const stream = try addr.connect(io, .{ .mode = .stream });
+        const stream = try addr.connect(io, .{
+            .mode = .stream,
+            .timeout = timeoutFromMs(cfg.connect_timeout_ms),
+        });
 
         const recv_buf = try allocator.alloc(u8, 1 << 16);
         const send_buf = try allocator.alloc(u8, 1 << 16);
@@ -856,7 +872,10 @@ pub const MySQL = struct {
 
     // Pool state. Only meaningful on the top-level pool (when `pool == null`).
     mu: std.Io.Mutex = .init,
-    cond: std.Io.Condition = .init,
+    // Signalling primitive for connection availability. An `Event` (rather than a
+    // `Condition`) lets `poolAcquire` bound the wait with a deadline so a fully
+    // saturated pool fails fast instead of hanging a request forever (audit #16).
+    event: std.Io.Event = .unset,
     free: std.ArrayList(*Connection) = .empty,
     total: usize = 0,
 
@@ -950,11 +969,27 @@ pub const MySQL = struct {
         self.getPool().poolRelease(c);
     }
 
+    // On a failed query, only a transport/protocol failure (not a SQL error from
+    // an ERR packet) means the connection is broken. Poisoning on `MySqlError`
+    // would discard a perfectly good connection and thrash the pool (audit #17).
+    // Releases the connection and returns the error to the caller, which then
+    // propagates it with its own return type.
+    fn failConn(self: *Self, conn: *Connection, err: anyerror) void {
+        if (err != error.MySqlError) {
+            conn.connected = false;
+        }
+        self.releaseConn(conn);
+    }
+
     // Pool-only: hand out a free connection, creating one up to `max`, or block
-    // until a connection is returned. Broken connections are discarded and
-    // replaced on the next acquire.
+    // (bounded by `pool_acquire_timeout_ms`) until a connection is returned.
+    // Broken connections are discarded and replaced on the next acquire.
     fn poolAcquire(self: *Self) !*Connection {
         self.mu.lockUncancelable(self.io);
+        const deadline = if (pool_acquire_timeout_ms > 0)
+            std.Io.Timeout.toTimestamp(timeoutFromMs(pool_acquire_timeout_ms), self.io)
+        else
+            null;
         while (true) {
             if (self.free.items.len > 0) {
                 // pop() returns `?T`; the length check above guarantees non-null.
@@ -978,7 +1013,28 @@ pub const MySQL = struct {
                 };
                 return c;
             }
-            self.cond.waitUncancelable(self.io, &self.mu);
+            // Pool is saturated: wait for a release, bounded by the deadline so a
+            // permanently saturated pool fails fast instead of hanging the request.
+            self.event.reset();
+            // Re-check after the reset: a release may have set the event in the
+            // window, in which case we must not block (lost-signal avoidance).
+            if (self.free.items.len > 0 or self.total < self.max) continue;
+            if (deadline) |dl| {
+                self.mu.unlock(self.io);
+                self.event.waitTimeout(self.io, .{ .deadline = dl }) catch |e| switch (e) {
+                    error.Timeout => {
+                        self.mu.lockUncancelable(self.io);
+                        self.mu.unlock(self.io);
+                        return error.MySqlPoolExhausted;
+                    },
+                    else => {},
+                };
+                self.mu.lockUncancelable(self.io);
+            } else {
+                self.mu.unlock(self.io);
+                self.event.waitUncancelable(self.io);
+                self.mu.lockUncancelable(self.io);
+            }
         }
     }
 
@@ -994,7 +1050,7 @@ pub const MySQL = struct {
                 self.total -= 1;
             };
         }
-        self.cond.signal(self.io);
+        self.event.set(self.io);
         self.mu.unlock(self.io);
     }
 
@@ -1021,8 +1077,7 @@ pub const MySQL = struct {
     ) ![]Type {
         const conn = try self.acquireConn();
         const res = conn.queryRows(Type, stmt, args) catch |err| {
-            conn.connected = false;
-            self.releaseConn(conn);
+            self.failConn(conn, err);
             return err;
         };
         self.lastId = conn.last_insert_id;
@@ -1075,8 +1130,7 @@ pub const MySQL = struct {
     ) !i64 {
         const conn = try self.acquireConn();
         const r = conn.exec(stmt, args) catch |err| {
-            conn.connected = false;
-            self.releaseConn(conn);
+            self.failConn(conn, err);
             return err;
         };
         self.lastId = conn.last_insert_id;
@@ -1110,7 +1164,9 @@ pub const MySQL = struct {
     pub fn commit(self: *Self) !void {
         const c = self.conn orelse return error.NotInTransaction;
         _ = c.execInternal("COMMIT", false) catch |err| {
-            c.connected = false;
+            if (err != error.MySqlError) {
+                c.connected = false;
+            }
             self.getPool().poolRelease(c);
             self.conn = null;
             return err;
@@ -1122,8 +1178,10 @@ pub const MySQL = struct {
     // Roll back the active transaction (best-effort) and release the connection.
     pub fn rollback(self: *Self) void {
         if (self.conn) |c| {
-            _ = c.execInternal("ROLLBACK", false) catch {
-                c.connected = false;
+            _ = c.execInternal("ROLLBACK", false) catch |err| {
+                if (err != error.MySqlError) {
+                    c.connected = false;
+                }
             };
             self.getPool().poolRelease(c);
             self.conn = null;

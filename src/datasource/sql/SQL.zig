@@ -183,7 +183,9 @@ pub fn exec(self: *Self, comptime query: []const u8, args: anytype) !i64 {
     self.recordMetrics(duration, query, "insert");
 
     self.lastId = id orelse 0;
-    self.rows = 0;
+    // `execOpts` returns the server's affected-row count for Postgres; surface
+    // it as `rowsAffected` (it was hardcoded to 0, audit #22).
+    self.rows = id orelse 0;
     return self.lastId;
 }
 
@@ -206,7 +208,8 @@ pub fn execWithContext(self: *Self, _: *context, comptime query: []const u8, arg
     self.recordMetrics(duration, query, "insert");
 
     self.lastId = id orelse 0;
-    self.rows = 0;
+    // `rows` is `usize`; affected-row counts are non-negative, so the cast is safe.
+    self.rows = @intCast(id orelse 0);
     return self.lastId;
 }
 
@@ -228,13 +231,18 @@ pub fn select(self: *Self, comptime _type: anytype, comptime query: []const u8, 
     defer row.deinit();
 
     var result: _type = undefined;
+    var found = false;
     while (try row.next()) |_row| {
         result = try _row.to(_type, .{});
+        found = true;
     }
 
     const duration: f32 = utils.elapsedMs(start);
     self.recordMetrics(duration, query, "select");
 
+    // Zero rows would otherwise hand the caller `undefined` memory wrapped in a
+    // non-null optional (audit #22).
+    if (!found) return null;
     return result;
 }
 
@@ -263,7 +271,7 @@ pub fn selectSlice(
     const duration: f32 = utils.elapsedMs(start);
     self.recordMetrics(duration, query, "select");
 
-    return 0;
+    return @intCast(list.items.len);
 }
 
 /// Acquire a connection for a statement. Inside a transaction (see `begin`) the

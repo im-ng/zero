@@ -3,23 +3,6 @@ const root = @import("../zero.zig");
 const rediz = root.rediz;
 const utils = root.utils;
 
-/// Zig 0.16 removed `std.Thread.Mutex`; this is a minimal blocking mutex built
-/// on the spinlock `std.atomic.Mutex` so the `lock()`/`unlock()` call-sites
-/// below stay unchanged.
-const BlockingMutex = struct {
-    inner: std.atomic.Mutex = .unlocked,
-
-    pub fn lock(m: *@This()) void {
-        while (!m.inner.tryLock()) {
-            std.atomic.spinLoopHint();
-        }
-    }
-
-    pub fn unlock(m: *@This()) void {
-        m.inner.unlock();
-    }
-};
-
 /// Redis-backed KV store, wrapping `rediz.Client` (okredis).
 ///
 /// The underlying `rediz.Client` is a single shared connection; without
@@ -31,36 +14,38 @@ const BlockingMutex = struct {
 pub const KVRedis = struct {
     client: rediz.Client,
 
-    mutex: BlockingMutex = .{},
+    // Async-aware mutex: `lock` suspends the Io task while contended instead of
+    // spinning the CPU across a network round-trip (audit #27).
+    mutex: std.Io.Mutex = .init,
 
     pub fn get(self: *KVRedis, ctx: *root.Context, key: []const u8) !?[]const u8 {
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        self.mutex.lock(utils.io) catch {};
+        defer self.mutex.unlock(utils.io);
         return try self.client.sendAlloc(?[]const u8, ctx.allocator, .{ "GET", key });
     }
 
     pub fn set(self: *KVRedis, _: *root.Context, key: []const u8, value: []const u8) !void {
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        self.mutex.lock(utils.io) catch {};
+        defer self.mutex.unlock(utils.io);
         try self.client.send(void, .{ "SET", key, value });
     }
 
     pub fn delete(self: *KVRedis, _: *root.Context, key: []const u8) !void {
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        self.mutex.lock(utils.io) catch {};
+        defer self.mutex.unlock(utils.io);
         try self.client.send(void, .{ "DEL", key });
     }
 
     pub fn exists(self: *KVRedis, _: *root.Context, key: []const u8) !bool {
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        self.mutex.lock(utils.io) catch {};
+        defer self.mutex.unlock(utils.io);
         const n = try self.client.send(i64, .{ "EXISTS", key });
         return n > 0;
     }
 
     pub fn expire(self: *KVRedis, _: *root.Context, key: []const u8, ms: i64) !void {
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        self.mutex.lock(utils.io) catch {};
+        defer self.mutex.unlock(utils.io);
         try self.client.send(void, .{ "PEXPIRE", key, ms });
     }
 

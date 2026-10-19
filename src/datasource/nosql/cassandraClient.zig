@@ -131,22 +131,20 @@ pub const Connection = struct {
     /// when connecting via an IP literal, since Zig only matches `dNSName` SANs.
     tls_server_name: ?[]const u8 = null,
     connected: bool = false,
-    mutex: std.atomic.Mutex = .unlocked,
+    mutex: std.Io.Mutex = .init,
 
     const read_buffer_size = 1 << 16;
     const write_buffer_size = 1 << 16;
     const tls_buffer_size = 1 << 16;
 
+    // Async-aware: `lock` suspends the Io task while contended instead of
+    // spinning the CPU across the network round-trip the lock guards (audit #27).
     fn lock(self: *Connection) void {
-        while (!self.mutex.tryLock()) {
-            // Best-effort: yielding is an optimization while spinning for the lock;
-            // if it fails there is nothing to do but retry.
-            std.Thread.yield() catch {};
-        }
+        self.mutex.lock(utils.io) catch {};
     }
 
     fn unlock(self: *Connection) void {
-        self.mutex.unlock();
+        self.mutex.unlock(utils.io);
     }
 
     pub fn init(allocator: std.mem.Allocator, opts: struct {

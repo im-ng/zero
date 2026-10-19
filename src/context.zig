@@ -343,9 +343,14 @@ pub const Context = struct {
     pub fn GetFile(self: *Context, field: []const u8) !?root.UploadedFile {
         const form = try self.request.?.multiFormData();
         const f = form.get(field) orelse return null;
+        // Keep only the basename: a client-supplied filename like `../../etc/x`
+        // must never become a traversal key when the caller saves it to a store
+        // (audit #26).
+        const raw_name = f.filename orelse "";
+        const safe_name = std.fs.path.basename(raw_name);
         return root.UploadedFile{
             .data = f.value,
-            .filename = f.filename orelse "",
+            .filename = safe_name,
             .size = f.value.len,
         };
     }

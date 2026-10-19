@@ -7,6 +7,10 @@ const constants = root.constants;
 /// shallow in practice; a deeper tree is a malformed/attack input and must
 /// fail fast rather than recurse without bound.
 const max_walk_depth: usize = 64;
+// Hard cap on the number of keys `list` will return. An unbounded listing lets
+// a store with many files OOM the request; callers that need more must page
+// (audit #26).
+const max_list_entries: usize = 100_000;
 
 /// Local-disk file store. Keys are treated as posix-style relative paths under
 /// a configured root directory; `..` segments are rejected to prevent path
@@ -127,7 +131,9 @@ pub const FileStoreLocal = struct {
         depth: usize,
     ) !void {
         // Fail fast on an unexpectedly deep tree instead of recursing forever.
-        std.debug.assert(depth <= max_walk_depth);
+        // A runtime check (not `std.debug.assert`) so the guard holds in
+        // ReleaseFast too (audit #26).
+        if (depth > max_walk_depth) return error.FileStoreTooDeep;
         var d = std.Io.Dir.cwd().openDir(root.utils.io, dir, .{ .iterate = true }) catch |err| {
             if (err == error.FileNotFound) return;
             return err;
@@ -148,6 +154,8 @@ pub const FileStoreLocal = struct {
             const rel = child[self.root_dir.len + 1 ..];
             if (prefix.len == 0 or std.mem.startsWith(u8, rel, prefix)) {
                 try out.append(try allocator.dupe(u8, rel));
+                // Bound the listing so a huge store cannot OOM the request.
+                if (out.items.len >= max_list_entries) return error.FileStoreListTooLarge;
             }
             allocator.free(child);
         }
