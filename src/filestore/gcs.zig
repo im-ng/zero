@@ -241,6 +241,32 @@ pub const FileStoreGCS = struct {
         return out.toOwnedSlice();
     }
 
+    // Paginate over `list` results without leaking non-returned keys. Native
+    // GCS pageToken paging is a follow-up (audit #31).
+    pub fn listPaginated(
+        self: *FileStoreGCS,
+        ctx: *root.Context,
+        prefix: []const u8,
+        limit: usize,
+        offset: usize,
+    ) ![][]const u8 {
+        const all = try self.list(ctx, prefix);
+        const start = @min(offset, all.len);
+        const end = @min(start + limit, all.len);
+        const res = try ctx.allocator.alloc([]const u8, end - start);
+        var ri: usize = 0;
+        for (all, 0..) |k, i| {
+            if (i >= start and i < end) {
+                res[ri] = k;
+                ri += 1;
+            } else {
+                ctx.allocator.free(k);
+            }
+        }
+        ctx.allocator.free(all);
+        return res;
+    }
+
     const TokenResp = struct {
         access_token: []const u8,
         expires_in: u64 = 3600,

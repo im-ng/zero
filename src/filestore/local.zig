@@ -122,6 +122,45 @@ pub const FileStoreLocal = struct {
         return out.toOwnedSlice();
     }
 
+    // Bounded, sorted pagination over the same key set as `list`. Sorting makes
+    // the offset/limit window deterministic across requests; the `max_list_entries`
+    // cap in `walk` still bounds total keys (audit #31).
+    pub fn listPaginated(
+        self: *FileStoreLocal,
+        ctx: *root.Context,
+        prefix: []const u8,
+        limit: usize,
+        offset: usize,
+    ) ![][]const u8 {
+        var out = std.ArrayList([]const u8).init(ctx.allocator);
+        errdefer {
+            for (out.items) |k| {
+                ctx.allocator.free(k);
+            }
+            out.deinit();
+        }
+        try self.walk(ctx.allocator, self.root_dir, prefix, &out, 0);
+        std.mem.sort([]const u8, out.items, {}, lessThanKey);
+        const start = @min(offset, out.items.len);
+        const end = @min(start + limit, out.items.len);
+        const res = try ctx.allocator.alloc([]const u8, end - start);
+        var ri: usize = 0;
+        for (out.items, 0..) |k, i| {
+            if (i >= start and i < end) {
+                res[ri] = k;
+                ri += 1;
+            } else {
+                ctx.allocator.free(k);
+            }
+        }
+        out.deinit();
+        return res;
+    }
+
+    fn lessThanKey(_: void, a: []const u8, b: []const u8) bool {
+        return std.mem.order(u8, a, b) == .lt;
+    }
+
     fn walk(
         self: *FileStoreLocal,
         allocator: std.mem.Allocator,

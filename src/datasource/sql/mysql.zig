@@ -25,6 +25,12 @@ const capSecureConnection: u32 = 0x8000;
 // Cap on how long `poolAcquire` blocks waiting for a free connection before
 // failing fast (audit #16). A saturated pool should not hang a request forever.
 const pool_acquire_timeout_ms: u64 = 30_000;
+// Bounded reconnect loop for a fresh connection (the Postgres backend already
+// retries; MySQL had none — a transient blip failed the request instantly,
+// audit #30). Short backoff between attempts; the per-attempt connect timeout
+// (10s) still bounds each try.
+const mysql_connect_retries: usize = 3;
+const mysql_connect_backoff_ms: u64 = 50;
 
 // Build an `Io.Timeout` from a millisecond budget. `Clock.Duration` carries a
 // clock tag, but for a relative timeout only the raw nanoseconds matter, so any
@@ -1005,13 +1011,24 @@ pub const MySQL = struct {
             if (self.total < self.max) {
                 self.total += 1;
                 self.mu.unlock(self.io);
-                const c = Connection.connect(self.allocator, self.io, self.config()) catch |err| {
-                    self.mu.lockUncancelable(self.io);
-                    self.total -= 1;
-                    self.mu.unlock(self.io);
-                    return err;
-                };
-                return c;
+                // Retry transient connect failures a few times before giving up,
+                // so a brief network blip doesn't fail the request (audit #30).
+                var last_err: anyerror = error.MySqlConnectFailed;
+                var attempt: usize = 0;
+                while (attempt < mysql_connect_retries) : (attempt += 1) {
+                    const c = Connection.connect(self.allocator, self.io, self.config()) catch |err| {
+                        last_err = err;
+                        if (attempt + 1 < mysql_connect_retries) {
+                            std.Io.Timeout.sleep(timeoutFromMs(mysql_connect_backoff_ms), self.io) catch {};
+                        }
+                        continue;
+                    };
+                    return c;
+                }
+                self.mu.lockUncancelable(self.io);
+                self.total -= 1;
+                self.mu.unlock(self.io);
+                return last_err;
             }
             // Pool is saturated: wait for a release, bounded by the deadline so a
             // permanently saturated pool fails fast instead of hanging the request.

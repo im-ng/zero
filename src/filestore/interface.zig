@@ -90,6 +90,23 @@ pub const FileStore = struct {
             .ftp, .sftp => error.FileStoreBackendNotImplemented,
         };
     }
+
+    // Bounded, sorted pagination over a prefix. Local does real offset/limit
+    // paging; S3/GCS page the fetched set (audit #31).
+    pub fn listPaginated(
+        self: *FileStore,
+        ctx: *root.Context,
+        prefix: []const u8,
+        limit: usize,
+        offset: usize,
+    ) ![][]const u8 {
+        return switch (self.backend) {
+            .local => @as(*local.FileStoreLocal, @ptrCast(@alignCast(self.ptr))).listPaginated(ctx, prefix, limit, offset),
+            .s3, .supabase => @as(*s3.FileStoreS3, @ptrCast(@alignCast(self.ptr))).listPaginated(ctx, prefix, limit, offset),
+            .gcs => @as(*gcs.FileStoreGCS, @ptrCast(@alignCast(self.ptr))).listPaginated(ctx, prefix, limit, offset),
+            .ftp, .sftp => error.FileStoreBackendNotImplemented,
+        };
+    }
 };
 
 /// Construct a backend instance from the container's configured connections and

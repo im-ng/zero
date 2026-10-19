@@ -17,6 +17,10 @@ pub const ErrorObject = struct {
     message: []const u8,
 };
 
+// Cap on GraphQL query nesting depth. A deeper query is rejected with a field
+// error rather than recursing without bound (stack exhaustion / DoS, audit #29).
+const max_query_depth: usize = 16;
+
 const GraphQLRequest = struct {
     query: ?[]const u8 = null,
     variables: ?std.json.Value = null,
@@ -30,6 +34,9 @@ fn ExecCtx(comptime Ctx: type) type {
         variables: ?std.json.Value,
         alloc: std.mem.Allocator,
         errors: std.array_list.Managed(ErrorObject),
+        // Current recursion depth of `resolve`; shared across the recursive
+        // descent so a single query's nesting is bounded by `max_query_depth`.
+        depth: usize = 0,
     };
 }
 
@@ -106,11 +113,20 @@ pub fn handle(ctx: anytype, comptime Query: type, comptime Mutation: ?type, quer
         }, op.selection_set.?, &ec)
     else
         dispatch(Query, query_root, op.selection_set.?, &ec)) catch {
+        // A dispatch error (e.g. OOM or an unexpected resolver panic) must still
+        // produce a spec-shaped `errors` payload rather than an empty `{data:{}}`
+        // so clients can tell the response failed (audit #29). The message is
+        // generic — internal detail is never leaked.
         try ctx.container.metricz.graphqlOperation(.{ .operation = op_name, .kind = op_kind, .status = "error" }, utils.elapsedSeconds(start));
         ctx.response.setStatus(.internal_server_error);
         ctx.response.header("content-type", "application/json");
-        const o = std.json.ObjectMap.empty;
-        try ctx.response.json(std.json.Value{ .object = o }, .{});
+        var err_arr = std.json.Array.init(ctx.allocator);
+        var o = std.json.ObjectMap.empty;
+        try o.put(ctx.allocator, "message", .{ .string = "Internal server error" });
+        try err_arr.append(std.json.Value{ .object = o });
+        var out = std.json.ObjectMap.empty;
+        try out.put(ctx.allocator, "errors", std.json.Value{ .array = err_arr });
+        try ctx.response.json(std.json.Value{ .object = out }, .{});
         return;
     };
 
@@ -211,6 +227,12 @@ fn dispatch(comptime T: type, root: *const anyopaque, ss: ast.SelectionSetNode, 
 }
 
 fn resolve(comptime T: type, instance: T, ss: ast.SelectionSetNode, ec: anytype) !std.json.Value {
+    // Bound recursion depth before descending into nested selection sets.
+    if (ec.depth >= max_query_depth) {
+        try ec.errors.append(.{ .message = try std.fmt.allocPrint(ec.alloc, "query exceeds maximum depth of {d}", .{max_query_depth}) });
+        return .{ .object = std.json.ObjectMap.empty };
+    }
+    ec.depth += 1;
     var obj = std.json.ObjectMap.empty;
 
     for (ss.selections) |sel| {
@@ -602,8 +624,11 @@ test "graphql: resolve query with constant, resolver and arguments" {
 
     const doc = try parser.parse(a, "{ hello pi user(id: \"42\") { id name } }");
     const op = findOperation(doc, null) orelse return error.TestUnexpectedResult;
-    var ec: ExecCtx(TestCtx) = .{
-        .ctx = TestCtx{},
+    var tctx: TestCtx = .{};
+    // Resolvers take a pointer to the request context, so `ec.ctx` must be one
+    // (matching real `handle` usage where `ctx` is `*Context`).
+    var ec: ExecCtx(@TypeOf(&tctx)) = .{
+        .ctx = &tctx,
         .doc = doc,
         .variables = null,
         .alloc = a,

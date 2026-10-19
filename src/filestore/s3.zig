@@ -337,4 +337,31 @@ pub const FileStoreS3 = struct {
         }
         return out.toOwnedSlice();
     }
+
+    // Paginate over `list` results. Native S3 continuation-token paging is a
+    // follow-up; here we page the already-fetched set without leaking the
+    // non-returned keys (audit #31).
+    pub fn listPaginated(
+        self: *FileStoreS3,
+        ctx: *root.Context,
+        prefix: []const u8,
+        limit: usize,
+        offset: usize,
+    ) ![][]const u8 {
+        const all = try self.list(ctx, prefix);
+        const start = @min(offset, all.len);
+        const end = @min(start + limit, all.len);
+        const res = try ctx.allocator.alloc([]const u8, end - start);
+        var ri: usize = 0;
+        for (all, 0..) |k, i| {
+            if (i >= start and i < end) {
+                res[ri] = k;
+                ri += 1;
+            } else {
+                ctx.allocator.free(k);
+            }
+        }
+        ctx.allocator.free(all);
+        return res;
+    }
 };

@@ -28,8 +28,8 @@ pub const mqttConfig = @import("pubsub/mqtt/config.zig");
 pub const mqttSubscriber = @import("pubsub/mqtt/subscriber.zig");
 pub const natsConfig = @import("pubsub/nats/config.zig");
 pub const natsSubscriber = @import("pubsub/nats/subscriber.zig");
-pub const pubsub = @import("pubsub/interface.zig");
-pub const datasourceInterface = @import("datasource/sql/interface.zig");
+    pub const pubsub = @import("pubsub/interface.zig");
+    pub const datasourceInterface = @import("datasource/sql/interface.zig");
 // pub const circuitBreaker = @import("service/circuitBreaker.zig");
 // pub const mongodbClient = @import("datasource/nosql/mongodbClient.zig");
 
