@@ -12,6 +12,18 @@ const MySQL = root.MySQL;
 const Datasource = root.Datasource;
 const MockBackend = root.datasourceInterface.MockBackend;
 
+/// Comptime identifier quoting for trusted schema names used inside the
+/// generated CRUD queries. `dq` wraps in double-quotes (Postgres/SQLite/DuckDB
+/// style), `bq` in backticks (MySQL/ClickHouse style). Untrusted identifiers
+/// should go through `datasourceInterface.quoteIdentifier` at runtime instead.
+fn dq(name: []const u8) []const u8 {
+    return "\"" ++ name ++ "\"";
+}
+
+fn bq(name: []const u8) []const u8 {
+    return "`" ++ name ++ "`";
+}
+
 /// Options for `addRestHandlers`. `resource` is the URL segment (e.g. `"users"`
 /// registers `/users`, `/users/:id`, …). `table` defaults to `resource`
 /// primary key is `id` unless `id_field` says otherwise.
@@ -114,15 +126,15 @@ fn buildStmts(comptime T: type, comptime table: []const u8, comptime id_field: [
 
     const non_id = n - 1;
     return .{
-        .insert_pg = "INSERT INTO " ++ table ++ " (" ++ c ++ ") VALUES (" ++ pgph ++ ")",
-        .insert_q = "INSERT INTO " ++ table ++ " (" ++ c ++ ") VALUES (" ++ qph ++ ")",
-        .get_pg = "SELECT " ++ c ++ " FROM " ++ table ++ " WHERE " ++ id_field ++ " = $1",
-        .get_q = "SELECT " ++ c ++ " FROM " ++ table ++ " WHERE " ++ id_field ++ " = ?",
+        .insert_pg = "INSERT INTO " ++ dq(table) ++ " (" ++ c ++ ") VALUES (" ++ pgph ++ ")",
+        .insert_q = "INSERT INTO " ++ bq(table) ++ " (" ++ c ++ ") VALUES (" ++ qph ++ ")",
+        .get_pg = "SELECT " ++ c ++ " FROM " ++ dq(table) ++ " WHERE " ++ dq(id_field) ++ " = $1",
+        .get_q = "SELECT " ++ c ++ " FROM " ++ bq(table) ++ " WHERE " ++ bq(id_field) ++ " = ?",
         .list = "SELECT " ++ c ++ " FROM " ++ table ++ " LIMIT 100",
-        .update_pg = "UPDATE " ++ table ++ " SET " ++ set_pg ++ " WHERE " ++ id_field ++ " = $" ++ std.fmt.comptimePrint("{d}", .{non_id + 1}),
-        .update_q = "UPDATE " ++ table ++ " SET " ++ set_q ++ " WHERE " ++ id_field ++ " = ?",
-        .delete_pg = "DELETE FROM " ++ table ++ " WHERE " ++ id_field ++ " = $1",
-        .delete_q = "DELETE FROM " ++ table ++ " WHERE " ++ id_field ++ " = ?",
+        .update_pg = "UPDATE " ++ dq(table) ++ " SET " ++ set_pg ++ " WHERE " ++ dq(id_field) ++ " = $" ++ std.fmt.comptimePrint("{d}", .{non_id + 1}),
+        .update_q = "UPDATE " ++ bq(table) ++ " SET " ++ set_q ++ " WHERE " ++ bq(id_field) ++ " = ?",
+        .delete_pg = "DELETE FROM " ++ dq(table) ++ " WHERE " ++ dq(id_field) ++ " = $1",
+        .delete_q = "DELETE FROM " ++ bq(table) ++ " WHERE " ++ bq(id_field) ++ " = ?",
     };
 }
 
@@ -388,19 +400,19 @@ const Sample = struct { id: i64, name: []const u8, email: []const u8 };
 test "AutoCrud generates dialect-correct SQL" {
     const st = comptime buildStmts(Sample, "users", "id", 0);
     try std.testing.expectEqualStrings(
-        "INSERT INTO users (id,name,email) VALUES ($1,$2,$3)",
+        "INSERT INTO \"users\" (id,name,email) VALUES ($1,$2,$3)",
         st.insert_pg,
     );
     try std.testing.expectEqualStrings(
-        "INSERT INTO users (id,name,email) VALUES (?,?,?)",
+        "INSERT INTO `users` (id,name,email) VALUES (?,?,?)",
         st.insert_q,
     );
     try std.testing.expectEqualStrings(
-        "SELECT id,name,email FROM users WHERE id = $1",
+        "SELECT id,name,email FROM \"users\" WHERE \"id\" = $1",
         st.get_pg,
     );
     try std.testing.expectEqualStrings(
-        "SELECT id,name,email FROM users WHERE id = ?",
+        "SELECT id,name,email FROM `users` WHERE `id` = ?",
         st.get_q,
     );
     try std.testing.expectEqualStrings(
@@ -408,19 +420,19 @@ test "AutoCrud generates dialect-correct SQL" {
         st.list,
     );
     try std.testing.expectEqualStrings(
-        "UPDATE users SET name=$1,email=$2 WHERE id = $3",
+        "UPDATE \"users\" SET name=$1,email=$2 WHERE \"id\" = $3",
         st.update_pg,
     );
     try std.testing.expectEqualStrings(
-        "UPDATE users SET name=?,email=? WHERE id = ?",
+        "UPDATE `users` SET name=?,email=? WHERE `id` = ?",
         st.update_q,
     );
     try std.testing.expectEqualStrings(
-        "DELETE FROM users WHERE id = $1",
+        "DELETE FROM \"users\" WHERE \"id\" = $1",
         st.delete_pg,
     );
     try std.testing.expectEqualStrings(
-        "DELETE FROM users WHERE id = ?",
+        "DELETE FROM `users` WHERE `id` = ?",
         st.delete_q,
     );
 }

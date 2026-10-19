@@ -18,6 +18,7 @@ pub const authProvider = @import("mw/authProvider.zig");
 pub const authz = @import("mw/authz.zig");
 pub const tracz = @import("mw/tracz.zig");
 pub const ws = @import("mw/ws.zig");
+pub const rbac = @import("mw/rbac.zig");
 pub const logger = @import("logger.zig");
 pub const app = @import("app.zig");
 pub const datasourceError = @import("datasource/sql/error.zig");
@@ -28,10 +29,10 @@ pub const mqttConfig = @import("pubsub/mqtt/config.zig");
 pub const mqttSubscriber = @import("pubsub/mqtt/subscriber.zig");
 pub const natsConfig = @import("pubsub/nats/config.zig");
 pub const natsSubscriber = @import("pubsub/nats/subscriber.zig");
-    pub const pubsub = @import("pubsub/interface.zig");
-    pub const datasourceInterface = @import("datasource/sql/interface.zig");
-// pub const circuitBreaker = @import("service/circuitBreaker.zig");
-// pub const mongodbClient = @import("datasource/nosql/mongodbClient.zig");
+pub const pubsub = @import("pubsub/interface.zig");
+pub const datasourceInterface = @import("datasource/sql/interface.zig");
+pub const circuitBreaker = @import("service/circuitBreaker.zig");
+pub const mongodbClient = @import("datasource/nosql/mongodbClient.zig");
 
 comptime {
     _ = zero;
@@ -52,6 +53,7 @@ comptime {
     _ = authz;
     _ = tracz;
     _ = ws;
+    _ = rbac;
     _ = logger;
     _ = app;
     _ = datasourceError;
@@ -64,12 +66,12 @@ comptime {
     _ = natsSubscriber;
     _ = pubsub;
     _ = datasourceInterface;
+    _ = circuitBreaker;
+    _ = mongodbClient;
 
-    // _ = @import("mw/baggage.zig");
-    // _ = @import("utils/sigv4.zig");
+    _ = @import("mw/baggage.zig");
+    _ = @import("utils/sigv4.zig");
 
     // coverage breakers
-    // _ = mongodbClient;
-    // _ = circuitBreaker;
-    // _ = @import("service/client.zig");
+    _ = @import("service/client.zig");
 }

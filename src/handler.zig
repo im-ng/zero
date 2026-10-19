@@ -168,18 +168,20 @@ pub const Handler = struct {
     }
 
     pub fn unauthorized(self: *Handler, req: *httpz.Request, res: *httpz.Response) !void {
+        const start = utils.nowMonotonic();
         var ctx = try Context.init(req.arena, self.container, req, res);
         defer req.arena.destroy(&ctx);
 
         try res.json(.{ .message = "unauthorizated request!" }, .{});
 
-        try self.metric(0, @tagName(req.method), res.status, req.url.path);
+        try self.metric(utils.elapsedSeconds(start), @tagName(req.method), res.status, req.url.path);
 
-        const access_log = try std.fmt.allocPrint(req.arena, "{s}\t {d} {d}ms {s} {s}", .{ res.headers.get("X-Correlation-ID").?, res.status, 0, @tagName(req.method), req.url.path });
+        const access_log = try std.fmt.allocPrint(req.arena, "{s}\t {d} {d}ms {s} {s}", .{ res.headers.get("X-Correlation-ID").?, res.status, utils.elapsedMs(start), @tagName(req.method), req.url.path });
         ctx.info(access_log);
     }
 
     pub fn notFound(self: *Handler, req: *httpz.Request, res: *httpz.Response) !void {
+        const start = utils.nowMonotonic();
         var ctx = try Context.init(req.arena, self.container, req, res);
         defer req.arena.destroy(&ctx);
 
@@ -187,13 +189,14 @@ pub const Handler = struct {
 
         try res.json(.{ .err = "route is not registered!" }, .{});
 
-        try self.metric(0, @tagName(req.method), res.status, req.url.path);
+        try self.metric(utils.elapsedSeconds(start), @tagName(req.method), res.status, req.url.path);
 
-        const access_log = try std.fmt.allocPrint(req.arena, "{s}\t {d} {d}ms {s} {s}", .{ res.headers.get("X-Correlation-ID").?, res.status, 0, @tagName(req.method), req.url.path });
+        const access_log = try std.fmt.allocPrint(req.arena, "{s}\t {d} {d}ms {s} {s}", .{ res.headers.get("X-Correlation-ID").?, res.status, utils.elapsedMs(start), @tagName(req.method), req.url.path });
         ctx.info(access_log);
     }
 
     pub fn uncaughtError(self: *Handler, req: *httpz.Request, res: *httpz.Response, err: anyerror) void {
+        const start = utils.nowMonotonic();
         std.debug.print("something went wrong\n", .{});
 
         var ctx = Context.init(req.arena, self.container, req, res) catch |init_err| {
@@ -211,11 +214,11 @@ pub const Handler = struct {
             \\ {"error": "something went wrong"}
         ;
 
-        self.metric(0, @tagName(req.method), res.status, req.url.path) catch |e| {
+        self.metric(utils.elapsedSeconds(start), @tagName(req.method), res.status, req.url.path) catch |e| {
             std.debug.print("metric recording failed: {}\n", .{e});
         };
 
-        const access_log = std.fmt.allocPrint(req.arena, "{s}\t {d} {d}ms {s} {s}", .{ res.headers.get("X-Correlation-ID").?, res.status, 0, @tagName(req.method), req.url.path }) catch |e| {
+        const access_log = std.fmt.allocPrint(req.arena, "{s}\t {d} {d}ms {s} {s}", .{ res.headers.get("X-Correlation-ID").?, res.status, utils.elapsedMs(start), @tagName(req.method), req.url.path }) catch |e| {
             std.debug.print("access log alloc failed: {}\n", .{e});
             return;
         };
