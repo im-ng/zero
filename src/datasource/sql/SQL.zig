@@ -185,7 +185,7 @@ pub fn exec(self: *Self, comptime query: []const u8, args: anytype) !i64 {
     self.lastId = id orelse 0;
     // `execOpts` returns the server's affected-row count for Postgres; surface
     // it as `rowsAffected` (it was hardcoded to 0, audit #22).
-    self.rows = id orelse 0;
+    self.rows = @intCast(id orelse 0);
     return self.lastId;
 }
 
