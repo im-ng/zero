@@ -71,15 +71,6 @@ fn notConfigured(ctx: *Context) void {
     ctx.response.json(.{ .message = "no SQL datasource configured (set DB_DIALECT)" }, .{}) catch {};
 }
 
-/// True when any relational backend is wired (postgres/sqlite/duckdb/clickhouse/
-/// duckgres). `ctx.SQL` is a non-null struct, so we must inspect the container's
-/// backend pointers rather than comparing it to `null`.
-fn sqlConfigured(ctx: *Context) bool {
-    const c = ctx.container;
-    return c.SQL != null or c.SQLite != null or c.DuckDB != null or
-        c.ClickHouse != null or c.DuckGres != null;
-}
-
 fn parseId(ctx: *Context) ?i64 {
     const raw = ctx.request.?.params.get("id") orelse return null;
     return std.fmt.parseInt(i64, raw, 10) catch null;
@@ -91,10 +82,6 @@ fn badRequest(ctx: *Context, msg: []const u8) void {
 }
 
 pub fn listUsers(ctx: *Context) !void {
-    if (!sqlConfigured(ctx)) {
-        notConfigured(ctx);
-        return;
-    }
     const users = try ctx.SQL.queryRows(ctx, User, "SELECT id, name, email FROM users ORDER BY id", .{});
     defer {
         for (users) |u| {
@@ -107,10 +94,6 @@ pub fn listUsers(ctx: *Context) !void {
 }
 
 pub fn createUser(ctx: *Context) !void {
-    if (!sqlConfigured(ctx)) {
-        notConfigured(ctx);
-        return;
-    }
     const body = (ctx.bind(NewUser) catch {
         badRequest(ctx, "invalid JSON body; expected {\"name\":...,\"email\":...}");
         return;
@@ -131,10 +114,6 @@ pub fn createUser(ctx: *Context) !void {
 }
 
 pub fn getUser(ctx: *Context) !void {
-    if (!sqlConfigured(ctx)) {
-        notConfigured(ctx);
-        return;
-    }
     const id = parseId(ctx) orelse {
         badRequest(ctx, "invalid :id");
         return;
@@ -153,10 +132,6 @@ pub fn getUser(ctx: *Context) !void {
 }
 
 pub fn updateUser(ctx: *Context) !void {
-    if (!sqlConfigured(ctx)) {
-        notConfigured(ctx);
-        return;
-    }
     const id = parseId(ctx) orelse {
         badRequest(ctx, "invalid :id");
         return;
@@ -174,10 +149,6 @@ pub fn updateUser(ctx: *Context) !void {
 }
 
 pub fn deleteUser(ctx: *Context) !void {
-    if (!sqlConfigured(ctx)) {
-        notConfigured(ctx);
-        return;
-    }
     const id = parseId(ctx) orelse {
         badRequest(ctx, "invalid :id");
         return;
