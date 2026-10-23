@@ -138,7 +138,9 @@ fn listUsers(ctx: *Context) !void {
     );
 
     var list = try std.ArrayList(crud.User).initCapacity(ctx.allocator, rows.len);
-    for (rows) |r| list.appendAssumeCapacity(toProto(r));
+    for (rows) |r| {
+        list.appendAssumeCapacity(toProto(r));
+    }
 
     try ctx.protobuf(crud.UserList{ .users = list });
 }

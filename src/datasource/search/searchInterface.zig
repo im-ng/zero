@@ -228,24 +228,29 @@ pub const MockBackend = struct {
     indexes: u32 = 0,
     queries: u32 = 0,
     last_doc: []const u8,
+    /// When set, every operation returns `error.MockFailed` so the interface's
+    /// breaker-recording and metric-emitting failure arms are exercised too.
+    fail_all: bool = false,
 
     pub fn index(self: *MockBackend, _: *root.Context, _: []const u8, doc_json: []const u8) !void {
+        if (self.fail_all) return error.MockFailed;
         self.indexes += 1;
         self.last_doc = doc_json;
     }
 
     pub fn query(self: *MockBackend, _: *root.Context, _: []const u8, _: []const u8) ![]const u8 {
+        if (self.fail_all) return error.MockFailed;
         self.queries += 1;
         return "";
     }
 
     pub fn get(self: *MockBackend, _: *root.Context, _: []const u8, _: []const u8) !?[]const u8 {
-        _ = self;
+        if (self.fail_all) return error.MockFailed;
         return null;
     }
 
     pub fn delete(self: *MockBackend, _: *root.Context, _: []const u8, _: []const u8) !void {
-        _ = self;
+        if (self.fail_all) return error.MockFailed;
     }
 };
 
@@ -268,4 +273,37 @@ test "Search dispatches through the type-erased handle" {
 
     const got = try s.get(&ctx_storage, "products", "1");
     try std.testing.expect(got == null);
+}
+
+test "Search mock backend failure arms record breaker failure and emit metrics" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const alloc = arena.allocator();
+
+    const mz = try root.metricz.initialize(alloc, .{ .prefix = "", .exclude = null });
+    defer alloc.destroy(mz);
+
+    var mock: MockBackend = .{ .last_doc = "", .fail_all = true };
+    // threshold 5 keeps the breaker closed through the four failures below
+    // (recordFailure opens only when failures >= threshold), so every call
+    // really reaches the backend's failure arm instead of being short-circuited.
+    var s = Search.init(&mock, .mock, service.CircuitBreaker.init(.{ .failure_threshold = 5 }), mz);
+    var ctx_storage: root.Context = undefined;
+    ctx_storage.allocator = alloc;
+
+    // Each operation hits the failure arm: the breaker records a failure and
+    // `dsError` emits the datasource error counter (with status unknown, since
+    // the mock's `lastError` is null).
+    try std.testing.expectError(error.MockFailed, s.index(&ctx_storage, "products", "{}"));
+    try std.testing.expectError(error.MockFailed, s.query(&ctx_storage, "products", "x"));
+    try std.testing.expectError(error.MockFailed, s.get(&ctx_storage, "products", "1"));
+    try std.testing.expectError(error.MockFailed, s.delete(&ctx_storage, "products", "1"));
+    try std.testing.expectEqual(@as(u32, 4), s.breaker.?.failures);
+
+    // One success after two recorded failures keeps the breaker closed and
+    // covers the success recording + latency-emission arm.
+    mock.fail_all = false;
+    try s.index(&ctx_storage, "products", "{\"id\":\"1\"}");
+    try std.testing.expectEqual(@as(u32, 1), mock.indexes);
+    try std.testing.expectEqual(service.CircuitState.closed, s.breaker.?.state);
 }

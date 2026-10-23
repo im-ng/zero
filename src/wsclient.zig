@@ -147,9 +147,10 @@ pub const Client = struct {
                         backoff = nextBackoff(backoff);
                         continue;
                     };
-                    defer self.allocator.free(token);
+                    defer self.allocator.free(token.access_token);
+
                     hdr.appendSlice(self.allocator, "authorization: Bearer ") catch return;
-                    hdr.appendSlice(self.allocator, token) catch return;
+                    hdr.appendSlice(self.allocator, token.access_token) catch return;
                     hdr.appendSlice(self.allocator, term) catch return;
                 } else if (a.buildHeader(self.allocator) catch null) |hpair| {
                     defer self.allocator.free(hpair.value);

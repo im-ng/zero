@@ -81,4 +81,12 @@ comptime {
     _ = @import("app_test.zig");
     _ = @import("service/client_test.zig");
     _ = @import("logger_test.zig");
+
+    // FakeServer-backed tests for the search clients. Verified kcov-safe under
+    // kcov 43 with the use_llvm build (loopback probe, 2026-10-23) and pulled
+    // out of the non-traced integration step so the search modules actually
+    // earn coverage.
+    _ = @import("datasource/fakeserver.zig");
+    _ = @import("datasource/search/meili_test.zig");
+    _ = @import("datasource/search/solr_test.zig");
 }

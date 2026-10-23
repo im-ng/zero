@@ -145,6 +145,11 @@ pub fn build(b: *std.Build) void {
 
     const unit_tests = b.addTest(.{
         .root_module = test_module,
+        // Zig 0.16 Debug emits DWARFv5 with one `DW_AT_rnglists_base` per CU;
+        // kcov silently drops every CU after the first (kcov issue #496), which
+        // blanks the whole `src/` report. use_llvm emits a single merged DWARFv4
+        // CU that kcov can attribute.
+        .use_llvm = true,
     });
 
     // Integration tests require a real database driver (native lib) and must not

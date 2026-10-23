@@ -38,15 +38,15 @@ pub fn getEditItem(ctx: *Context, todo: *models.HandlerTodo) ![]const u8 {
     const TARGET = try utils.combine(ctx.allocator, "#list-item-edit-{s}", .{todo.id.?});
     const UPDATE = try utils.combine(ctx.allocator, "/todos/{s}", .{todo.id.?});
 
-    try sb.write(replace(ctx.allocator, editItem, "EDITITEM", EDITITEM));
+    try sb.write(try replace(ctx.allocator, editItem, "EDITITEM", EDITITEM));
 
-    var id = replace(ctx.allocator, editForm, "UPDATEITEM", UPDATE);
-    id = replace(ctx.allocator, id, "TARGET", TARGET);
+    var id = try replace(ctx.allocator, editForm, "UPDATEITEM", UPDATE);
+    id = try replace(ctx.allocator, id, "TARGET", TARGET);
     try sb.write(id);
 
     try sb.write("<div class=\"ml-3 block text-gray-900 grow\">");
-    try sb.write(replace(ctx.allocator, editTitle, "TITLE", todo.task.?));
-    try sb.write(replace(ctx.allocator, editDescription, "DESCRIPTION", todo.description.?));
+    try sb.write(try replace(ctx.allocator, editTitle, "TITLE", todo.task.?));
+    try sb.write(try replace(ctx.allocator, editDescription, "DESCRIPTION", todo.description.?));
     try sb.write("</div>");
     try sb.write(editSaveAction);
     try sb.write("</form>");
@@ -82,45 +82,45 @@ pub fn innerHtmlItem(allocator: std.mem.Allocator, sb: *Builder, todo: *const mo
 
     var id: []u8 = undefined;
     if (todo.isDone.? == true) {
-        id = replace(allocator, inputChecked, "ID", ID);
-        id = replace(allocator, id, "NAME", NAME);
-        id = replace(allocator, id, "POST", POST);
-        id = replace(allocator, id, "TARGET", TARGET);
+        id = try replace(allocator, inputChecked, "ID", ID);
+        id = try replace(allocator, id, "NAME", NAME);
+        id = try replace(allocator, id, "POST", POST);
+        id = try replace(allocator, id, "TARGET", TARGET);
     } else {
-        id = replace(allocator, input, "ID", ID);
-        id = replace(allocator, id, "NAME", NAME);
-        id = replace(allocator, id, "POST", POST);
-        id = replace(allocator, id, "TARGET", TARGET);
+        id = try replace(allocator, input, "ID", ID);
+        id = try replace(allocator, id, "NAME", NAME);
+        id = try replace(allocator, id, "POST", POST);
+        id = try replace(allocator, id, "TARGET", TARGET);
     }
 
-    try sb.write(replace(allocator, liItem, "LISTITEM", LISTITEM));
+    try sb.write(try replace(allocator, liItem, "LISTITEM", LISTITEM));
     try sb.write("<div class=\"flex items-center\">");
     try sb.write(id);
-    try sb.write(replace(allocator, label1, "ID", ID));
+    try sb.write(try replace(allocator, label1, "ID", ID));
 
     if (todo.isDone.? == true) {
-        try sb.write(replace(allocator, titleSpanDone, "TITLE", todo.task.?));
+        try sb.write(try replace(allocator, titleSpanDone, "TITLE", todo.task.?));
     } else {
-        try sb.write(replace(allocator, titleSpan, "TITLE", todo.task.?));
+        try sb.write(try replace(allocator, titleSpan, "TITLE", todo.task.?));
     }
 
     if (todo.isDone.? == true) {
-        try sb.write(replace(allocator, descSpanDone, "DESCRIPTION", todo.description.?));
+        try sb.write(try replace(allocator, descSpanDone, "DESCRIPTION", todo.description.?));
     } else {
-        try sb.write(replace(allocator, descSpan, "DESCRIPTION", todo.description.?));
+        try sb.write(try replace(allocator, descSpan, "DESCRIPTION", todo.description.?));
     }
 
     try sb.write("</label>");
     try sb.write("<div class=\"p-2\">");
 
     if (todo.isDone.? == false) {
-        id = replace(allocator, editButton, "EDIT", EDIT);
-        id = replace(allocator, id, "TARGET", TARGET);
+        id = try replace(allocator, editButton, "EDIT", EDIT);
+        id = try replace(allocator, id, "TARGET", TARGET);
         try sb.write(id);
     }
 
-    id = replace(allocator, deleteButton, "DELETE", DELETE);
-    id = replace(allocator, id, "TARGET", TARGET);
+    id = try replace(allocator, deleteButton, "DELETE", DELETE);
+    id = try replace(allocator, id, "TARGET", TARGET);
     try sb.write(id);
 
     try sb.write("</div>");
@@ -128,10 +128,10 @@ pub fn innerHtmlItem(allocator: std.mem.Allocator, sb: *Builder, todo: *const mo
     try sb.write("</li>");
 }
 
-fn replace(allocator: std.mem.Allocator, source: []const u8, needle: []const u8, word: []const u8) []u8 {
+fn replace(allocator: std.mem.Allocator, source: []const u8, needle: []const u8, word: []const u8) ![]u8 {
     // `replaceOwned` allocates exactly `replacementSize` bytes, which is the only
     // safe size for `std.mem.replace`; hand-rolling it can under-size the
     // destination when a replacement itself contains the (possibly expanded)
     // needle text.
-    return std.mem.replaceOwned(u8, allocator, source, needle, word) catch unreachable;
+    return std.mem.replaceOwned(u8, allocator, source, needle, word);
 }

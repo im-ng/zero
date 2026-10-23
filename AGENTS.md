@@ -8,9 +8,9 @@ When presenting changes, summaries, or any explanation to the user, follow `writ
 - Show the concrete case before the general rule.
 - No marketing, hype, filler, or unnecessary summaries.
 
-## Coding style (STYLE.md is authoritative)
+## Coding style (guides/coding-style-guide.md is authoritative)
 
-Every change to `src/**/*.zig` and `examples/**/*.zig` MUST comply with `STYLE.md`
+Every change to `src/**/*.zig` and `examples/**/*.zig` MUST comply with `guides/coding-style-guide.md`
 (adapted TigerBeetle TIGER_STYLE). Do not wait to be reminded — apply it on
 write. The hard rules that get missed most often:
 
@@ -91,7 +91,7 @@ make clean                  # remove .zig-cache, zig-out, and all example build 
 - `zig build test` — unit tests (52)
 - `zig build test-integration` — `SQLite :memory:` + Postgres + fakeserver-backed backends, 175 tests (`src/tests_integration.zig`)
 - `zig build test-validation` — Context request/cron/pubsub release + `timestampz` invalid-free fix, 3 tests (`src/tests_validation.zig`, `src/validation/memory_test.zig`)
-- `zig build -Dcoverage test` — kcov over `src/` → `zig-out/kcov/` (HTML); measured **87.91%**
+- `zig build -Dcoverage test` — kcov over `src/` → `zig-out/kcov/` (HTML); measured **88.92%**. Requires the unit test step to build with `.use_llvm = true` (set in `build.zig`): Zig 0.16 Debug emits DWARFv5 multi-CU debug info and kcov silently drops every compilation unit after the first (kcov issue #496), which makes the report come out empty ("0 project files") without it. Local kcov also fails attribution even with the fix (Debian kcov + musl/glibc mismatch inside the repo cache) — run coverage through the CI image: `docker run --rm --security-opt seccomp=unconfined -v "$PWD":/w -w /w imng/zero-kcov:0.3.4 zig build -Dcoverage test` (fresh `--cache-dir` to avoid the host's glibc-linked binary breaking kcov's traced run).
 - New fakeserver-backed integration tests: `src/pubsub/sqs_test.zig`, `src/pubsub/gcppubsub_test.zig` (AWS SQS + GCP Pub/Sub), `src/filestore/gcs_test.zig` (GCS) — all registered in `src/tests_integration.zig`.
 
 ### HTTP load / benchmark harness
