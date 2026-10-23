@@ -76,9 +76,9 @@ make clean                  # remove .zig-cache, zig-out, and all example build 
 ## Testing
 
 - Test runner: `src/tests.zig` — imports all test-bearing modules via `comptime { _ = module; }` references
-- Inline `test` blocks live in each source file (Zig convention)
+- Test layout: sources above 500 lines (`app.zig`, `container.zig`, `context.zig`, `logger.zig`, `service/client.zig`) keep their `pub`-reachable tests in a sibling `<file>_test.zig`, registered in `src/tests.zig`; tests that need file-private helpers stay inline (do NOT widen private helpers `pub` to enable a move)
 - `build.zig` creates a separate test module from the main one; test root is `src/tests.zig`
-- Unit tests (52) live as inline `test` blocks compiled into a separate test binary rooted at `src/tests.zig`.
+- Unit tests (170 incl. split files) live as inline `test` blocks plus `*_test.zig` files compiled into a separate test binary rooted at `src/tests.zig`.
 - `std.testing.expectError` needs an error union type (`error.Foo!void`), not a bare error set — wrap with `@as(ErrorSet, error.Foo)` or assign to a typed variable first
 - `std.posix.setenv`/`unsetenv` don't exist in Zig 0.15.2 — test with existing vars like `PATH` or unset keys
 - Zig 0.15.2 uses `.@"enum".fields` not `.Enum.fields` for `@typeInfo` enum field access
