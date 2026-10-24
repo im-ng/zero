@@ -29,6 +29,7 @@ pub const Context = struct {
     Timeseries: ?*root.Timeseries = null,
     Search: ?*root.Search = null,
     NoSQL: ?*root.NoSQL = null,
+    Graph: ?*root.Graph = null,
     provider: *root.AuthProvider = undefined,
     MQ: *root.MQTT = undefined,
     KF: *root.kafka = undefined,
@@ -48,6 +49,11 @@ pub const Context = struct {
     /// before dispatch). Null when OTEL_EXPERIMENTAL is off or outside a request.
     otel_span: ?otel.ActiveSpan = null,
 
+    /// W3C Baggage parsed from the inbound `baggage` header. Handlers read and
+    /// mutate members; the outbound service client re-serializes them onto
+    /// downstream calls. Null when no baggage header was present.
+    baggage: ?root.baggage.Baggage = null,
+
     /// initialize context
     pub fn init(
         allocator: std.mem.Allocator,
@@ -64,12 +70,18 @@ pub const Context = struct {
         };
 
         if (container.SQL != null) {
-            // Postgres/MySQL: hand each request its own session that borrows the
+            // Postgres: hand each request its own session that borrows the
             // shared (thread-safe) connection pool but isolates transaction_conn
             // /lastId/rows so concurrent requests can't share a transaction or
             // clobber each other's last-insert-id.
             const session = try root.SQL.createSession(allocator, container.SQL.?);
             c.SQL = root.Datasource.init(session, .postgres, container.datasource.breaker, container.metricz);
+        } else if (container.MySQL != null) {
+            // MySQL: same per-request session model as Postgres. Each request
+            // borrows a pooled connection (pinned for transactions) so concurrent
+            // requests never share a socket or a transaction.
+            const session = try root.MySQL.createSession(allocator, container.MySQL.?);
+            c.SQL = root.Datasource.init(session, .mysql, container.datasource.breaker, container.metricz);
         } else if (container.SQLite != null or container.DuckDB != null or container.ClickHouse != null or container.DuckGres != null) {
             // SQLite/DuckDB backends reuse a single shared connection; the
             // per-request session does not apply (see ZIG_LEARNINGS.md — their
@@ -93,6 +105,10 @@ pub const Context = struct {
             c.NoSQL = n;
         }
 
+        if (container.Graph) |g| {
+            c.Graph = g;
+        }
+
         if (container.defaultFileStore) |fs| {
             c.FileStore = fs;
         }
@@ -114,6 +130,14 @@ pub const Context = struct {
         }
 
         c.otel_span = otel.currentSpan();
+
+        // Parse the inbound W3C Baggage header so handlers can read/modify
+        // members and the outbound service client re-emits them downstream.
+        if (c.request) |r| {
+            if (r.header("baggage")) |bg| {
+                c.baggage = root.baggage.Baggage.parse(allocator, bg);
+            }
+        }
 
         return c;
     }
@@ -142,6 +166,9 @@ pub const Context = struct {
         }
         if (container.NoSQL) |n| {
             c.NoSQL = n;
+        }
+        if (container.Graph) |g| {
+            c.Graph = g;
         }
         if (container.defaultFileStore) |fs| {
             c.FileStore = fs;
@@ -219,6 +246,9 @@ pub const Context = struct {
 
     /// deinit context from parent allocator
     pub fn deinit(self: *Context) void {
+        if (self.baggage) |*b| {
+            b.deinit();
+        }
         self.allocator.destroy(self);
     }
 
@@ -313,9 +343,14 @@ pub const Context = struct {
     pub fn GetFile(self: *Context, field: []const u8) !?root.UploadedFile {
         const form = try self.request.?.multiFormData();
         const f = form.get(field) orelse return null;
+        // Keep only the basename: a client-supplied filename like `../../etc/x`
+        // must never become a traversal key when the caller saves it to a store
+        // (audit #26).
+        const raw_name = f.filename orelse "";
+        const safe_name = std.fs.path.basename(raw_name);
         return root.UploadedFile{
             .data = f.value,
-            .filename = f.filename orelse "",
+            .filename = safe_name,
             .size = f.value.len,
         };
     }
@@ -326,6 +361,7 @@ pub const Context = struct {
     pub fn File(self: *Context, path: []const u8) !void {
         const file = try std.Io.Dir.cwd().openFile(self.io, path, .{});
         defer file.close(self.io);
+
         var rbuf: [8192]u8 = undefined;
         var reader = file.reader(self.io, &rbuf);
         const data = try reader.interface.allocRemainingAlignedSentinel(
@@ -335,6 +371,7 @@ pub const Context = struct {
             null,
         );
         self.response.header("content-type", mimeForPath(path));
+
         const name = std.fs.path.basename(path);
         const disp = try std.fmt.allocPrint(
             self.allocator,
@@ -343,6 +380,7 @@ pub const Context = struct {
         );
         self.response.header("content-disposition", disp);
         self.response.setStatus(.ok);
+
         // Write the body through the response writer (not `response.body`): the
         // returned slice is request-arena owned and would be freed before httpz
         // flushes `response.body` to the socket.
@@ -504,121 +542,17 @@ pub const Context = struct {
     }
 };
 
-// ===================== Tests =====================
-
-test "context: protobuf bindProto and protobuf round-trip" {
-    const protobuf = @import("protobuf");
-    const t = httpz.testing;
-
-    // A minimal protobuf message described entirely via the generic
-    // protobuf.encode/decode primitives (no generated code needed here).
-    const TestMsg = struct {
-        value: []const u8 = &.{},
-
-        pub const _desc_table = .{
-            .value = protobuf.fd(1, .{ .scalar = .string }),
-        };
-
-        pub fn encode(self: @This(), writer: *std.Io.Writer, allocator: std.mem.Allocator) !void {
-            return protobuf.encode(writer, allocator, self);
-        }
-        pub fn decode(reader: *std.Io.Reader, allocator: std.mem.Allocator) !@This() {
-            return protobuf.decode(@This(), reader, allocator);
-        }
-    };
-
-    var testing = t.init(.{});
-    defer testing.deinit();
-
-    // Encode a TestMsg into protobuf bytes.
-    const msg = TestMsg{ .value = "hello protobuf" };
-    var w: std.Io.Writer.Allocating = .init(testing.arena);
-    try msg.encode(&w.writer, testing.arena);
-    const encoded = w.written();
-
-    // Put the encoded bytes on the request body.
-    testing.body(encoded);
-
-    // Build a Context over the mocked request/response.
-    var ctx: Context = undefined;
-    ctx.allocator = testing.arena;
-    ctx.request = testing.req;
-    ctx.response = testing.res;
-
-    // bindProto decodes the body.
-    const decoded = (try ctx.bindProto(TestMsg)).?;
-    try std.testing.expectEqualStrings("hello protobuf", decoded.value);
-
-    // protobuf serializes back into the response.
-    try ctx.protobuf(decoded);
-    try testing.expectStatusCode(.ok);
-    try testing.expectHeader("content-type", "application/x-protobuf");
-    try testing.expectBody(encoded);
-}
-
-test "context: xml writes application/xml body" {
-    const t = httpz.testing;
-    var testing = t.init(.{});
-    defer testing.deinit();
-
-    var ctx: Context = undefined;
-    ctx.allocator = testing.arena;
-    ctx.request = testing.req;
-    ctx.response = testing.res;
-
-    try ctx.xml("<note><to>Zero</to></note>");
-    try testing.expectStatusCode(.ok);
-    try testing.expectHeader("content-type", "application/xml");
-    try testing.expectBody("<note><to>Zero</to></note>");
-}
-
-test "context: GetFile parses a multipart upload" {
-    const t = httpz.testing;
-    var testing = t.init(.{ .request = .{ .max_multiform_count = 5 } });
-    defer testing.deinit();
-
-    const body =
-        "--BOUND\r\n" ++
-        "Content-Disposition: form-data; name=\"file\"; filename=\"a.txt\"\r\n" ++
-        "\r\n" ++
-        "hello file\r\n" ++
-        "--BOUND--\r\n";
-    testing.header("content-type", "multipart/form-data; boundary=BOUND");
-    testing.body(body);
-
-    var ctx: Context = undefined;
-    ctx.allocator = testing.arena;
-    ctx.request = testing.req;
-    ctx.response = testing.res;
-
-    const f = (try ctx.GetFile("file")).?;
-    try std.testing.expectEqualStrings("a.txt", f.filename);
-    try std.testing.expectEqualStrings("hello file", f.data);
-    try std.testing.expectEqual(@as(usize, 10), f.size);
-}
-
-test "context: File serves a local file as a download" {
-    const t = httpz.testing;
-    var testing = t.init(.{});
-    defer testing.deinit();
-
-    const dir = ".ztmp-filestore-ctx";
-    defer std.Io.Dir.cwd().deleteTree(root.utils.io, dir) catch {};
-    try std.Io.Dir.cwd().createDirPath(root.utils.io, dir);
-    const path = try std.fmt.allocPrint(testing.arena, "{s}/serve.txt", .{dir});
-    const fh = try std.Io.Dir.cwd().createFile(root.utils.io, path, .{});
-    defer fh.close(root.utils.io);
-    try fh.writeStreamingAll(root.utils.io, "download me");
-
-    var ctx: Context = undefined;
-    ctx.allocator = testing.arena;
-    ctx.io = std.testing.io;
-    ctx.request = testing.req;
-    ctx.response = testing.res;
-
-    try ctx.File(path);
-    try testing.expectStatusCode(.ok);
-    try testing.expectHeader("content-disposition", "attachment; filename=\"serve.txt\"");
-    try testing.expectHeader("content-type", "text/plain");
-    try testing.expectBody("download me");
+/// Build a valid `httpz.Response` for non-HTTP contexts (cron jobs, pub/sub
+/// subscriber dispatch) so `Context` never carries an undefined response pointer
+/// (audit #15). The response accessors these contexts use — `setStatus`, `body`,
+/// `header`, `json`, `writer` — only read `status`, `body`, `headers`, and an
+/// allocating buffer; none touch the socket, so a synthetic connection with only
+/// `res_state` initialized is sufficient. The returned response (and its backing
+/// connection) is owned by `allocator` and freed when that allocator is released.
+pub fn makeSyntheticResponse(allocator: std.mem.Allocator) !*httpz.Response {
+    const conn = try allocator.create(httpz.HTTPConn);
+    conn.res_state = try httpz.Response.State.init(allocator, &httpz.Config.Response{});
+    const res = try allocator.create(httpz.Response);
+    res.* = httpz.Response.init(allocator, conn);
+    return res;
 }

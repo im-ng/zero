@@ -18,6 +18,7 @@ pub const authProvider = @import("mw/authProvider.zig");
 pub const authz = @import("mw/authz.zig");
 pub const tracz = @import("mw/tracz.zig");
 pub const ws = @import("mw/ws.zig");
+pub const rbac = @import("mw/rbac.zig");
 pub const logger = @import("logger.zig");
 pub const app = @import("app.zig");
 pub const datasourceError = @import("datasource/sql/error.zig");
@@ -30,6 +31,8 @@ pub const natsConfig = @import("pubsub/nats/config.zig");
 pub const natsSubscriber = @import("pubsub/nats/subscriber.zig");
 pub const pubsub = @import("pubsub/interface.zig");
 pub const datasourceInterface = @import("datasource/sql/interface.zig");
+pub const circuitBreaker = @import("service/circuitBreaker.zig");
+pub const mongodbClient = @import("datasource/nosql/mongodbClient.zig");
 
 comptime {
     _ = zero;
@@ -50,6 +53,7 @@ comptime {
     _ = authz;
     _ = tracz;
     _ = ws;
+    _ = rbac;
     _ = logger;
     _ = app;
     _ = datasourceError;
@@ -62,7 +66,24 @@ comptime {
     _ = natsSubscriber;
     _ = pubsub;
     _ = datasourceInterface;
-    _ = @import("service/circuitBreaker.zig");
+    _ = circuitBreaker;
+    _ = mongodbClient;
+
+    _ = @import("mw/baggage.zig");
+    _ = @import("utils/sigv4.zig");
+
+    // coverage breakers
     // _ = @import("service/client.zig");
-    _ = @import("datasource/nosql/mongodbClient.zig");
+
+    // test files split out of >500-line sources (see AGENTS.md test layout)
+    _ = @import("container_test.zig");
+    _ = @import("context_test.zig");
+    _ = @import("app_test.zig");
+    _ = @import("service/client_test.zig");
+    _ = @import("logger_test.zig");
+
+    // FakeServer-backed tests for the search clients.
+    _ = @import("datasource/fakeserver.zig");
+    _ = @import("datasource/search/meili_test.zig");
+    _ = @import("datasource/search/solr_test.zig");
 }

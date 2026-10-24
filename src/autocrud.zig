@@ -8,11 +8,24 @@ const SQLite = root.SQLite;
 const DuckDB = root.DuckDB;
 const ClickHouse = root.ClickHouse;
 const DuckGres = root.DuckGres;
+const MySQL = root.MySQL;
 const Datasource = root.Datasource;
 const MockBackend = root.datasourceInterface.MockBackend;
 
+/// Comptime identifier quoting for trusted schema names used inside the
+/// generated CRUD queries. `dq` wraps in double-quotes (Postgres/SQLite/DuckDB
+/// style), `bq` in backticks (MySQL/ClickHouse style). Untrusted identifiers
+/// should go through `datasourceInterface.quoteIdentifier` at runtime instead.
+fn dq(name: []const u8) []const u8 {
+    return "\"" ++ name ++ "\"";
+}
+
+fn bq(name: []const u8) []const u8 {
+    return "`" ++ name ++ "`";
+}
+
 /// Options for `addRestHandlers`. `resource` is the URL segment (e.g. `"users"`
-/// registers `/users`, `/users/:id`, …). `table` defaults to `resource`; the
+/// registers `/users`, `/users/:id`, …). `table` defaults to `resource`
 /// primary key is `id` unless `id_field` says otherwise.
 pub const AutoCrudOptions = struct {
     resource: []const u8,
@@ -113,15 +126,15 @@ fn buildStmts(comptime T: type, comptime table: []const u8, comptime id_field: [
 
     const non_id = n - 1;
     return .{
-        .insert_pg = "INSERT INTO " ++ table ++ " (" ++ c ++ ") VALUES (" ++ pgph ++ ")",
-        .insert_q = "INSERT INTO " ++ table ++ " (" ++ c ++ ") VALUES (" ++ qph ++ ")",
-        .get_pg = "SELECT " ++ c ++ " FROM " ++ table ++ " WHERE " ++ id_field ++ " = $1",
-        .get_q = "SELECT " ++ c ++ " FROM " ++ table ++ " WHERE " ++ id_field ++ " = ?",
+        .insert_pg = "INSERT INTO " ++ dq(table) ++ " (" ++ c ++ ") VALUES (" ++ pgph ++ ")",
+        .insert_q = "INSERT INTO " ++ bq(table) ++ " (" ++ c ++ ") VALUES (" ++ qph ++ ")",
+        .get_pg = "SELECT " ++ c ++ " FROM " ++ dq(table) ++ " WHERE " ++ dq(id_field) ++ " = $1",
+        .get_q = "SELECT " ++ c ++ " FROM " ++ bq(table) ++ " WHERE " ++ bq(id_field) ++ " = ?",
         .list = "SELECT " ++ c ++ " FROM " ++ table ++ " LIMIT 100",
-        .update_pg = "UPDATE " ++ table ++ " SET " ++ set_pg ++ " WHERE " ++ id_field ++ " = $" ++ std.fmt.comptimePrint("{d}", .{non_id + 1}),
-        .update_q = "UPDATE " ++ table ++ " SET " ++ set_q ++ " WHERE " ++ id_field ++ " = ?",
-        .delete_pg = "DELETE FROM " ++ table ++ " WHERE " ++ id_field ++ " = $1",
-        .delete_q = "DELETE FROM " ++ table ++ " WHERE " ++ id_field ++ " = ?",
+        .update_pg = "UPDATE " ++ dq(table) ++ " SET " ++ set_pg ++ " WHERE " ++ dq(id_field) ++ " = $" ++ std.fmt.comptimePrint("{d}", .{non_id + 1}),
+        .update_q = "UPDATE " ++ bq(table) ++ " SET " ++ set_q ++ " WHERE " ++ bq(id_field) ++ " = ?",
+        .delete_pg = "DELETE FROM " ++ dq(table) ++ " WHERE " ++ dq(id_field) ++ " = $1",
+        .delete_q = "DELETE FROM " ++ bq(table) ++ " WHERE " ++ bq(id_field) ++ " = ?",
     };
 }
 
@@ -143,6 +156,10 @@ fn backendClickHouse(ctx: *Context) *ClickHouse {
 
 fn backendDuckGres(ctx: *Context) *DuckGres {
     return @as(*DuckGres, @ptrCast(@alignCast(ctx.SQL.ptr)));
+}
+
+fn backendMysql(ctx: *Context) *MySQL {
+    return @as(*MySQL, @ptrCast(@alignCast(ctx.SQL.ptr)));
 }
 
 fn listHandler(comptime T: type, comptime st: Stmts) *const fn (*Context) anyerror!void {
@@ -167,6 +184,10 @@ fn listHandler(comptime T: type, comptime st: Stmts) *const fn (*Context) anyerr
                 },
                 .clickhouse => {
                     const rows = try backendClickHouse(ctx).queryRows(ctx, T, st.list, .{});
+                    try ctx.json(rows);
+                },
+                .mysql => {
+                    const rows = try backendMysql(ctx).queryRows(ctx, T, st.list, .{});
                     try ctx.json(rows);
                 },
                 .mock => {
@@ -195,6 +216,7 @@ fn getHandler(comptime T: type, comptime st: Stmts, comptime id_idx: usize) *con
                 .sqlite => try backendSqlite(ctx).queryRow(ctx, T, st.get_q, .{idv}),
                 .duckdb => try backendDuckDB(ctx).queryRow(ctx, T, st.get_q, .{idv}),
                 .clickhouse => try backendClickHouse(ctx).queryRow(ctx, T, st.get_q, .{idv}),
+                .mysql => try backendMysql(ctx).queryRow(ctx, T, st.get_q, .{idv}),
                 .mock => try @as(*MockBackend, @ptrCast(@alignCast(ctx.SQL.ptr))).queryRow(ctx, T, st.get_q, .{idv}),
             };
             if (row) |r| {
@@ -228,6 +250,7 @@ fn createHandler(comptime T: type, comptime st: Stmts) *const fn (*Context) anye
                 .sqlite => _ = try backendSqlite(ctx).execWithContext(ctx, st.insert_q, args),
                 .duckdb => _ = try backendDuckDB(ctx).execWithContext(ctx, st.insert_q, args),
                 .clickhouse => _ = try backendClickHouse(ctx).execWithContext(ctx, st.insert_q, args),
+                .mysql => _ = try backendMysql(ctx).execWithContext(ctx, st.insert_q, args),
                 .mock => _ = try @as(*MockBackend, @ptrCast(@alignCast(ctx.SQL.ptr))).execWithContext(ctx, st.insert_q, args),
             }
             try ctx.json(o);
@@ -264,6 +287,7 @@ fn updateHandler(comptime T: type, comptime st: Stmts, comptime id_idx: usize) *
                 .sqlite => (try backendSqlite(ctx).execWithContext(ctx, st.update_q, args)) > 0,
                 .duckdb => (try backendDuckDB(ctx).execWithContext(ctx, st.update_q, args)) > 0,
                 .clickhouse => (try backendClickHouse(ctx).execWithContext(ctx, st.update_q, args)) > 0,
+                .mysql => (try backendMysql(ctx).execWithContext(ctx, st.update_q, args)) > 0,
                 .mock => (try @as(*MockBackend, @ptrCast(@alignCast(ctx.SQL.ptr))).execWithContext(ctx, st.update_q, args)) > 0,
             };
             if (!updated) {
@@ -277,6 +301,7 @@ fn updateHandler(comptime T: type, comptime st: Stmts, comptime id_idx: usize) *
                 .sqlite => try backendSqlite(ctx).queryRow(ctx, T, st.get_q, .{idv}),
                 .duckdb => try backendDuckDB(ctx).queryRow(ctx, T, st.get_q, .{idv}),
                 .clickhouse => try backendClickHouse(ctx).queryRow(ctx, T, st.get_q, .{idv}),
+                .mysql => try backendMysql(ctx).queryRow(ctx, T, st.get_q, .{idv}),
                 .mock => try @as(*MockBackend, @ptrCast(@alignCast(ctx.SQL.ptr))).queryRow(ctx, T, st.get_q, .{idv}),
             };
             if (row) |r| {
@@ -321,6 +346,10 @@ fn deleteHandler(comptime T: type, comptime st: Stmts, comptime id_idx: usize) *
                     _ = try backendClickHouse(ctx).execWithContext(ctx, st.delete_q, .{idv});
                     break :blk backendClickHouse(ctx).rowsAffected();
                 },
+                .mysql => blk: {
+                    _ = try backendMysql(ctx).execWithContext(ctx, st.delete_q, .{idv});
+                    break :blk backendMysql(ctx).rowsAffected();
+                },
                 .mock => blk: {
                     _ = try @as(*MockBackend, @ptrCast(@alignCast(ctx.SQL.ptr))).execWithContext(ctx, st.delete_q, .{idv});
                     break :blk @as(*MockBackend, @ptrCast(@alignCast(ctx.SQL.ptr))).rowsAffected();
@@ -338,8 +367,8 @@ fn deleteHandler(comptime T: type, comptime st: Stmts, comptime id_idx: usize) *
 }
 
 /// Registers list/get/create/update/delete REST handlers for struct `T` against
-/// the configured SQL datasource (Postgres, SQLite, DuckDB, or DuckGres — all are
-/// generated and dispatched at runtime on `ctx.SQL.dialect`).
+/// the configured SQL datasource (Postgres, SQLite, DuckDB, DuckGres, or MySQL —
+/// all are generated and dispatched at runtime on `ctx.SQL.dialect`).
 pub fn addRestHandlers(self: *App, comptime T: type, comptime opts: AutoCrudOptions) !void {
     const table = if (opts.table.len > 0) opts.table else opts.resource;
     const id_field = opts.id_field;
@@ -371,19 +400,19 @@ const Sample = struct { id: i64, name: []const u8, email: []const u8 };
 test "AutoCrud generates dialect-correct SQL" {
     const st = comptime buildStmts(Sample, "users", "id", 0);
     try std.testing.expectEqualStrings(
-        "INSERT INTO users (id,name,email) VALUES ($1,$2,$3)",
+        "INSERT INTO \"users\" (id,name,email) VALUES ($1,$2,$3)",
         st.insert_pg,
     );
     try std.testing.expectEqualStrings(
-        "INSERT INTO users (id,name,email) VALUES (?,?,?)",
+        "INSERT INTO `users` (id,name,email) VALUES (?,?,?)",
         st.insert_q,
     );
     try std.testing.expectEqualStrings(
-        "SELECT id,name,email FROM users WHERE id = $1",
+        "SELECT id,name,email FROM \"users\" WHERE \"id\" = $1",
         st.get_pg,
     );
     try std.testing.expectEqualStrings(
-        "SELECT id,name,email FROM users WHERE id = ?",
+        "SELECT id,name,email FROM `users` WHERE `id` = ?",
         st.get_q,
     );
     try std.testing.expectEqualStrings(
@@ -391,19 +420,19 @@ test "AutoCrud generates dialect-correct SQL" {
         st.list,
     );
     try std.testing.expectEqualStrings(
-        "UPDATE users SET name=$1,email=$2 WHERE id = $3",
+        "UPDATE \"users\" SET name=$1,email=$2 WHERE \"id\" = $3",
         st.update_pg,
     );
     try std.testing.expectEqualStrings(
-        "UPDATE users SET name=?,email=? WHERE id = ?",
+        "UPDATE `users` SET name=?,email=? WHERE `id` = ?",
         st.update_q,
     );
     try std.testing.expectEqualStrings(
-        "DELETE FROM users WHERE id = $1",
+        "DELETE FROM \"users\" WHERE \"id\" = $1",
         st.delete_pg,
     );
     try std.testing.expectEqualStrings(
-        "DELETE FROM users WHERE id = ?",
+        "DELETE FROM `users` WHERE `id` = ?",
         st.delete_q,
     );
 }

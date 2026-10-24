@@ -22,6 +22,11 @@ pub const CircuitBreaker = struct {
     failures: u32 = 0,
     trials_in_flight: u32 = 0,
     opened_at: i128 = 0,
+    /// When the breaker entered `half_open`. Used to self-heal: a half-open
+    /// trial that never reports a result (e.g. the downstream returned a
+    /// terminal 404 with no success/failure recorded) must not pin the breaker
+    /// in `half_open` forever (audit #24: stuck half-open).
+    half_open_at: i128 = 0,
     mutex: std.Io.Mutex = .init,
 
     pub fn init(cfg: CircuitBreakerConfig) CircuitBreaker {
@@ -38,23 +43,32 @@ pub const CircuitBreaker = struct {
         self.mutex.lock(utils.io) catch {};
         defer self.mutex.unlock(utils.io);
 
+        const now = nowNs();
         switch (self.state) {
             .closed => return,
             .open => {
-                const elapsed = nowNs() - self.opened_at;
+                const elapsed = now - self.opened_at;
                 if (elapsed < self.cfg.cooldown_ms * 1_000_000) {
                     return error.CircuitOpen;
                 }
-                // cooldown elapsed: allow a half-open trial
+                // Cooldown elapsed: move to half-open and permit a single trial.
+                // Record the entry time so a trial that never reports can revert.
                 self.state = .half_open;
                 self.trials_in_flight = 0;
-                if (self.trials_in_flight < self.cfg.half_open_trials) {
-                    self.trials_in_flight += 1;
-                    return;
-                }
-                return error.CircuitOpen;
+                self.half_open_at = now;
+                self.trials_in_flight += 1;
+                return;
             },
             .half_open => {
+                // Self-heal: if half-open has lingered past the cooldown window
+                // without a recorded result, revert to open and re-attempt later
+                // instead of rejecting every request forever.
+                if (now - self.half_open_at >= self.cfg.cooldown_ms * 1_000_000) {
+                    self.state = .open;
+                    self.opened_at = now;
+                    self.trials_in_flight = 0;
+                    return error.CircuitOpen;
+                }
                 if (self.trials_in_flight < self.cfg.half_open_trials) {
                     self.trials_in_flight += 1;
                     return;

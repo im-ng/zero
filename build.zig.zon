@@ -1,6 +1,6 @@
 .{
     .name = .zero,
-    .version = "0.5.2",
+    .version = "0.5.3",
     .fingerprint = 0xabdef192c03b44cb,
     .minimum_zig_version = "0.16.0",
     .dependencies = .{
@@ -24,8 +24,8 @@
             .hash = "dotenv-0.3.0-hfaNFtm3AACGiIZx5jDPHB4Q1QGs9BEMKH-sq32ZxRXa",
         },
         .httpz = .{
-            .url = "git+https://github.com/im-ng/http.zig#a150c6228fdcf5a4ae4cb38f6e0c2e7040acf7cb",
-            .hash = "httpz-0.0.0-PNVzrPYUCQCsmlsCu1UW6CWzwLann2nDqlwM-olFXom2",
+            .url = "git+https://github.com/im-ng/http.zig#ec92c9cd404edc4446d41bcfb5e873aec950fc17",
+            .hash = "httpz-0.0.0-PNVzrPoUCQBcShb3c8vpxqyySWvnjvEs-AwXxaRHPQnz",
         },
         .pg = .{
             .url = "git+https://github.com/karlseguin/pg.zig.git#2e15df7c3b635977bc2733bacd921f3395383860",
@@ -77,8 +77,15 @@
             .hash = "opentelemetry-0.0.1-U_uKJ8NrIwD5nbZmmLowE41NMPGhiwKQ1sCb3K3L-0lV",
         },
         .zf = .{
-            .url = "git+https://github.com/im-ng/zf.git#d4eb03086ce4f68117b994eb90f625c268d7aa92",
-            .hash = "zf-0.1.2-_F0afypSAQAjnG_X5THdAVO79IJls-aHP-uu1MNLHe82",
+            .url = "git+https://github.com/im-ng/zf.git#85212158163801f63e169276893ab6b55e335991",
+            .hash = "zf-0.1.2-_F0af5NSAQCMCTXXUnk-wbhlaXFAnBjoeijnc3UQBauM",
+        },
+        // C-to-Zig binding for the system OpenSSL headers. Used by
+        // `src/tls/openssl.zig` to give the MongoDB/Cassandra datasources a
+        // TLS layer backed by the system OpenSSL library
+        .translate_c = .{
+            .url = "git+https://codeberg.org/ziglang/translate-c#57c559cf581b1fcad90494eda219f98abeb155ce",
+            .hash = "translate_c-0.0.0-Q_BUWlX1BgCD1wo6uo97prlp9VJ4gxAjwN_vZ7nsSjGN",
         },
     },
     .paths = .{

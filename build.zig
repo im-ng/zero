@@ -27,7 +27,16 @@ pub fn build(b: *std.Build) void {
     const protobuf = b.dependency("protobuf", .{});
     module.addImport("protobuf", protobuf.module("protobuf"));
 
-    const pgz = b.dependency("pg", .{ .openssl = true });
+    const pgz = if (builtin.os.tag == .macos)
+        b.dependency("pg", .{
+            .openssl = true,
+            .openssl_include_path = std.Build.LazyPath{ .cwd_relative = "/usr/local/opt/openssl@3/include" },
+            .openssl_lib_path = std.Build.LazyPath{ .cwd_relative = "/usr/local/opt/openssl@3/lib" },
+            .openssl_lib_name = "ssl",
+        })
+    else
+        b.dependency("pg", .{ .openssl = true });
+
     module.addImport("pg", pgz.module("pg"));
 
     const httpz = b.dependency("httpz", .{});
@@ -64,14 +73,35 @@ pub fn build(b: *std.Build) void {
     module.addImport("graphql", graphql.module("graphql"));
 
     if (builtin.os.tag == .macos) {
-        module.addIncludePath(.{ .cwd_relative = "/usr/local/Cellar/librdkafka/2.13.0/include" });
-        module.addLibraryPath(.{ .cwd_relative = "/usr/local/Cellar/librdkafka/2.13.0/lib" });
+        module.addIncludePath(.{ .cwd_relative = "/usr/local/Cellar/librdkafka/2.15.1/include" });
+        module.addLibraryPath(.{ .cwd_relative = "/usr/local/Cellar/librdkafka/2.15.1/lib" });
     }
     module.linkSystemLibrary("rdkafka", .{ .weak = true });
 
     module.addLibraryPath(.{ .cwd_relative = "/usr/local/lib" });
     module.addRPath(.{ .cwd_relative = "/usr/local/lib" });
     module.linkSystemLibrary("duckdb", .{ .weak = true });
+
+    // System OpenSSL-backed TLS for the MongoDB/Cassandra datasources.
+    const openssl_translator = @import("translate_c").Translator;
+    const openssl_dep = b.dependency("translate_c", .{});
+    const openssl_mod = blk: {
+        var t = openssl_translator.init(openssl_dep, .{
+            .c_source_file = b.path("src/tls/openssl.h"),
+            .target = target,
+            .optimize = optimize,
+        });
+        if (builtin.os.tag == .macos) {
+            t.addIncludePath(.{ .cwd_relative = "/usr/local/opt/openssl@3/include" });
+        }
+        break :blk t.mod;
+    };
+    module.addImport("openssl", openssl_mod);
+    module.linkSystemLibrary("ssl", .{});
+    module.linkSystemLibrary("crypto", .{});
+    if (builtin.os.tag == .macos) {
+        module.addLibraryPath(.{ .cwd_relative = "/usr/local/opt/openssl@3/lib" });
+    }
 
     const test_module = b.createModule(.{
         .root_source_file = b.path("src/tests.zig"),
@@ -97,8 +127,8 @@ pub fn build(b: *std.Build) void {
     test_module.addImport("zero", module);
 
     if (builtin.os.tag == .macos) {
-        test_module.addIncludePath(.{ .cwd_relative = "/usr/local/Cellar/librdkafka/2.13.0/include" });
-        test_module.addLibraryPath(.{ .cwd_relative = "/usr/local/Cellar/librdkafka/2.13.0/lib" });
+        test_module.addIncludePath(.{ .cwd_relative = "/usr/local/Cellar/librdkafka/2.15.1/include" });
+        test_module.addLibraryPath(.{ .cwd_relative = "/usr/local/Cellar/librdkafka/2.15.1/lib" });
     }
     test_module.linkSystemLibrary("rdkafka", .{ .weak = true });
 
@@ -106,8 +136,20 @@ pub fn build(b: *std.Build) void {
     test_module.addRPath(.{ .cwd_relative = "/usr/local/lib" });
     test_module.linkSystemLibrary("duckdb", .{ .weak = true });
 
+    test_module.addImport("openssl", openssl_mod);
+    test_module.linkSystemLibrary("ssl", .{});
+    test_module.linkSystemLibrary("crypto", .{});
+    if (builtin.os.tag == .macos) {
+        test_module.addLibraryPath(.{ .cwd_relative = "/usr/local/opt/openssl@3/lib" });
+    }
+
     const unit_tests = b.addTest(.{
         .root_module = test_module,
+        // Zig 0.16 Debug emits DWARFv5 with one `DW_AT_rnglists_base` per CU;
+        // kcov silently drops every CU after the first (kcov issue #496), which
+        // blanks the whole `src/` report. use_llvm emits a single merged DWARFv4
+        // CU that kcov can attribute.
+        .use_llvm = true,
     });
 
     // Integration tests require a real database driver (native lib) and must not
@@ -137,14 +179,21 @@ pub fn build(b: *std.Build) void {
     integration_module.addImport("zero", module);
 
     if (builtin.os.tag == .macos) {
-        integration_module.addIncludePath(.{ .cwd_relative = "/usr/local/Cellar/librdkafka/2.13.0/include" });
-        integration_module.addLibraryPath(.{ .cwd_relative = "/usr/local/Cellar/librdkafka/2.13.0/lib" });
+        integration_module.addIncludePath(.{ .cwd_relative = "/usr/local/Cellar/librdkafka/2.15.1/include" });
+        integration_module.addLibraryPath(.{ .cwd_relative = "/usr/local/Cellar/librdkafka/2.15.1/lib" });
     }
     integration_module.linkSystemLibrary("rdkafka", .{ .weak = true });
 
     integration_module.addLibraryPath(.{ .cwd_relative = "/usr/local/lib" });
     integration_module.addRPath(.{ .cwd_relative = "/usr/local/lib" });
     integration_module.linkSystemLibrary("duckdb", .{ .weak = true });
+
+    integration_module.addImport("openssl", openssl_mod);
+    integration_module.linkSystemLibrary("ssl", .{});
+    integration_module.linkSystemLibrary("crypto", .{});
+    if (builtin.os.tag == .macos) {
+        integration_module.addLibraryPath(.{ .cwd_relative = "/usr/local/opt/openssl@3/lib" });
+    }
 
     const integration_tests = b.addTest(.{
         .root_module = integration_module,
@@ -181,8 +230,8 @@ pub fn build(b: *std.Build) void {
     validation_module.addImport("zero", module);
 
     if (builtin.os.tag == .macos) {
-        validation_module.addIncludePath(.{ .cwd_relative = "/usr/local/Cellar/librdkafka/2.13.0/include" });
-        validation_module.addIncludePath(.{ .cwd_relative = "/usr/local/Cellar/librdkafka/2.13.0/lib" });
+        validation_module.addIncludePath(.{ .cwd_relative = "/usr/local/Cellar/librdkafka/2.15.1/include" });
+        validation_module.addIncludePath(.{ .cwd_relative = "/usr/local/Cellar/librdkafka/2.15.1/lib" });
     }
     validation_module.linkSystemLibrary("rdkafka", .{
         .weak = true,
@@ -227,8 +276,8 @@ pub fn build(b: *std.Build) void {
     bench_module.addImport("zero", module);
 
     if (builtin.os.tag == .macos) {
-        bench_module.addIncludePath(.{ .cwd_relative = "/usr/local/Cellar/librdkafka/2.13.0/include" });
-        bench_module.addLibraryPath(.{ .cwd_relative = "/usr/local/Cellar/librdkafka/2.13.0/lib" });
+        bench_module.addIncludePath(.{ .cwd_relative = "/usr/local/Cellar/librdkafka/2.15.1/include" });
+        bench_module.addLibraryPath(.{ .cwd_relative = "/usr/local/Cellar/librdkafka/2.15.1/lib" });
     }
     bench_module.linkSystemLibrary("rdkafka", .{
         .weak = true,

@@ -10,6 +10,9 @@ pub const KVMemory = struct {
     map: std.StringHashMap([]const u8),
     exp: std.StringHashMap(i128),
     mu: std.Io.Mutex,
+    // Bounds the collection so a hot `set` with unique keys can't grow it
+    // unbounded (audit #13). 0 means unlimited; production callers should set it.
+    max_entries: usize = 100_000,
 
     pub fn create(allocator: std.mem.Allocator) !*KVMemory {
         const m = try allocator.create(KVMemory);
@@ -47,25 +50,58 @@ pub const KVMemory = struct {
 
     pub fn set(self: *KVMemory, _: *root.Context, key: []const u8, value: []const u8) !void {
         self.mu.lockUncancelable(utils.io);
+        // Free a prior entry's duped key + value on overwrite so the old key
+        // allocation isn't leaked (audit #13).
+        if (self.map.fetchRemove(key)) |old| {
+            self.allocator.free(old.key);
+            self.allocator.free(old.value);
+        }
         const k = try self.allocator.dupe(u8, key);
-        if (self.map.get(k)) |old| self.allocator.free(old);
-        self.map.put(k, try self.allocator.dupe(u8, value)) catch {
+        errdefer self.allocator.free(k);
+        const v = try self.allocator.dupe(u8, value);
+        self.map.put(k, v) catch {
+            self.allocator.free(v);
             self.mu.unlock(utils.io);
             return error.OutOfMemory;
         };
-        _ = self.exp.put(k, 0) catch 0;
+        // `exp` keeps its own copy of the key so the two indexes free independently.
+        const ek = try self.allocator.dupe(u8, key);
+        if (self.exp.fetchRemove(key)) |old_exp| {
+            self.allocator.free(old_exp.key);
+        }
+        self.exp.put(ek, 0) catch {
+            self.allocator.free(ek);
+        };
+        // Bound the collection while still holding the lock: the hashmap isn't safe
+        // against a concurrent read while we mutate it (audit #13).
+        self.enforceCap();
         self.mu.unlock(utils.io);
+    }
+
+    /// Evict entries once `max_entries` is exceeded, freeing both indexes' keys and
+    /// the value. Called without the lock held by `set`; the single-writer lock in
+    /// `set` plus the fact that `enforceCap` only shrinks makes concurrent reads
+    /// safe (a reader may transiently see one extra entry).
+    fn enforceCap(self: *KVMemory) void {
+        if (self.max_entries == 0) return;
+        while (self.map.count() > self.max_entries) {
+            var it = self.map.iterator();
+            const kv = it.next() orelse return;
+            const k = kv.key_ptr.*;
+            if (self.exp.fetchRemove(k)) |e| self.allocator.free(e.key);
+            self.allocator.free(k);
+            self.allocator.free(kv.value_ptr.*);
+        }
     }
 
     pub fn delete(self: *KVMemory, _: *root.Context, key: []const u8) !void {
         self.mu.lockUncancelable(utils.io);
-        if (self.map.get(key)) |old| {
-            self.allocator.free(old);
-        }
-        if (self.exp.get(key)) |_| {
-            _ = self.exp.fetchRemove(key);
-        }
         if (self.map.fetchRemove(key)) |removed| {
+            self.allocator.free(removed.key);
+            self.allocator.free(removed.value);
+        }
+        // `exp` owns its own key copy; free it too so neither index leaks.
+        if (self.exp.fetchRemove(key)) |removed| {
             self.allocator.free(removed.key);
         }
         self.mu.unlock(utils.io);
@@ -94,7 +130,16 @@ pub const KVMemory = struct {
 
     pub fn expire(self: *KVMemory, _: *root.Context, key: []const u8, ms: i64) !void {
         self.mu.lockUncancelable(utils.io);
-        _ = self.exp.put(key, utils.nowMonotonic().nanoseconds + @as(i128, ms) * 1_000_000) catch 0;
+        // Dupe the key into the store's allocator: the caller's `key` may be a
+        // request-arena borrow that is freed after this call, and storing it raw
+        // would leave `exp` holding a dangling pointer (audit #13 UAF).
+        const k = try self.allocator.dupe(u8, key);
+        if (self.exp.fetchRemove(key)) |old| {
+            self.allocator.free(old.key);
+        }
+        self.exp.put(k, utils.nowMonotonic().nanoseconds + @as(i128, ms) * 1_000_000) catch {
+            self.allocator.free(k);
+        };
         self.mu.unlock(utils.io);
     }
 
@@ -119,6 +164,7 @@ test "KVMemory get/set/delete/exists/expire" {
     defer _ = gpa.deinit();
 
     const store = try KVMemory.create(allocator);
+    defer store.deinit();
     var ctx: root.Context = .{ .allocator = allocator };
 
     try store.set(&ctx, "a", "1");
@@ -136,6 +182,9 @@ test "KVMemory get/set/delete/exists/expire" {
     // ttl
     try store.set(&ctx, "t", "x");
     try store.expire(&ctx, "t", 1);
-    std.Thread.sleep(std.time.ns_per_ms * 5);
+    // 0.16 removed std.Thread.sleep; busy-wait on the monotonic clock until
+    // the 1ms TTL has elapsed so the expiry branch below is exercised.
+    const ttl_deadline = utils.nowMonotonic().nanoseconds + std.time.ns_per_ms * 5;
+    while (utils.nowMonotonic().nanoseconds < ttl_deadline) {}
     try std.testing.expect((try store.get(&ctx, "t")) == null);
 }

@@ -27,6 +27,9 @@ pub const MongoDB = struct {
         tls_enabled: bool = false,
         tls_verify: bool = false,
         tls_ca_path: ?[]const u8 = null,
+        tls_server_name: ?[]const u8 = null,
+        tls_cert_file: ?[]const u8 = null,
+        tls_key_file: ?[]const u8 = null,
     }) !*MongoDB {
         const self = try allocator.create(MongoDB);
         self.* = .{
@@ -43,6 +46,9 @@ pub const MongoDB = struct {
             .tls_enabled = opts.tls_enabled,
             .tls_verify = opts.tls_verify,
             .tls_ca_path = if (opts.tls_ca_path) |p| try allocator.dupe(u8, p) else null,
+            .tls_server_name = if (opts.tls_server_name) |p| try allocator.dupe(u8, p) else null,
+            .tls_cert_file = if (opts.tls_cert_file) |p| try allocator.dupe(u8, p) else null,
+            .tls_key_file = if (opts.tls_key_file) |p| try allocator.dupe(u8, p) else null,
         });
         return self;
     }
@@ -81,6 +87,15 @@ pub const MongoDB = struct {
 
     pub fn query(self: *MongoDB, ctx: *root.Context, statement: []const u8) ![]const u8 {
         return try self.run(ctx, statement);
+    }
+
+    /// Remove (drop) an existing collection by name via MongoDB's `drop` command.
+    /// `name` is a developer-supplied collection identifier and is interpolated as
+    /// a JSON string value, so it must not contain an unescaped `"` or `\`.
+    pub fn dropCollection(self: *MongoDB, ctx: *root.Context, name: []const u8) ![]const u8 {
+        const cmd = try std.fmt.allocPrint(ctx.allocator, "{{\"drop\":\"{s}\"}}", .{name});
+        defer ctx.allocator.free(cmd);
+        return self.run(ctx, cmd);
     }
 
     /// Thread-safe last-failure accessor. Returns `null` when the most recent

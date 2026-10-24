@@ -1,4 +1,4 @@
-<img src="./static/zero-framework-backdrop.png">
+<img src="./static/zero-framework-backdrop.jpg">
 <br/>
 
 <p align="center">
@@ -7,12 +7,14 @@
       <th style="padding: 12px; border: 1px solid #ddd;">Documentation</th>
       <th style="padding: 12px; border: 1px solid #ddd;">DeepWiki</th>
       <th style="padding: 12px; border: 1px solid #ddd;">Coverage</th>
+      <th style="padding: 12px; border: 1px solid #ddd;">Stability</th>
       <th style="padding: 12px; border: 1px solid #ddd;">Build Status</th>
     </tr>
     <tr style="text-align: center;">
       <td style="padding: 12px; border: 1px solid #ddd;"><a href="https://zerofmk.in">zerofmk.in</a></td>
-      <td style="padding: 12px; border: 1px solid #ddd;"><a href="https://deepwiki.com/im-ng/zero"><img src="https://deepwiki.com/badge.svg" alt="Ask DeepWiki"></a></td>
-      <td style="padding: 12px; border: 1px solid #ddd;"><img src="https://img.shields.io/badge/Coverage-95-green" alt="Coverage"></td>
+      <td style="padding: 12px; border: 1px solid #ddd;"><a href="https://deepwiki.com/im-ng/zero"><img src="./static/deepwiki.svg" alt="Ask DeepWiki"></a></td>
+      <td style="padding: 12px; border: 1px solid #ddd;"><img src="https://img.shields.io/badge/Coverage-89%25-green" alt="Coverage"></td>
+      <td style="padding: 12px; border: 1px solid #ddd;"><a href="https://im-ng.github.io/zero-extended/"><img src="https://img.shields.io/badge/soak_%2B_chaos_tests-12_services-green" alt="Soak and chaos tests"></a></td>
       <td style="padding: 12px; border: 1px solid #ddd;"><a href="https://github.com/im-ng/zero/workflows/CI/badge.svg"><img src="https://github.com/im-ng/zero/workflows/CI/badge.svg" alt="Build Status"></a></td>
     </tr>
   </table>
@@ -20,8 +22,6 @@
 <br/>
 
 # Zero Framework
-
-![mascot](./static/zero-mascot-1.svg)
 
 **One binary. No GC. Build config-driven microservices in Zig.**
 
@@ -80,6 +80,43 @@ curl localhost:8080/json   # => {"msg":"hello zero!"}
 That's the whole app. Everything else — Postgres, Redis, Kafka, auth, and metrics — is opt-in through configuration.
 
 Full walkthrough in [Hello Zero](https://zerofmk.in/hello-zero) and [Getting Started](https://zerofmk.in/started).
+
+## Install
+
+Zero ships as a single prebuilt binary — no Zig toolchain required. The installer
+detects your platform, downloads the matching binary from GitHub Releases,
+verifies its checksum, and installs to `/usr/local/bin`:
+
+```bash
+curl -fsSL https://im-ng.github.io/zero/install.sh | sh
+```
+
+Install a specific version:
+
+```bash
+sh install.sh v0.5.3
+```
+
+The prebuilt binary dynamically links libc plus `librdkafka` and OpenSSL
+(`libssl`/`libcrypto`). If `zero --version` fails with a missing shared library,
+install them:
+
+```bash
+apt install librdkafka-dev libssl-dev   # Debian/Ubuntu
+brew install rdkafka openssl            # macOS
+```
+
+`duckdb` is only needed for `zero migrator` and DuckDB-backed features:
+
+```bash
+apt install duckdb   # Debian/Ubuntu
+brew install duckdb   # macOS
+```
+
+On macOS, Gatekeeper may block the unsigned binary the first time it runs —
+clear the quarantine with `xattr -dr com.apple.quarantine $(which zero)`.
+
+To build from source instead, see [Quick Start](#quick-start).
 
 ## Why Zero?
 
@@ -140,6 +177,8 @@ Recent additions (full detail on [zerofmk.in](https://zerofmk.in)):
 - **Observability** — distributed tracing and structured metrics wired in from the first request. See [Observability](https://zerofmk.in/observability).
 
 - **Benchmarks in CI** — reproducible throughput/latency/RSS runs. See [Benchmark](https://zerofmk.in/benchmark).
+
+- **Soak & chaos in CI** — an independent soak run boots 12 services against their real backends on every commit: leak gate (RSS plateau), backend-blackhole chaos and functional round-trips, published as a full report. See [Soak & chaos tested](#soak--chaos-tested-per-commit).
 
 ## Examples
 
@@ -226,6 +265,26 @@ try app.addHttpService("auth-service", app.config.get("SERVICE_URL"), svc_opts);
 ```
 
 See [Resilience](https://zerofmk.in/resilience) for timeouts, bulkheads and DLQ behavior.
+
+## Soak & chaos tested, per commit
+
+An independent soak pipeline runs against every commit and publishes the full
+report: [im-ng.github.io/zero-extended](https://im-ng.github.io/zero-extended/).
+
+Each run boots 12 example services wired to their real backends — Postgres,
+MySQL, SQLite, DuckDB, Cassandra, Redis, Solr, InfluxDB, RustFS (S3) — some
+over TLS, and drives them under load in gate mode:
+
+- **Leak gate** — VmRSS is sampled every 10 seconds. A leak is flagged only
+  when growth passes both a relative and an absolute threshold against a
+  baseline plateau; passing services hold a flat RSS after startup.
+- **Chaos gate** — the backend's IP is blackholed (iptables) for 2 seconds
+  under live traffic. The server must survive, and the data route must
+  recover and serve again.
+- **Functional gate** — health, GraphQL query and filestore
+  upload→download→delete round-trips run under the same load.
+
+Per-service logs, RSS samples and the exact thresholds are in the report.
 
 ## Metrics & Observability
 

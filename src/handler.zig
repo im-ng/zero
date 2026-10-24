@@ -29,19 +29,33 @@ pub const Handler = struct {
 
     pub const WebsocketHandler = wsHandler;
 
-    // Per-request metric recording is sampled (wrapper-only optimization, no
-    // vendored-lib change): only 1-in-METRIC_SAMPLE_RATE requests acquire the
-    // metrics library's per-vector mutexes. The sampled request writes back
-    // `count` to the hits counter via `incrBy` so totals stay accurate despite
-    // sampling; the latency histogram is a representative sample.
+    // Metric recording: `app_http_response_hits` is incremented on EVERY request
+    // so it reports the true total request count. The `app_http_response` latency
+    // histogram is a 1-in-METRIC_SAMPLE_RATE sample to limit per-vector mutex
+    // acquisitions; its `_count`/`_sum` are a representative sample and will be
+    // smaller than `hits` by ~the sample rate.
     var metric_tick: std.atomic.Value(u64) = .init(0);
     const METRIC_SAMPLE_RATE: u64 = 32;
 
-    pub fn metric(self: *Handler, duration: f32, method: []const u8, status: u16, path: []const u8) !void {
+    pub fn metric(self: *Handler, duration: f64, method: []const u8, status: u16, path: []const u8) !void {
+        // Accurate total on every request.
+        try self.container.metricz.responseHits(.{
+            .method = method,
+            .path = path,
+            .status = status,
+        }, 1);
+
+        // Latency histogram: representative sample only.
         const tick = metric_tick.fetchAdd(1, .monotonic);
-        if (tick % METRIC_SAMPLE_RATE != 0) return;
-        try self.container.metricz.response(.{ .method = method, .path = path, .status = status }, duration);
-        try self.container.metricz.responseHits(.{ .method = method, .path = path, .status = status }, METRIC_SAMPLE_RATE);
+        if (tick % METRIC_SAMPLE_RATE != 0) {
+            return;
+        }
+
+        try self.container.metricz.response(.{
+            .method = method,
+            .path = path,
+            .status = status,
+        }, duration);
     }
 
     pub fn ws(self: *Handler, action: Responder.Do(*Context), req: *httpz.Request, res: *httpz.Response) !void {
@@ -75,7 +89,11 @@ pub const Handler = struct {
         }
         res.setStatus(.ok);
 
-        const access_log = try std.fmt.allocPrint(req.arena, "{s}\t {d} {d}ms {s} {s}", .{ res.headers.get("X-Correlation-ID").?, res.status, 0, @tagName(req.method), req.url.path });
+        const access_log = try std.fmt.allocPrint(
+            req.arena,
+            "{s}\t {d} {d}ms {s} {s}",
+            .{ res.headers.get("X-Correlation-ID").?, res.status, 0, @tagName(req.method), req.url.path },
+        );
         ctx.info(access_log);
     }
 
@@ -91,6 +109,37 @@ pub const Handler = struct {
                 return;
             }
             defer _ = self.in_flight.fetchSub(1, .monotonic);
+        }
+
+        // RFC 10008: the `QUERY` method (safe, body-bearing) requires a
+        // Content-Type. Reject a missing one with 400 and an unsupported one
+        // with 415 before the handler runs.
+        if (std.mem.eql(u8, req.method_string, "QUERY")) {
+            const ct = req.header("content-type");
+            const supported = [_][]const u8{
+                "application/json",
+                "application/query",
+                "application/graphql",
+                "application/x-www-form-urlencoded",
+            };
+            if (ct == null) {
+                res.setStatus(.bad_request);
+                res.content_type = .TEXT;
+                res.body = "QUERY requires a Content-Type";
+                return;
+            }
+            const ct_trim = std.mem.trim(u8, ct.?, " ;\t");
+            const is_supported = for (supported) |s| {
+                if (std.mem.eql(u8, ct_trim, s) or std.mem.startsWith(u8, ct_trim, s)) {
+                    break true;
+                }
+            } else false;
+            if (!is_supported) {
+                res.setStatus(.unsupported_media_type);
+                res.content_type = .TEXT;
+                res.body = "Unsupported QUERY Content-Type";
+                return;
+            }
         }
 
         var ctx = try Context.init(req.arena, self.container, req, res);
@@ -118,7 +167,7 @@ pub const Handler = struct {
         // does not include middleware executions
         const duration: f32 = utils.elapsedMs(start);
 
-        try self.metric(duration, @tagName(req.method), res.status, req.url.path);
+        try self.metric(utils.elapsedSeconds(start), @tagName(req.method), res.status, req.url.path);
 
         const access_log = try std.fmt.allocPrint(
             req.arena,
@@ -135,18 +184,24 @@ pub const Handler = struct {
     }
 
     pub fn unauthorized(self: *Handler, req: *httpz.Request, res: *httpz.Response) !void {
+        const start = utils.nowMonotonic();
         var ctx = try Context.init(req.arena, self.container, req, res);
         defer req.arena.destroy(&ctx);
 
         try res.json(.{ .message = "unauthorizated request!" }, .{});
 
-        try self.metric(0, @tagName(req.method), res.status, req.url.path);
+        try self.metric(utils.elapsedSeconds(start), @tagName(req.method), res.status, req.url.path);
 
-        const access_log = try std.fmt.allocPrint(req.arena, "{s}\t {d} {d}ms {s} {s}", .{ res.headers.get("X-Correlation-ID").?, res.status, 0, @tagName(req.method), req.url.path });
+        const access_log = try std.fmt.allocPrint(
+            req.arena,
+            "{s}\t {d} {d}ms {s} {s}",
+            .{ res.headers.get("X-Correlation-ID").?, res.status, utils.elapsedMs(start), @tagName(req.method), req.url.path },
+        );
         ctx.info(access_log);
     }
 
     pub fn notFound(self: *Handler, req: *httpz.Request, res: *httpz.Response) !void {
+        const start = utils.nowMonotonic();
         var ctx = try Context.init(req.arena, self.container, req, res);
         defer req.arena.destroy(&ctx);
 
@@ -154,13 +209,18 @@ pub const Handler = struct {
 
         try res.json(.{ .err = "route is not registered!" }, .{});
 
-        try self.metric(0, @tagName(req.method), res.status, req.url.path);
+        try self.metric(utils.elapsedSeconds(start), @tagName(req.method), res.status, req.url.path);
 
-        const access_log = try std.fmt.allocPrint(req.arena, "{s}\t {d} {d}ms {s} {s}", .{ res.headers.get("X-Correlation-ID").?, res.status, 0, @tagName(req.method), req.url.path });
+        const access_log = try std.fmt.allocPrint(
+            req.arena,
+            "{s}\t {d} {d}ms {s} {s}",
+            .{ res.headers.get("X-Correlation-ID").?, res.status, utils.elapsedMs(start), @tagName(req.method), req.url.path },
+        );
         ctx.info(access_log);
     }
 
     pub fn uncaughtError(self: *Handler, req: *httpz.Request, res: *httpz.Response, err: anyerror) void {
+        const start = utils.nowMonotonic();
         std.debug.print("something went wrong\n", .{});
 
         var ctx = Context.init(req.arena, self.container, req, res) catch |init_err| {
@@ -169,17 +229,24 @@ pub const Handler = struct {
         };
         defer req.arena.destroy(&ctx);
 
-        res.setStatus(.internal_server_error);
+        // Report the error with a status that matches its class instead of
+        // always 500 (audit #28). The body stays generic so internal failure
+        // detail is never leaked to the client.
+        res.setStatus(root.Error.statusForError(err));
         res.content_type = .JSON;
         res.body =
             \\ {"error": "something went wrong"}
         ;
 
-        self.metric(0, @tagName(req.method), res.status, req.url.path) catch |e| {
+        self.metric(utils.elapsedSeconds(start), @tagName(req.method), res.status, req.url.path) catch |e| {
             std.debug.print("metric recording failed: {}\n", .{e});
         };
 
-        const access_log = std.fmt.allocPrint(req.arena, "{s}\t {d} {d}ms {s} {s}", .{ res.headers.get("X-Correlation-ID").?, res.status, 0, @tagName(req.method), req.url.path }) catch |e| {
+        const access_log = std.fmt.allocPrint(
+            req.arena,
+            "{s}\t {d} {d}ms {s} {s}",
+            .{ res.headers.get("X-Correlation-ID").?, res.status, utils.elapsedMs(start), @tagName(req.method), req.url.path },
+        ) catch |e| {
             std.debug.print("access log alloc failed: {}\n", .{e});
             return;
         };
@@ -190,6 +257,5 @@ pub const Handler = struct {
 };
 
 pub fn metricz(ctx: *Context) !void {
-    // return httpz.writeMetrics(ctx.response.writer());
     return try ctx.container.metricz.write(ctx);
 }

@@ -3,6 +3,8 @@ const std = @import("std");
 const parser = @import("graphql").parser;
 const ast = @import("graphql").ast;
 
+const utils = @import("zero.zig").utils;
+
 pub const error_ = error{
     GraphQLExecutionError,
     GraphQLParseError,
@@ -14,6 +16,10 @@ pub const error_ = error{
 pub const ErrorObject = struct {
     message: []const u8,
 };
+
+// Cap on GraphQL query nesting depth. A deeper query is rejected with a field
+// error rather than recursing without bound (stack exhaustion / DoS, audit #29).
+const max_query_depth: usize = 16;
 
 const GraphQLRequest = struct {
     query: ?[]const u8 = null,
@@ -28,14 +34,29 @@ fn ExecCtx(comptime Ctx: type) type {
         variables: ?std.json.Value,
         alloc: std.mem.Allocator,
         errors: std.array_list.Managed(ErrorObject),
+        // Current recursion depth of `resolve`; shared across the recursive
+        // descent so a single query's nesting is bounded by `max_query_depth`.
+        depth: usize = 0,
     };
 }
 
-pub fn handle(ctx: anytype, comptime Query: type, comptime Mutation: ?type, query_root: *const Query, mutation_root: ?*const anyopaque) !void {
+pub fn handle(
+    ctx: anytype,
+    comptime Query: type,
+    comptime Mutation: ?type,
+    query_root: *const Query,
+    mutation_root: ?*const anyopaque,
+) !void {
+    const start = utils.nowMonotonic();
     const body = ctx.request.?.body() orelse "";
     var req: GraphQLRequest = .{};
     if (body.len > 0) {
-        req = std.json.parseFromSliceLeaky(GraphQLRequest, ctx.allocator, body, .{ .ignore_unknown_fields = true }) catch blk: {
+        req = std.json.parseFromSliceLeaky(
+            GraphQLRequest,
+            ctx.allocator,
+            body,
+            .{ .ignore_unknown_fields = true },
+        ) catch blk: {
             break :blk try readFromQueryString(ctx);
         };
     } else {
@@ -67,9 +88,18 @@ pub fn handle(ctx: anytype, comptime Query: type, comptime Mutation: ?type, quer
     };
 
     const is_mutation = op.operation == .Mutation;
+    const op_kind: []const u8 = if (is_mutation) "mutation" else "query";
+    const op_name = blk: {
+        if (req.operation_name) |n| break :blk n;
+        if (op.name) |nm| break :blk nm.value;
+        break :blk "(anonymous)";
+    };
+
     if (is_mutation and Mutation == null) {
+        try ctx.container.metricz.graphqlOperation(.{ .operation = op_name, .kind = op_kind, .status = "error" }, utils.elapsedSeconds(start));
         ctx.response.setStatus(.bad_request);
         ctx.response.header("content-type", "application/json");
+
         try ctx.response.json(.{ .errors = .{.{ .message = "no mutation root configured" }} }, .{});
         return;
     }
@@ -87,6 +117,7 @@ pub fn handle(ctx: anytype, comptime Query: type, comptime Mutation: ?type, quer
     // type-level `.?` that would fail to compile under a runtime `if`.
     const data = (if (is_mutation)
         dispatch(Mutation orelse Query, mutation_root orelse {
+            try ctx.container.metricz.graphqlOperation(.{ .operation = op_name, .kind = op_kind, .status = "error" }, utils.elapsedSeconds(start));
             ctx.response.setStatus(.bad_request);
             ctx.response.header("content-type", "application/json");
             try ctx.response.json(.{ .errors = .{.{ .message = "mutation root missing" }} }, .{});
@@ -94,10 +125,25 @@ pub fn handle(ctx: anytype, comptime Query: type, comptime Mutation: ?type, quer
         }, op.selection_set.?, &ec)
     else
         dispatch(Query, query_root, op.selection_set.?, &ec)) catch {
+        // A dispatch error (e.g. OOM or an unexpected resolver panic) must still
+        // produce a spec-shaped `errors` payload rather than an empty `{data:{}}`
+        // so clients can tell the response failed (audit #29). The message is
+        // generic — internal detail is never leaked.
+        try ctx.container.metricz.graphqlOperation(.{ .operation = op_name, .kind = op_kind, .status = "error" }, utils.elapsedSeconds(start));
         ctx.response.setStatus(.internal_server_error);
         ctx.response.header("content-type", "application/json");
-        const o = std.json.ObjectMap.empty;
-        try ctx.response.json(std.json.Value{ .object = o }, .{});
+
+        var err_arr = std.json.Array.init(ctx.allocator);
+        var o = std.json.ObjectMap.empty;
+
+        try o.put(ctx.allocator, "message", .{ .string = "Internal server error" });
+        try err_arr.append(std.json.Value{ .object = o });
+
+        var out = std.json.ObjectMap.empty;
+        try out.put(ctx.allocator, "errors", std.json.Value{ .array = err_arr });
+
+        try ctx.response.json(std.json.Value{ .object = out }, .{});
+
         return;
     };
 
@@ -110,8 +156,12 @@ pub fn handle(ctx: anytype, comptime Query: type, comptime Mutation: ?type, quer
             try o.put(ctx.allocator, "message", .{ .string = e.message });
             try err_arr.append(std.json.Value{ .object = o });
         }
+
         try out.put(ctx.allocator, "errors", std.json.Value{ .array = err_arr });
     }
+
+    const op_status: []const u8 = if (ec.errors.items.len == 0) "ok" else "error";
+    try ctx.container.metricz.graphqlOperation(.{ .operation = op_name, .kind = op_kind, .status = op_status }, utils.elapsedSeconds(start));
 
     ctx.response.setStatus(.ok);
     ctx.response.header("content-type", "application/json");
@@ -195,6 +245,16 @@ fn dispatch(comptime T: type, root: *const anyopaque, ss: ast.SelectionSetNode, 
 }
 
 fn resolve(comptime T: type, instance: T, ss: ast.SelectionSetNode, ec: anytype) !std.json.Value {
+    // Bound recursion depth before descending into nested selection sets.
+    if (ec.depth >= max_query_depth) {
+        try ec.errors.append(
+            .{ .message = try std.fmt.allocPrint(ec.alloc, "query exceeds maximum depth of {d}", .{max_query_depth}) },
+        );
+
+        return .{ .object = std.json.ObjectMap.empty };
+    }
+
+    ec.depth += 1;
     var obj = std.json.ObjectMap.empty;
 
     for (ss.selections) |sel| {
@@ -459,15 +519,20 @@ fn parseFloatT(comptime T: type, s: []const u8) !T {
 }
 
 fn stringToT(comptime T: type, s: []const u8) !T {
-    if (T == []const u8) return s;
+    if (T == []const u8) {
+        return s;
+    }
 
-    if (@typeInfo(T) == .optional and @typeInfo(T).optional.child == []const u8) return s;
+    if (@typeInfo(T) == .optional and @typeInfo(T).optional.child == []const u8) {
+        return s;
+    }
 
     if (@typeInfo(T) == .@"enum") return std.meta.stringToEnum(T, s) orelse error.TypeMismatch;
 
     if (@typeInfo(T) == .optional and @typeInfo(T).optional.child == .@"enum") {
         return std.meta.stringToEnum(@typeInfo(T).optional.child, s) orelse error.TypeMismatch;
     }
+
     return error.TypeMismatch;
 }
 
@@ -586,8 +651,11 @@ test "graphql: resolve query with constant, resolver and arguments" {
 
     const doc = try parser.parse(a, "{ hello pi user(id: \"42\") { id name } }");
     const op = findOperation(doc, null) orelse return error.TestUnexpectedResult;
-    var ec: ExecCtx(TestCtx) = .{
-        .ctx = TestCtx{},
+    var tctx: TestCtx = .{};
+    // Resolvers take a pointer to the request context, so `ec.ctx` must be one
+    // (matching real `handle` usage where `ctx` is `*Context`).
+    var ec: ExecCtx(@TypeOf(&tctx)) = .{
+        .ctx = &tctx,
         .doc = doc,
         .variables = null,
         .alloc = a,

@@ -10,6 +10,7 @@ const utils = root.utils;
 
 const AuthError = root.AuthProvider.AuthError;
 const AuthMode = root.AuthProvider.AuthMode;
+const Context = root.Context;
 
 allocator: std.mem.Allocator,
 container: ?*root.container = undefined,
@@ -50,12 +51,23 @@ pub fn execute(self: *const authz, req: *httpz.Request, res: *httpz.Response, ex
                     return;
                 }
 
-                provider.validateBasicAuth(req.arena, header.?) catch |err| switch (err) {
-                    AuthError.InvalidAuthKeyHeader => {
-                        self.deny(res, req.arena, "invalid authorization header found");
-                        return;
-                    },
-                    else => {},
+                // Build a transient Context only when a KV store is configured,
+                // so Basic credentials can be augmented from KV (e.g. Redis)
+                // without paying for it on deployments that don't use KV auth.
+                var kv_ctx: ?Context = if (self.container.?.defaultKV != null)
+                    Context.init(req.arena, self.container.?, req, res) catch null
+                else
+                    null;
+                defer if (kv_ctx) |*c| req.arena.destroy(c);
+                const kv_ctx_ptr: ?*root.Context = if (kv_ctx) |*c| c else null;
+
+                // Any validation failure is an authentication failure: deny and
+                // stop. A missing `InvalidAuthKeyHeader` special case here let an
+                // unknown error (`InvalidCredentials`, a bad base64 header) fall
+                // through to the next middleware and bypass auth entirely.
+                provider.validateBasicAuth(req.arena, header.?, kv_ctx_ptr) catch {
+                    self.deny(res, req.arena, "authentication failed");
+                    return;
                 };
             },
             .APIKey => {
@@ -68,12 +80,21 @@ pub fn execute(self: *const authz, req: *httpz.Request, res: *httpz.Response, ex
                     return;
                 }
 
-                provider.validateAPIKeyAuth(req.arena, header.?) catch |err| switch (err) {
-                    AuthError.InvalidAuthAPIHeader => {
-                        self.deny(res, req.arena, "invalid jwt header found");
-                        return;
-                    },
-                    else => {},
+                // Transient Context for KV-augmented API-key lookups (only when a
+                // KV store is configured), mirroring the Basic arm above.
+                var kv_ctx: ?Context = if (self.container.?.defaultKV != null)
+                    Context.init(req.arena, self.container.?, req, res) catch null
+                else
+                    null;
+                defer if (kv_ctx) |*c| req.arena.destroy(c);
+                const kv_ctx_ptr: ?*root.Context = if (kv_ctx) |*c| c else null;
+
+                // Same as Basic: any validation error denies. A missing
+                // `InvalidAuthAPIHeader` special case let other errors fall
+                // through and bypass auth.
+                provider.validateAPIKeyAuth(req.arena, header.?, kv_ctx_ptr) catch {
+                    self.deny(res, req.arena, "authentication failed");
+                    return;
                 };
             },
             .OAuth => {
@@ -86,16 +107,12 @@ pub fn execute(self: *const authz, req: *httpz.Request, res: *httpz.Response, ex
                     return;
                 }
 
-                provider.validateOAuthToken(req.arena, header.?) catch |err| switch (err) {
-                    AuthError.InvalidAuthToken => {
-                        self.deny(res, req.arena, "invalid auth token found");
-                        return;
-                    },
-                    AuthError.TokenInvalidClaims => {
-                        self.deny(res, req.arena, "invalid token claims found");
-                        return;
-                    },
-                    else => {},
+                // Any validation failure — bad header, unverifiable signature,
+                // or bad claims — denies. Previously only two specific errors
+                // were caught and everything else reached the next middleware.
+                provider.validateOAuthToken(req.arena, header.?) catch {
+                    self.deny(res, req.arena, "invalid or unverified token");
+                    return;
                 };
             },
             else => {
@@ -262,6 +279,38 @@ test "authz bypasses well-known paths without auth" {
     try az.execute(ht.req, ht.res, MockExecutor{ .next_called = &next_called });
 
     try std.testing.expect(next_called == true);
+}
+
+test "authz blocks request when basic credentials are wrong" {
+    const alloc = std.testing.allocator;
+    var c = try testContainer(alloc);
+    defer c.log.deinit();
+
+    var keys = std.StringHashMap([]const u8).init(alloc);
+    defer keys.deinit();
+    try keys.put("user", "right-pass");
+
+    var provider = root.AuthProvider{ .mode = .Basic, .container = &c, .keys = keys };
+    var az = try authz.init(.{ .allocator = alloc, .container = &c, .provider = &provider });
+
+    var ht = root.httpz.testing.init(root.httpz.Config{});
+    defer ht.deinit();
+    ht.url("/api/secret");
+
+    // "user:wrong-pass" base64-encoded.
+    var b64_buf: [64]u8 = undefined;
+    const encoded = std.base64.standard.Encoder.encode(&b64_buf, "user:wrong-pass");
+    const auth_hdr = try std.fmt.allocPrint(alloc, "Basic {s}", .{encoded});
+    defer alloc.free(auth_hdr);
+    ht.header(constants.AUTH_HEADER, auth_hdr);
+
+    var next_called = false;
+    try az.execute(ht.req, ht.res, MockExecutor{ .next_called = &next_called });
+
+    // The wrong password returns `InvalidCredentials`, which must deny — not fall
+    // through to the next middleware (the pre-fix auth bypass).
+    try std.testing.expect(next_called == false);
+    try std.testing.expect(ht.res.status == @intFromEnum(std.http.Status.unauthorized));
 }
 
 test "authz proceeds when no provider is configured" {

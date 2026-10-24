@@ -46,6 +46,19 @@ const migrationTableClickHouse =
     \\ ) ENGINE = MergeTree() ORDER BY epoch
 ;
 
+/// MySQL/MariaDB: InnoDB with MySQL column types. Like the SQLite shape but
+/// without Postgres `SERIAL`/named constraints; uses `?` placeholders (same as
+/// sqlite/duckdb/clickhouse) for the insert path.
+const migrationTableMySQL =
+    \\ CREATE TABLE IF NOT EXISTS zero_migrations (
+    \\ epoch BIGINT NOT NULL,
+    \\ execution VARCHAR(4) NOT NULL,
+    \\ start_time VARCHAR(100) NOT NULL,
+    \\ duration BIGINT,
+    \\ PRIMARY KEY (epoch, execution)
+    \\ )
+;
+
 const lastMigrationRecord =
     \\SELECT epoch, execution, start_time, duration FROM zero_migrations order by epoch desc limit 1
 ;
@@ -84,6 +97,14 @@ pub fn checkAndCreateMigrationTable(ctx: *Context) !void {
             return;
         };
         ctx.info("migration table created");
+    } else if (std.mem.eql(u8, "mysql", dialect)) {
+        _ = ctx.SQL.exec(ctx, migrationTableMySQL, .{}) catch |err| {
+            var buffer: []u8 = undefined;
+            buffer = try ctx.allocator.alloc(u8, 100);
+            buffer = try std.fmt.bufPrint(buffer, "migration table creation failed: {}", .{err});
+            return;
+        };
+        ctx.info("migration table created");
     }
 }
 
@@ -101,7 +122,7 @@ pub fn lastMigration(ctx: *Context) !i64 {
             }
             return r.epoch;
         }
-    } else if (std.mem.eql(u8, "sqlite", dialect) or std.mem.eql(u8, "duckdb", dialect) or std.mem.eql(u8, "clickhouse", dialect)) {
+    } else if (std.mem.eql(u8, "sqlite", dialect) or std.mem.eql(u8, "duckdb", dialect) or std.mem.eql(u8, "clickhouse", dialect) or std.mem.eql(u8, "mysql", dialect)) {
         const result = try ctx.SQL.queryRowContext(ctx, zeroTable, lastMigrationRecord, .{});
         if (result) |r| {
             defer {

@@ -1,5 +1,6 @@
 const std = @import("std");
 const zero = @import("zero");
+const migrations = @import("migrations/all.zig");
 
 const App = zero.App;
 const Context = zero.Context;
@@ -14,7 +15,10 @@ pub fn main(init: std.process.Init) !void {
 
     const app = try App.new(allocator, init.io, init.environ_map);
 
-    app.onStartup(ensureSchema);
+    // Per-backend schema: only the active backend's migration (Cassandra CQL or
+    // Couchbase N1QL) is applied; the other is scoped out and skipped.
+    try migrations.all(app);
+    try app.runMigrations();
 
     try app.get("/", index);
     try app.get("/users", listUsers);
@@ -35,29 +39,25 @@ pub fn main(init: std.process.Init) !void {
 pub fn index(ctx: *Context) !void {
     ctx.response.setStatus(.ok);
     ctx.response.body =
-        \\ NoSQL (wide-column Cassandra) CRUD demo.
+        \\ NoSQL pack (Cassandra wide-column + Couchbase document) CRUD demo.
+        \\ One backend binds to ctx.NoSQL, chosen by which CONTACT_POINTS env is set.
+        \\ Each backend's `users` migration ships under src/migrations/ and the
+        \\ runner applies only the active backend's version.
+        \\
         \\ Routes (collection = "users"):
         \\   GET    /users            list users (SELECT ... LIMIT 50)
         \\   GET    /users/:key       get a user by key
         \\   PUT    /users/:key       upsert a user (request body = value)
         \\   POST   /users/:key       upsert a user (request body = value)
         \\   DELETE /users/:key       delete a user by key
-        \\   POST   /query            run raw CQL (request body)
+        \\   POST   /query            run raw CQL / N1QL (request body)
         \\
-        \\ Set CASSANDRA_CONTACT_POINTS / CASSANDRA_KEYSPACE in configs/.env.
+        \\ Set CASSANDRA_CONTACT_POINTS + CASSANDRA_KEYSPACE (or COUCHBASE_*)
+        \\ in configs/.env. With neither set the routes return 501.
         \\
         \\ Queries are built by the handler and passed to ctx.NoSQL verbatim —
         \\ the datasource layer does not construct or hardcode any statement.
     ;
-}
-
-/// Build the `users` table once per request if it does not yet exist. The
-/// datasource no longer creates collections for us, so the application owns
-/// its schema. `CREATE TABLE IF NOT EXISTS` is idempotent and cheap.
-fn ensureSchema(ctx: *Context) !void {
-    const n = ctx.NoSQL orelse return;
-    const r = n.query(ctx, "CREATE TABLE IF NOT EXISTS users (id text PRIMARY KEY, data text)") catch return;
-    ctx.allocator.free(r);
 }
 
 /// Escape a value for embedding inside a single-quoted CQL string by doubling

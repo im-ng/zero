@@ -77,6 +77,19 @@ pub const Job: type = struct {
         return t;
     }
 
+    /// Frees the six schedule hash-map buffers. The `Job` value itself lives in
+    /// the cron `jobs` array list (bootstrap arena); only these heap buffers leak
+    /// without this (audit #15 job leak on `Cronz.destroy`).
+    pub fn deinit(self: *Job, allocator: std.mem.Allocator) void {
+        _ = allocator;
+        self.sec.deinit();
+        self.min.deinit();
+        self.hour.deinit();
+        self.day.deinit();
+        self.month.deinit();
+        self.dayOfWeek.deinit();
+    }
+
     pub fn compare(self: Job, t: DateTime) bool {
         if (self.sec.contains(t.second) == false) {
             return false;

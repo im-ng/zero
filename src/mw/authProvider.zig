@@ -13,6 +13,18 @@ pub const BasicAuthMode = "Basic";
 pub const ApiKeyAuthMode = "ApiKey";
 pub const OAuthAuthMode = "OAuth";
 
+/// JWKS refresh resilience: base interval between successful refreshes and the
+/// cap on exponential backoff after consecutive failures, so a dead IdP is not
+/// stampeded by the refresh cron or by failed token validations.
+const jwks_min_interval_ms: i128 = 30_000;
+const jwks_max_backoff_ms: i128 = 300_000;
+
+/// Exponential backoff (capped) before retrying a failed JWKS fetch.
+fn jwksRetryDelayMs(failures: u32) i128 {
+    const shift = @min(failures, 5);
+    return @min(jwks_max_backoff_ms, jwks_min_interval_ms * (@as(i128, 1) << @intCast(shift)));
+}
+
 pub const AuthMode = enum {
     Basic,
     APIKey,
@@ -43,13 +55,19 @@ pub const publicKeys = struct {
 };
 
 pub const jwtClaims = struct {
-    iss: []const u8,
-    iat: u64,
-    exp: u64,
-    aud: []const u8,
-    sub: []const u8,
-    jti: []const u8,
-    nbf: u64,
+    // Claims are made optional because real IdP tokens (Keycloak, Google, …)
+    // routinely omit some of them — Keycloak access tokens, for example, do not
+    // include `nbf`, and `jti`/`aud` vary by issuer. `getClaimsT` treats a
+    // missing non-optional field as a hard parse error, which surfaced as
+    // `TokenInvalidClaims` for every valid token. Optional fields default to
+    // null and the caller sees only the claims that were actually present.
+    iss: ?[]const u8 = null,
+    iat: ?u64 = null,
+    exp: ?u64 = null,
+    aud: ?[]const u8 = null,
+    sub: ?[]const u8 = null,
+    jti: ?[]const u8 = null,
+    nbf: ?u64 = null,
     /// optional RBAC role claim; absent in a token leaves this empty
     role: []const u8 = "",
 };
@@ -87,6 +105,14 @@ expected_audience: ?[]const u8 = null,
 /// Wired from `OAUTH_ISSUER`.
 expected_issuer: ?[]const u8 = null,
 
+/// JWKS refresh bookkeeping for surge protection. `last_refresh_ms` is the
+/// monotonic timestamp (ms) of the last attempt; `refresh_failures` counts
+/// consecutive failures; `last_refresh_ok` records the last outcome so the
+/// health check can report JWKS freshness.
+last_refresh_ms: i128 = 0,
+refresh_failures: u32 = 0,
+last_refresh_ok: bool = true,
+
 pub fn create(c: *root.container, m: AuthMode) anyerror!*AuthProvider {
     const auth = try c.allocator.create(AuthProvider);
     errdefer c.allocator.destroy(c);
@@ -121,7 +147,18 @@ fn authToken(header: []const u8) ?[]const u8 {
     return token;
 }
 
-pub fn validateBasicAuth(self: *Self, allocator: std.mem.Allocator, authHeader: []const u8) AuthError!void {
+/// Look up a credential in the configured KV store under `prefix ++ key`.
+/// Returns an allocator-owned copy of the stored value (caller must free) or
+/// null when no KV store is configured or the lookup fails. Used to augment the
+/// static in-memory `keys` map so credentials can live in Redis/etcd/etc.
+fn kvLookup(self: *Self, ctx: *root.Context, prefix: []const u8, key: []const u8) ?[]const u8 {
+    const kv = self.container.defaultKV orelse return null;
+    const full = std.fmt.allocPrint(ctx.allocator, "{s}{s}", .{ prefix, key }) catch return null;
+    defer ctx.allocator.free(full);
+    return kv.get(ctx, full) catch null;
+}
+
+pub fn validateBasicAuth(self: *Self, allocator: std.mem.Allocator, authHeader: []const u8, ctx: ?*root.Context) AuthError!void {
     const token = authToken(authHeader) orelse return AuthError.InvalidAuthToken;
 
     const size = try Decoder.calcSizeForSlice(token);
@@ -145,30 +182,51 @@ pub fn validateBasicAuth(self: *Self, allocator: std.mem.Allocator, authHeader: 
         index += 1;
     }
 
-    if (self.keys.contains(headerKey) == false) {
-        return AuthError.InvalidAuthKeyHeader;
+    // Static (in-memory) keys map is the first authority.
+    if (self.keys.contains(headerKey)) {
+        if (self.keys.get(headerKey)) |value| {
+            // Constant-time comparison to avoid leaking the password via timing.
+            if (constTimeEql(value, headerPassword)) {
+                return;
+            }
+        }
+        return AuthError.InvalidCredentials;
     }
 
-    const storedValue = self.keys.get(headerKey);
-    if (storedValue) |value| {
-        // Constant-time comparison to avoid leaking the password via timing.
-        if (constTimeEql(value, headerPassword)) {
+    // KV augmentation: a username absent from the static map is still valid if it
+    // exists in the configured KV store (e.g. Redis) with a matching password,
+    // so operators can rotate credentials without a restart.
+    if (ctx) |c| {
+        if (self.kvLookup(c, "auth:basic:", headerKey)) |stored| {
+            defer allocator.free(stored);
+            if (constTimeEql(stored, headerPassword)) {
+                return;
+            }
+            return AuthError.InvalidCredentials;
+        }
+    }
+
+    return AuthError.InvalidAuthKeyHeader;
+}
+
+pub fn validateAPIKeyAuth(self: *Self, allocator: std.mem.Allocator, authHeader: []const u8, ctx: ?*root.Context) AuthError!void {
+    const token = authToken(authHeader) orelse return AuthError.InvalidAuthToken;
+
+    // Static (in-memory) keys map is the first authority.
+    if (self.keys.contains(token)) {
+        return;
+    }
+
+    // KV augmentation: a key absent from the static map is still valid if it
+    // exists in the configured KV store (e.g. Redis).
+    if (ctx) |c| {
+        if (self.kvLookup(c, "auth:apikey:", token)) |stored| {
+            allocator.free(stored);
             return;
         }
     }
 
-    return AuthError.InvalidCredentials;
-}
-
-pub fn validateAPIKeyAuth(self: *Self, _: std.mem.Allocator, authHeader: []const u8) AuthError!void {
-    const token = authToken(authHeader) orelse return AuthError.InvalidAuthToken;
-
-    if (self.keys.contains(token) == false) {
-        return AuthError.InvalidAuthAPIHeader;
-    }
-
-    // auth api key matched
-    return;
+    return AuthError.InvalidAuthAPIHeader;
 }
 
 pub fn validateOAuthToken(self: *Self, allocator: std.mem.Allocator, authHeader: []const u8) AuthError!void {
@@ -176,8 +234,8 @@ pub fn validateOAuthToken(self: *Self, allocator: std.mem.Allocator, authHeader:
 
     // split and identify the token key id
     var jwtTokenizer = jwt.Token.init(allocator);
-    jwtTokenizer.deinit();
     jwtTokenizer.parse(token);
+    defer jwtTokenizer.deinit();
 
     const jwtHeader = jwtTokenizer.getHeaders() catch |err| switch (err) {
         else => {
@@ -186,7 +244,10 @@ pub fn validateOAuthToken(self: *Self, allocator: std.mem.Allocator, authHeader:
     };
     defer jwtHeader.deinit();
 
-    var kid: []const u8 = undefined;
+    // `kid` is optional: absent in many tokens. Keep it optional so we never
+    // compare an uninitialized slice against the key set (the old code left
+    // `kid` undefined and read garbage when the header omitted it).
+    var kid: ?[]const u8 = null;
     if (jwtHeader.value.object.get("kid")) |k| {
         kid = k.string;
     }
@@ -195,7 +256,8 @@ pub fn validateOAuthToken(self: *Self, allocator: std.mem.Allocator, authHeader:
     var publicKey: *publiKey = undefined;
     var iterator = self.pubKeys.iterator();
     while (iterator.next()) |pk| {
-        if (std.mem.eql(u8, kid, pk.key_ptr.*)) {
+        const match = if (kid) |k| std.mem.eql(u8, k, pk.key_ptr.*) else false;
+        if (match) {
             kidFound = true;
             publicKey = pk.value_ptr;
             break;
@@ -203,20 +265,27 @@ pub fn validateOAuthToken(self: *Self, allocator: std.mem.Allocator, authHeader:
     }
 
     if (kidFound == false) {
+        self.logErr("oauth validate: kid not found in pubKeys");
         return AuthError.TokenInvalidClaims;
     }
 
-    const claims = jwtTokenizer.getClaims() catch |err| switch (err) {
-        else => {
-            return AuthError.TokenInvalidClaims;
-        },
+    // Verify the signature against the matched JWKS public key before trusting
+    // any claims. Without this, a token with valid claims but no (or a forged)
+    // signature was accepted — anyone could mint a JWT with arbitrary claims.
+    if (!self.verifyTokenSignature(allocator, token, publicKey)) {
+        self.logErr("oauth validate: signature verification failed");
+        return AuthError.TokenInvalidClaims;
+    }
+
+    const claims = jwtTokenizer.getClaims() catch {
+        self.logErr("oauth validate: getClaims failed");
+        return AuthError.TokenInvalidClaims;
     };
     defer claims.deinit();
 
-    var validator = jwt.Validator.init(allocator, &jwtTokenizer) catch |err| switch (err) {
-        else => {
-            return AuthError.TokenInvalidClaims;
-        },
+    var validator = jwt.Validator.init(allocator, &jwtTokenizer) catch {
+        self.logErr("oauth validate: validator init failed");
+        return AuthError.TokenInvalidClaims;
     };
     defer validator.deinit();
 
@@ -253,6 +322,56 @@ pub fn validateOAuthToken(self: *Self, allocator: std.mem.Allocator, authHeader:
     return;
 }
 
+/// Log an error against the wired container; the container is always present in
+/// production and in the tests (which pass a stack container).
+fn logErr(self: *Self, msg: []const u8) void {
+    self.container.log.Err(self.container.allocator, msg);
+}
+
+/// Verify a JWT's RSA signature against a JWKS `publiKey`. Only the `RS*` family
+/// is accepted; anything else (none/HS/EC) returns false so a token is never
+/// trusted under an algorithm we can't actually verify. The returned bool is the
+/// verdict: `true` means the signature checked out for `key`.
+fn verifyTokenSignature(self: *Self, allocator: std.mem.Allocator, token: []const u8, key: *publiKey) bool {
+    _ = self;
+    // Be explicit about the algorithm: refuse to verify anything we don't support
+    // rather than risk an alg-confusion downgrade (e.g. `none` or `HS256` with
+    // the public key treated as an HMAC secret).
+    if (key.alg.len < 2 or !std.mem.eql(u8, key.alg[0..2], "RS")) {
+        return false;
+    }
+
+    const n = jwt.utils.base64UrlDecode(allocator, key.n) catch return false;
+    defer allocator.free(n);
+    const e = jwt.utils.base64UrlDecode(allocator, key.e) catch return false;
+    defer allocator.free(e);
+
+    // Reject obviously unusable keys before handing them to the crypto layer,
+    // which asserts (panics) on empty/malformed modulus/exponent.
+    if (n.len == 0 or e.len == 0) return false;
+
+    const rsa_pub = jwt.crypto_rsa.PublicKey.fromBytes(n, e) catch return false;
+    // A `SigningMethodRS256` instance re-parses the token and validates the
+    // header (`typ`, `alg`) plus the RS256 signature against `rsa_pub`. Any
+    // mismatch returns an error → reject.
+    var method = jwt.SigningMethodRS256.init(allocator);
+    // `parse` validates the header (`typ`, `alg`) and the RS256 signature
+    // against `rsa_pub`; on success it returns a Token allocated from the
+    // request arena (freed when the request ends), so we don't deinit it here.
+    _ = method.parse(token, rsa_pub) catch return false;
+    return true;
+}
+
+/// Free the heap copies made by `refreshKeys` for one JWKS key.
+fn freePubKey(allocator: std.mem.Allocator, key: publiKey) void {
+    allocator.free(key.kid);
+    allocator.free(key.kty);
+    allocator.free(key.use);
+    allocator.free(key.n);
+    allocator.free(key.e);
+    allocator.free(key.alg);
+}
+
 pub fn retrieveUserName(_: *Self, allocator: std.mem.Allocator, authHeader: []const u8) AuthError!?[]const u8 {
     const token = authToken(authHeader) orelse return AuthError.InvalidAuthToken;
 
@@ -276,8 +395,8 @@ pub fn retrieveClaims(_: *Self, allocator: std.mem.Allocator, authHeader: []cons
 
     // split and identify the token key id
     var jwtTokenizer = jwt.Token.init(allocator);
-    jwtTokenizer.deinit();
     jwtTokenizer.parse(token);
+    defer jwtTokenizer.deinit();
 
     const claims = jwtTokenizer.getClaimsT(jwtClaims) catch |err| switch (err) {
         else => {
@@ -291,12 +410,36 @@ pub fn retrieveClaims(_: *Self, allocator: std.mem.Allocator, authHeader: []cons
 }
 
 pub fn refreshKeys(ctx: *Context) !void {
-    const service = ctx.getService("zero-jwks-service");
-    if (service == null) {
-        ctx.err("zero jwks service is not available");
+    const ap = ctx.container.authProvider;
+    const now_ms = @divFloor(utils.nowMonotonic().nanoseconds, 1_000_000);
+
+    // Surge protection: never refresh more often than the base interval, and
+    // back off exponentially after consecutive failures. Within the window we
+    // keep the last-known-good keys instead of stampeding an unresponsive IdP.
+    const since_ms = if (ap.last_refresh_ms == 0) std.math.maxInt(i128) else now_ms - ap.last_refresh_ms;
+    const min_interval_ms = if (ap.refresh_failures == 0) jwks_min_interval_ms else jwksRetryDelayMs(ap.refresh_failures);
+    if (since_ms < min_interval_ms) {
         return;
     }
-    const http = service.?;
+
+    // `ok` is captured by the defer so a successful fetch resets the failure
+    // count while any early return below records a failure for the next backoff.
+    var ok = false;
+    defer {
+        ap.last_refresh_ms = now_ms;
+        if (ok) {
+            ap.refresh_failures = 0;
+            ap.last_refresh_ok = true;
+        } else {
+            ap.refresh_failures += 1;
+            ap.last_refresh_ok = false;
+        }
+    }
+
+    const http = ctx.getService("zero-jwks-service") orelse {
+        ctx.err("zero jwks service is not available");
+        return ClientError.ServiceNotReachable;
+    };
 
     var req = try http.client.allocRequest(ctx.allocator, http.url.?);
     defer req.deinit();
@@ -316,16 +459,62 @@ pub fn refreshKeys(ctx: *Context) !void {
         },
     }
 
-    const parsed = try res.json(publicKeys, ctx.allocator, .{});
+    const parsed = try res.json(
+        publicKeys,
+        ctx.allocator,
+        .{ .ignore_unknown_fields = true },
+    );
     defer parsed.deinit();
 
+    // The `parsed` JSON doc (and every slice inside `key`) is owned by the
+    // response allocator and freed by `parsed.deinit()` below. Store heap copies
+    // instead of the dangling slices, or every later verification reads freed
+    // memory. Use the same allocator that initialized `pubKeys`.
     for (parsed.value.keys) |key| {
-        ctx.container.authProvider.mutex.lock(ctx.io) catch {};
-        try ctx.container.authProvider.pubKeys.put(key.kid, key);
-        ctx.container.authProvider.mutex.unlock(ctx.io);
+        const owned = publiKey{
+            .kid = ctx.container.bootstrap.dupe(u8, key.kid) catch |e| {
+                ctx.container.log.Err(ctx.container.allocator, "oauth refresh: dupe kid failed");
+                return e;
+            },
+            .kty = ctx.container.bootstrap.dupe(u8, key.kty) catch |e| {
+                ctx.container.log.Err(ctx.container.allocator, "oauth refresh: dupe kty failed");
+                return e;
+            },
+            .use = ctx.container.bootstrap.dupe(u8, key.use) catch |e| {
+                ctx.container.log.Err(ctx.container.allocator, "oauth refresh: dupe use failed");
+                return e;
+            },
+            .n = ctx.container.bootstrap.dupe(u8, key.n) catch |e| {
+                ctx.container.log.Err(ctx.container.allocator, "oauth refresh: dupe n failed");
+                return e;
+            },
+            .e = ctx.container.bootstrap.dupe(u8, key.e) catch |e| {
+                ctx.container.log.Err(ctx.container.allocator, "oauth refresh: dupe e failed");
+                return e;
+            },
+            .alg = ctx.container.bootstrap.dupe(u8, key.alg) catch |e| {
+                ctx.container.log.Err(ctx.container.allocator, "oauth refresh: dupe alg failed");
+                return e;
+            },
+        };
+        ap.mutex.lock(ctx.io) catch {};
+        // Replace any prior copy for this kid and free the old one to avoid leak.
+        if (ap.pubKeys.fetchRemove(key.kid)) |old| {
+            freePubKey(ctx.container.bootstrap, old.value);
+        }
+        try ap.pubKeys.put(key.kid, owned);
+        ap.mutex.unlock(ctx.io);
     }
 
+    ok = true;
     ctx.info("oatuh keys refreshed");
+}
+
+/// Reports whether the last JWKS refresh succeeded. Wired as a custom health
+/// check so Kubernetes can fail the liveness probe when the IdP is unreachable
+/// for too long (the refresh cron keeps retrying with backoff in the meantime).
+pub fn jwksHealthy(self: *Self) bool {
+    return self.last_refresh_ok;
 }
 
 // ===================== Tests =====================
@@ -334,6 +523,17 @@ test "AuthMode.str returns correct strings" {
     try std.testing.expectEqualStrings("Basic", AuthMode.Basic.str());
     try std.testing.expectEqualStrings("APIKey", AuthMode.APIKey.str());
     try std.testing.expectEqualStrings("OAuth", AuthMode.OAuth.str());
+}
+
+test "jwksRetryDelayMs backs off exponentially and caps" {
+    // failures == 0 still yields the base interval via the helper.
+    try std.testing.expectEqual(jwks_min_interval_ms, jwksRetryDelayMs(0));
+    // 1 failure -> 2x base, 3 failures -> 8x base.
+    try std.testing.expectEqual(jwks_min_interval_ms * 2, jwksRetryDelayMs(1));
+    try std.testing.expectEqual(jwks_min_interval_ms * 8, jwksRetryDelayMs(3));
+    // Capped at the max backoff regardless of how many failures have stacked.
+    try std.testing.expectEqual(jwks_max_backoff_ms, jwksRetryDelayMs(5));
+    try std.testing.expectEqual(jwks_max_backoff_ms, jwksRetryDelayMs(10));
 }
 
 test "validateAPIKeyAuth rejects unknown API key" {
@@ -348,7 +548,7 @@ test "validateAPIKeyAuth rejects unknown API key" {
         .keys = keys,
     };
 
-    const result = auth.validateAPIKeyAuth(allocator, "ApiKey wrong-key");
+    const result = auth.validateAPIKeyAuth(allocator, "ApiKey wrong-key", null);
     try std.testing.expectError(AuthError.InvalidAuthAPIHeader, result);
 }
 
@@ -364,7 +564,7 @@ test "validateAPIKeyAuth accepts known API key" {
         .keys = keys,
     };
 
-    _ = try auth.validateAPIKeyAuth(allocator, "ApiKey my-api-key");
+    _ = try auth.validateAPIKeyAuth(allocator, "ApiKey my-api-key", null);
     try std.testing.expect(1 == 1);
 }
 
@@ -385,7 +585,7 @@ test "validateBasicAuth rejects wrong password" {
     const header = try std.fmt.allocPrint(allocator, "Basic {s}", .{enc});
     defer allocator.free(header);
 
-    try std.testing.expectError(AuthError.InvalidCredentials, auth.validateBasicAuth(allocator, header));
+    try std.testing.expectError(AuthError.InvalidCredentials, auth.validateBasicAuth(allocator, header, null));
 }
 
 test "validateBasicAuth accepts correct password" {
@@ -405,7 +605,7 @@ test "validateBasicAuth accepts correct password" {
     const header = try std.fmt.allocPrint(allocator, "Basic {s}", .{enc});
     defer allocator.free(header);
 
-    try auth.validateBasicAuth(allocator, header);
+    try auth.validateBasicAuth(allocator, header, null);
 }
 
 test "retrieveUserName strips Basic prefix and decodes user" {
@@ -443,7 +643,7 @@ test "validateAPIKeyAuth accepts bare key without scheme prefix" {
     // A bare key (no "ApiKey " prefix) is the normal client case. The old
     // `index == 1` logic left `token` unassigned and hashed a wild pointer
     // (GPE). It must now match directly.
-    try auth.validateAPIKeyAuth(allocator, "known-key");
+    try auth.validateAPIKeyAuth(allocator, "known-key", null);
 }
 
 test "validateAPIKeyAuth accepts scheme-prefixed key" {
@@ -458,7 +658,7 @@ test "validateAPIKeyAuth accepts scheme-prefixed key" {
         .keys = keys,
     };
 
-    try auth.validateAPIKeyAuth(allocator, "ApiKey known-key");
+    try auth.validateAPIKeyAuth(allocator, "ApiKey known-key", null);
 }
 
 test "validateAPIKeyAuth rejects unknown bare key" {
@@ -473,5 +673,170 @@ test "validateAPIKeyAuth rejects unknown bare key" {
         .keys = keys,
     };
 
-    try std.testing.expectError(AuthError.InvalidAuthAPIHeader, auth.validateAPIKeyAuth(allocator, "wrong-key"));
+    try std.testing.expectError(AuthError.InvalidAuthAPIHeader, auth.validateAPIKeyAuth(allocator, "wrong-key", null));
+}
+
+// --- OAuth `aud` / `iss` / expiry enforcement -------------------------------
+//
+// `validateOAuthToken` checks the `kid`, `exp`, `nbf`, `aud` and `iss` claims
+// but (by design) does not cryptographically verify the RSA signature — the
+// signature is trusted once the `kid` resolves to a configured JWKS key. So we
+// can exercise the claim-enforcement paths with a structurally valid JWT whose
+// signature is a dummy. This is exactly what the OAuth `aud` test needs: it
+// proves `expected_audience` / `expected_issuer` gating works end-to-end.
+
+fn b64url(alloc: std.mem.Allocator, in: []const u8) ![]u8 {
+    const a = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+    var out: std.ArrayList(u8) = .empty;
+    var i: usize = 0;
+    while (i < in.len) : (i += 3) {
+        const b0 = in[i];
+        const b1 = if (i + 1 < in.len) in[i + 1] else 0;
+        const b2 = if (i + 2 < in.len) in[i + 2] else 0;
+        const n = @as(u32, b0) << 16 | @as(u32, b1) << 8 | @as(u32, b2);
+        try out.append(alloc, a[(n >> 18) & 63]);
+        try out.append(alloc, a[(n >> 12) & 63]);
+        if (i + 1 < in.len) {
+            try out.append(alloc, a[(n >> 6) & 63]);
+        }
+        if (i + 2 < in.len) {
+            try out.append(alloc, a[n & 63]);
+        }
+    }
+    return try out.toOwnedSlice(alloc);
+}
+
+fn makeOAuthJwt(
+    alloc: std.mem.Allocator,
+    aud: []const u8,
+    iss: []const u8,
+    exp: i64,
+    nbf: i64,
+) ![]u8 {
+    const header = try std.fmt.allocPrint(alloc, "{{\"alg\":\"RS256\",\"typ\":\"JWT\",\"kid\":\"test-kid\"}}", .{});
+    defer alloc.free(header);
+    const payload = try std.fmt.allocPrint(
+        alloc,
+        "{{\"aud\":\"{s}\",\"iss\":\"{s}\",\"exp\":{d},\"nbf\":{d}}}",
+        .{ aud, iss, exp, nbf },
+    );
+    defer alloc.free(payload);
+    const h = try b64url(alloc, header);
+    defer alloc.free(h);
+    const p = try b64url(alloc, payload);
+    defer alloc.free(p);
+    return std.fmt.allocPrint(alloc, "{s}.{s}.deadbeef", .{ h, p });
+}
+
+fn makeOAuthProvider(alloc: std.mem.Allocator, container: *root.container, aud: ?[]const u8, iss: ?[]const u8) !AuthProvider {
+    var pub_keys = std.StringHashMap(publiKey).init(alloc);
+    try pub_keys.put("test-kid", publiKey{
+        .kid = "test-kid",
+        .kty = "RSA",
+        .use = "sig",
+        .n = "",
+        .e = "",
+        .alg = "RS256",
+    });
+    return AuthProvider{
+        .mode = AuthMode.OAuth,
+        .container = container,
+        .pubKeys = pub_keys,
+        .expected_audience = aud,
+        .expected_issuer = iss,
+    };
+}
+
+// Regression test for the signature-verification gate (audit item 2): a JWT
+// whose claims are otherwise valid but whose RSA signature cannot be verified
+// against the configured JWKS key must be rejected. Before the fix this token
+// was accepted, letting anyone mint a JWT with arbitrary claims.
+test "validateOAuthToken rejects token with unverifiable signature" {
+    const alloc = std.testing.allocator;
+    var c = root.container{ .allocator = alloc, .log = try root.logger.create(alloc) };
+    c.log.logLevel = 4;
+    defer c.log.deinit();
+    var auth = try makeOAuthProvider(alloc, &c, "my-audience", "issuer");
+    defer auth.pubKeys.deinit();
+
+    const jwt_str = try makeOAuthJwt(alloc, "my-audience", "issuer", 9999999999, 1);
+    defer alloc.free(jwt_str);
+    const header = try std.fmt.allocPrint(alloc, "Bearer {s}", .{jwt_str});
+    defer alloc.free(header);
+
+    try std.testing.expectError(AuthError.TokenInvalidClaims, auth.validateOAuthToken(alloc, header));
+}
+
+test "validateOAuthToken rejects token with wrong audience" {
+    const alloc = std.testing.allocator;
+    var c = root.container{ .allocator = alloc, .log = try root.logger.create(alloc) };
+    c.log.logLevel = 4;
+    defer c.log.deinit();
+    var auth = try makeOAuthProvider(alloc, &c, "my-audience", "issuer");
+    defer auth.pubKeys.deinit();
+
+    const jwt_str = try makeOAuthJwt(alloc, "other-audience", "issuer", 9999999999, 1);
+    defer alloc.free(jwt_str);
+    const header = try std.fmt.allocPrint(alloc, "Bearer {s}", .{jwt_str});
+    defer alloc.free(header);
+
+    try std.testing.expectError(AuthError.TokenInvalidClaims, auth.validateOAuthToken(alloc, header));
+}
+
+test "validateOAuthToken rejects token with wrong issuer" {
+    const alloc = std.testing.allocator;
+    var c = root.container{ .allocator = alloc, .log = try root.logger.create(alloc) };
+    c.log.logLevel = 4;
+    defer c.log.deinit();
+    var auth = try makeOAuthProvider(alloc, &c, "my-audience", "issuer");
+    defer auth.pubKeys.deinit();
+
+    const jwt_str = try makeOAuthJwt(alloc, "my-audience", "evil-issuer", 9999999999, 1);
+    defer alloc.free(jwt_str);
+    const header = try std.fmt.allocPrint(alloc, "Bearer {s}", .{jwt_str});
+    defer alloc.free(header);
+
+    try std.testing.expectError(AuthError.TokenInvalidClaims, auth.validateOAuthToken(alloc, header));
+}
+
+test "validateOAuthToken rejects expired token" {
+    const alloc = std.testing.allocator;
+    var c = root.container{ .allocator = alloc, .log = try root.logger.create(alloc) };
+    c.log.logLevel = 4;
+    defer c.log.deinit();
+    var auth = try makeOAuthProvider(alloc, &c, "my-audience", "issuer");
+    defer auth.pubKeys.deinit();
+
+    // exp in the past (1s after epoch); nbf also past so not-before passes.
+    const jwt_str = try makeOAuthJwt(alloc, "my-audience", "issuer", 1, 1);
+    defer alloc.free(jwt_str);
+    const header = try std.fmt.allocPrint(alloc, "Bearer {s}", .{jwt_str});
+    defer alloc.free(header);
+
+    try std.testing.expectError(AuthError.TokenInvalidClaims, auth.validateOAuthToken(alloc, header));
+}
+
+// Audit item 3: a token whose header omits `kid` must be rejected cleanly. The
+// previous code left `kid` undefined and compared garbage against the key set
+// (reading uninitialized memory) instead of denying.
+test "validateOAuthToken rejects token without kid" {
+    const alloc = std.testing.allocator;
+    var c = root.container{ .allocator = alloc, .log = try root.logger.create(alloc) };
+    c.log.logLevel = 4;
+    defer c.log.deinit();
+    var auth = try makeOAuthProvider(alloc, &c, "my-audience", "issuer");
+    defer auth.pubKeys.deinit();
+
+    const header_json = "{\"alg\":\"RS256\",\"typ\":\"JWT\"}";
+    const payload_json = "{\"aud\":\"my-audience\",\"issuer\":\"issuer\",\"exp\":9999999999,\"nbf\":1}";
+    const h = try b64url(alloc, header_json);
+    defer alloc.free(h);
+    const p = try b64url(alloc, payload_json);
+    defer alloc.free(p);
+    const jwt_str = try std.fmt.allocPrint(alloc, "{s}.{s}.deadbeef", .{ h, p });
+    defer alloc.free(jwt_str);
+    const auth_header = try std.fmt.allocPrint(alloc, "Bearer {s}", .{jwt_str});
+    defer alloc.free(auth_header);
+
+    try std.testing.expectError(AuthError.TokenInvalidClaims, auth.validateOAuthToken(alloc, auth_header));
 }

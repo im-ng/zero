@@ -25,6 +25,8 @@ pub const Dialect = enum {
     /// such as duckgres / PostDuck). Reuses this relational interface; backed by
     /// `src/datasource/sql/duckgres.zig` (the pure-Zig `pgz` client, no duckdb C lib).
     duckgres,
+    /// MySQL / MariaDB (pure-Zig text-protocol client; see `mysql.zig`).
+    mysql,
     /// Test-only dialect backed by `MockBackend`. Lets the `Interface` dispatch
     /// be exercised without loading a real database driver (keeps the
     /// coverage/unit-test build free of the native `libsqlite3` dependency that
@@ -133,6 +135,7 @@ pub const Interface = struct {
             .duckdb => "duckdb",
             .clickhouse => "clickhouse",
             .duckgres => "duckgres",
+            .mysql => "mysql",
             .mock => "mock",
         };
     }
@@ -181,6 +184,12 @@ pub const Interface = struct {
                 args,
             ),
             .clickhouse => @as(*root.ClickHouse, @ptrCast(@alignCast(self.ptr))).queryRow(
+                ctx,
+                Type,
+                stmt,
+                args,
+            ),
+            .mysql => @as(*root.MySQL, @ptrCast(@alignCast(self.ptr))).queryRow(
                 ctx,
                 Type,
                 stmt,
@@ -243,6 +252,12 @@ pub const Interface = struct {
                 stmt,
                 args,
             ),
+            .mysql => @as(*root.MySQL, @ptrCast(@alignCast(self.ptr))).queryRows(
+                ctx,
+                Type,
+                stmt,
+                args,
+            ),
             .duckgres => @as(*root.DuckGres, @ptrCast(@alignCast(self.ptr))).queryRows(
                 ctx,
                 Type,
@@ -300,6 +315,12 @@ pub const Interface = struct {
                 stmt,
                 args,
             ),
+            .mysql => @as(*root.MySQL, @ptrCast(@alignCast(self.ptr))).queryRowContext(
+                ctx,
+                Type,
+                stmt,
+                args,
+            ),
             .duckgres => @as(*root.DuckGres, @ptrCast(@alignCast(self.ptr))).queryRowContext(
                 ctx,
                 Type,
@@ -352,6 +373,12 @@ pub const Interface = struct {
                 args,
             ),
             .clickhouse => @as(*root.ClickHouse, @ptrCast(@alignCast(self.ptr))).queryRowsContext(
+                ctx,
+                Type,
+                stmt,
+                args,
+            ),
+            .mysql => @as(*root.MySQL, @ptrCast(@alignCast(self.ptr))).queryRowsContext(
                 ctx,
                 Type,
                 stmt,
@@ -419,6 +446,13 @@ pub const Interface = struct {
                 stmt,
                 args,
             ),
+            .mysql => @as(*root.MySQL, @ptrCast(@alignCast(self.ptr))).selectSlice(
+                ctx,
+                Type,
+                list,
+                stmt,
+                args,
+            ),
             .duckgres => @as(*root.DuckGres, @ptrCast(@alignCast(self.ptr))).selectSlice(
                 ctx,
                 Type,
@@ -472,6 +506,11 @@ pub const Interface = struct {
                 stmt,
                 args,
             ),
+            .mysql => @as(*root.MySQL, @ptrCast(@alignCast(self.ptr))).execWithContext(
+                ctx,
+                stmt,
+                args,
+            ),
             .duckgres => @as(*root.DuckGres, @ptrCast(@alignCast(self.ptr))).execWithContext(
                 ctx,
                 stmt,
@@ -499,6 +538,7 @@ pub const Interface = struct {
             .mock => @as(*MockBackend, @ptrCast(@alignCast(self.ptr))).lastInsertRowID(),
             .duckdb => @as(*root.DuckDB, @ptrCast(@alignCast(self.ptr))).lastInsertRowID(),
             .clickhouse => @as(*root.ClickHouse, @ptrCast(@alignCast(self.ptr))).lastInsertRowID(),
+            .mysql => @as(*root.MySQL, @ptrCast(@alignCast(self.ptr))).lastInsertRowID(),
             .duckgres => @as(*root.DuckGres, @ptrCast(@alignCast(self.ptr))).lastInsertRowID(),
         };
     }
@@ -511,6 +551,7 @@ pub const Interface = struct {
             .mock => @as(*MockBackend, @ptrCast(@alignCast(self.ptr))).rowsAffected(),
             .duckdb => @as(*root.DuckDB, @ptrCast(@alignCast(self.ptr))).rowsAffected(),
             .clickhouse => @as(*root.ClickHouse, @ptrCast(@alignCast(self.ptr))).rowsAffected(),
+            .mysql => @as(*root.MySQL, @ptrCast(@alignCast(self.ptr))).rowsAffected(),
             .duckgres => @as(*root.DuckGres, @ptrCast(@alignCast(self.ptr))).rowsAffected(),
         };
     }
@@ -523,6 +564,7 @@ pub const Interface = struct {
             .mock => @as(*MockBackend, @ptrCast(@alignCast(self.ptr))).begin(),
             .duckdb => @as(*root.DuckDB, @ptrCast(@alignCast(self.ptr))).begin(),
             .clickhouse => @as(*root.ClickHouse, @ptrCast(@alignCast(self.ptr))).begin(),
+            .mysql => @as(*root.MySQL, @ptrCast(@alignCast(self.ptr))).begin(),
             .duckgres => @as(*root.DuckGres, @ptrCast(@alignCast(self.ptr))).begin(),
         };
     }
@@ -535,6 +577,7 @@ pub const Interface = struct {
             .mock => @as(*MockBackend, @ptrCast(@alignCast(self.ptr))).commit(),
             .duckdb => @as(*root.DuckDB, @ptrCast(@alignCast(self.ptr))).commit(),
             .clickhouse => @as(*root.ClickHouse, @ptrCast(@alignCast(self.ptr))).commit(),
+            .mysql => @as(*root.MySQL, @ptrCast(@alignCast(self.ptr))).commit(),
             .duckgres => @as(*root.DuckGres, @ptrCast(@alignCast(self.ptr))).commit(),
         };
     }
@@ -547,6 +590,7 @@ pub const Interface = struct {
             .mock => @as(*MockBackend, @ptrCast(@alignCast(self.ptr))).rollback(),
             .duckdb => @as(*root.DuckDB, @ptrCast(@alignCast(self.ptr))).rollback(),
             .clickhouse => @as(*root.ClickHouse, @ptrCast(@alignCast(self.ptr))).rollback(),
+            .mysql => @as(*root.MySQL, @ptrCast(@alignCast(self.ptr))).rollback(),
             .duckgres => @as(*root.DuckGres, @ptrCast(@alignCast(self.ptr))).rollback(),
         }
     }

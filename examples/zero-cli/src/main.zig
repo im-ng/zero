@@ -15,7 +15,6 @@ const User = struct {
 };
 
 pub fn main(init: std.process.Init) !void {
-
     var gpa: std.heap.DebugAllocator(.{}) = .init;
     const allocator = gpa.allocator();
 
@@ -36,7 +35,9 @@ pub fn main(init: std.process.Init) !void {
     try app.SubCommand("greet", greet, .{ .description = "print a greeting (pass --name <who>)" });
 
     try app.runCmd(init.minimal.args);
-    if (gpa.detectLeaks() > 0) std.process.exit(1);
+    if (gpa.detectLeaks() > 0) {
+        std.process.exit(1);
+    }
 }
 
 fn ensureSchema(ctx: *Context) !void {
@@ -53,7 +54,9 @@ pub fn list(ctx: *Context) !void {
     try ensureSchema(ctx);
     const users = try ctx.SQL.queryRows(ctx, User, "SELECT id, name FROM cli_users ORDER BY id", .{});
     defer {
-        for (users) |u| ctx.allocator.free(u.name);
+        for (users) |u| {
+            ctx.allocator.free(u.name);
+        }
         ctx.allocator.free(users);
     }
     if (users.len == 0) {

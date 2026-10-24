@@ -31,7 +31,7 @@ pub fn main(init: std.process.Init) !void {
 
     // In-process OLAP SQL engine. No external service required.
     // Pass a file path instead of ":memory:" for a persistent database.
-    try app.addDuckDB(":memory:");
+    // try app.addDuckDB(app.config.get("DUCKDB_PATH"));
 
     try migrations.all(app);
     try app.runMigrations();
@@ -85,7 +85,6 @@ fn badRequest(ctx: *Context, msg: []const u8) void {
 }
 
 pub fn listUsers(ctx: *Context) !void {
-    try ensureSchema(ctx);
     const users = try ctx.SQL.queryRows(ctx, User, "SELECT id, name, email FROM users ORDER BY id", .{});
     defer {
         for (users) |u| {
@@ -105,7 +104,6 @@ pub fn createUser(ctx: *Context) !void {
         badRequest(ctx, "empty request body");
         return;
     };
-    try ensureSchema(ctx);
 
     const next = blk: {
         const row = (try ctx.SQL.queryRow(ctx, NextId, "SELECT COALESCE(MAX(id),0)+1 AS id FROM users", .{})) orelse NextId{ .id = 1 };
@@ -121,7 +119,6 @@ pub fn getUser(ctx: *Context) !void {
         badRequest(ctx, "invalid :id");
         return;
     };
-    try ensureSchema(ctx);
     const user = try ctx.SQL.queryRow(ctx, User, "SELECT id, name, email FROM users WHERE id = ?", .{id});
     if (user) |u| {
         defer {
@@ -147,7 +144,6 @@ pub fn updateUser(ctx: *Context) !void {
         badRequest(ctx, "empty request body");
         return;
     };
-    try ensureSchema(ctx);
 
     _ = try ctx.SQL.exec(ctx, "UPDATE users SET name = ?, email = ? WHERE id = ?", .{ body.name, body.email, id });
     try ctx.response.json(.{ .id = id, .status = "updated" }, .{});
@@ -158,7 +154,6 @@ pub fn deleteUser(ctx: *Context) !void {
         badRequest(ctx, "invalid :id");
         return;
     };
-    try ensureSchema(ctx);
     _ = try ctx.SQL.exec(ctx, "DELETE FROM users WHERE id = ?", .{id});
     try ctx.response.json(.{ .id = id, .status = "deleted" }, .{});
 }
