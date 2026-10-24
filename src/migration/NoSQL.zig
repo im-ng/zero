@@ -27,7 +27,12 @@ pub fn lastMigration(ctx: *Context) !i64 {
     const raw = n.query(ctx, "SELECT epoch, execution, start_time, duration FROM zero_migrations") catch return 0;
     defer ctx.allocator.free(raw);
 
-    var parsed = std.json.parseFromSlice(std.json.Value, ctx.allocator, raw, .{ .ignore_unknown_fields = true }) catch return 0;
+    var parsed = std.json.parseFromSlice(
+        std.json.Value,
+        ctx.allocator,
+        raw,
+        .{ .ignore_unknown_fields = true },
+    ) catch return 0;
     defer parsed.deinit();
 
     if (parsed.value != .array) return 0;
@@ -50,7 +55,11 @@ pub fn insertMigration(ctx: *Context, m: *const migrate, duration: u64) !void {
     const startTime = try utils.sqlTimestampz(ctx.allocator);
     defer ctx.allocator.free(startTime);
 
-    const stmt = try std.fmt.allocPrint(ctx.allocator, "INSERT INTO zero_migrations (epoch, execution, start_time, duration) VALUES ({d}, 'UP', '{s}', {d})", .{ m.migrationNumber, startTime, duration });
+    const stmt = try std.fmt.allocPrint(
+        ctx.allocator,
+        "INSERT INTO zero_migrations (epoch, execution, start_time, duration) VALUES ({d}, 'UP', '{s}', {d})",
+        .{ m.migrationNumber, startTime, duration },
+    );
     defer ctx.allocator.free(stmt);
 
     try n.put(ctx, stmt);

@@ -39,11 +39,23 @@ pub const Handler = struct {
 
     pub fn metric(self: *Handler, duration: f64, method: []const u8, status: u16, path: []const u8) !void {
         // Accurate total on every request.
-        try self.container.metricz.responseHits(.{ .method = method, .path = path, .status = status }, 1);
+        try self.container.metricz.responseHits(.{
+            .method = method,
+            .path = path,
+            .status = status,
+        }, 1);
+
         // Latency histogram: representative sample only.
         const tick = metric_tick.fetchAdd(1, .monotonic);
-        if (tick % METRIC_SAMPLE_RATE != 0) return;
-        try self.container.metricz.response(.{ .method = method, .path = path, .status = status }, duration);
+        if (tick % METRIC_SAMPLE_RATE != 0) {
+            return;
+        }
+
+        try self.container.metricz.response(.{
+            .method = method,
+            .path = path,
+            .status = status,
+        }, duration);
     }
 
     pub fn ws(self: *Handler, action: Responder.Do(*Context), req: *httpz.Request, res: *httpz.Response) !void {
@@ -77,7 +89,11 @@ pub const Handler = struct {
         }
         res.setStatus(.ok);
 
-        const access_log = try std.fmt.allocPrint(req.arena, "{s}\t {d} {d}ms {s} {s}", .{ res.headers.get("X-Correlation-ID").?, res.status, 0, @tagName(req.method), req.url.path });
+        const access_log = try std.fmt.allocPrint(
+            req.arena,
+            "{s}\t {d} {d}ms {s} {s}",
+            .{ res.headers.get("X-Correlation-ID").?, res.status, 0, @tagName(req.method), req.url.path },
+        );
         ctx.info(access_log);
     }
 
@@ -176,7 +192,11 @@ pub const Handler = struct {
 
         try self.metric(utils.elapsedSeconds(start), @tagName(req.method), res.status, req.url.path);
 
-        const access_log = try std.fmt.allocPrint(req.arena, "{s}\t {d} {d}ms {s} {s}", .{ res.headers.get("X-Correlation-ID").?, res.status, utils.elapsedMs(start), @tagName(req.method), req.url.path });
+        const access_log = try std.fmt.allocPrint(
+            req.arena,
+            "{s}\t {d} {d}ms {s} {s}",
+            .{ res.headers.get("X-Correlation-ID").?, res.status, utils.elapsedMs(start), @tagName(req.method), req.url.path },
+        );
         ctx.info(access_log);
     }
 
@@ -191,7 +211,11 @@ pub const Handler = struct {
 
         try self.metric(utils.elapsedSeconds(start), @tagName(req.method), res.status, req.url.path);
 
-        const access_log = try std.fmt.allocPrint(req.arena, "{s}\t {d} {d}ms {s} {s}", .{ res.headers.get("X-Correlation-ID").?, res.status, utils.elapsedMs(start), @tagName(req.method), req.url.path });
+        const access_log = try std.fmt.allocPrint(
+            req.arena,
+            "{s}\t {d} {d}ms {s} {s}",
+            .{ res.headers.get("X-Correlation-ID").?, res.status, utils.elapsedMs(start), @tagName(req.method), req.url.path },
+        );
         ctx.info(access_log);
     }
 
@@ -218,7 +242,11 @@ pub const Handler = struct {
             std.debug.print("metric recording failed: {}\n", .{e});
         };
 
-        const access_log = std.fmt.allocPrint(req.arena, "{s}\t {d} {d}ms {s} {s}", .{ res.headers.get("X-Correlation-ID").?, res.status, utils.elapsedMs(start), @tagName(req.method), req.url.path }) catch |e| {
+        const access_log = std.fmt.allocPrint(
+            req.arena,
+            "{s}\t {d} {d}ms {s} {s}",
+            .{ res.headers.get("X-Correlation-ID").?, res.status, utils.elapsedMs(start), @tagName(req.method), req.url.path },
+        ) catch |e| {
             std.debug.print("access log alloc failed: {}\n", .{e});
             return;
         };
@@ -229,6 +257,5 @@ pub const Handler = struct {
 };
 
 pub fn metricz(ctx: *Context) !void {
-    // return httpz.writeMetrics(ctx.response.writer());
     return try ctx.container.metricz.write(ctx);
 }

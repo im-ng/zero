@@ -380,22 +380,52 @@ pub fn initialize(allocator: Allocator, comptime _: metrics.RegistryOpts) !*metr
     m.mut = .init;
 
     m.Info = try metrics.CounterVec(u32, AppInfoLabel).Impl
-        .init(allocator, utils.io, "app_info", .{ .help = "Info for app_name, app_version and framework_version." });
-
-    m.Threads = try metrics.GaugeVec(u64, AppThreadsourceLabel).Impl
-        .init(allocator, "app_threads", .{ .help = "Info of overall app threads count." });
-
-    m.MemoryUsage = try metrics.GaugeVec(u64, AppMemoryUsageLabel).Impl
-        .init(allocator, "app_memory_usage", .{ .help = "Info of overall app memory usage." });
-
-    m.MemoryTotal = try metrics.GaugeVec(u64, AppMemoryTotalLabel).Impl
-        .init(allocator, "app_memory_total", .{ .help = "Info of overall app memory total usage." });
-
-    m.ResponseBucket = metric_cap.CapHistogram(metrics.HistogramVec(f64, AppHttpResponseLatencyLabel, &.{ 0.001, 0.003, 0.005, 0.01, 0.02, 0.03, 0.05, 0.1, 0.2, 0.3, 0.5, 0.75, 1, 2, 3, 5, 10, 30 }).Impl).init(
+        .init(
         allocator,
         utils.io,
-        try metrics.HistogramVec(f64, AppHttpResponseLatencyLabel, &.{ 0.001, 0.003, 0.005, 0.01, 0.02, 0.03, 0.05, 0.1, 0.2, 0.3, 0.5, 0.75, 1, 2, 3, 5, 10, 30 }).Impl
-            .init(allocator, utils.io, "app_http_response", .{ .help = "Response time of HTTP requests in seconds." }),
+        "app_info",
+        .{ .help = "Info for app_name, app_version and framework_version." },
+    );
+
+    m.Threads = try metrics.GaugeVec(u64, AppThreadsourceLabel).Impl
+        .init(
+        allocator,
+        "app_threads",
+        .{ .help = "Info of overall app threads count." },
+    );
+
+    m.MemoryUsage = try metrics.GaugeVec(u64, AppMemoryUsageLabel).Impl
+        .init(
+        allocator,
+        "app_memory_usage",
+        .{ .help = "Info of overall app memory usage." },
+    );
+
+    m.MemoryTotal = try metrics.GaugeVec(u64, AppMemoryTotalLabel).Impl
+        .init(
+        allocator,
+        "app_memory_total",
+        .{ .help = "Info of overall app memory total usage." },
+    );
+
+    m.ResponseBucket = metric_cap.CapHistogram(metrics.HistogramVec(
+        f64,
+        AppHttpResponseLatencyLabel,
+        &.{ 0.001, 0.003, 0.005, 0.01, 0.02, 0.03, 0.05, 0.1, 0.2, 0.3, 0.5, 0.75, 1, 2, 3, 5, 10, 30 },
+    ).Impl).init(
+        allocator,
+        utils.io,
+        try metrics.HistogramVec(
+            f64,
+            AppHttpResponseLatencyLabel,
+            &.{ 0.001, 0.003, 0.005, 0.01, 0.02, 0.03, 0.05, 0.1, 0.2, 0.3, 0.5, 0.75, 1, 2, 3, 5, 10, 30 },
+        ).Impl
+            .init(
+            allocator,
+            utils.io,
+            "app_http_response",
+            .{ .help = "Response time of HTTP requests in seconds." },
+        ),
         cap,
     );
 
@@ -407,23 +437,51 @@ pub fn initialize(allocator: Allocator, comptime _: metrics.RegistryOpts) !*metr
         cap,
     );
 
-    m.ServiceResponseBucket = try metrics.HistogramVec(f64, ServiceResponseLabel, &.{ 0.001, 0.003, 0.005, 0.01, 0.02, 0.03, 0.05, 0.1, 0.2, 0.3, 0.5, 0.75, 1, 2, 3, 5, 10, 30 }).Impl
-        .init(allocator, utils.io, "app_http_service_response", .{ .help = "Response time of external service requests in seconds." });
+    m.ServiceResponseBucket = try metrics.HistogramVec(
+        f64,
+        ServiceResponseLabel,
+        &.{ 0.001, 0.003, 0.005, 0.01, 0.02, 0.03, 0.05, 0.1, 0.2, 0.3, 0.5, 0.75, 1, 2, 3, 5, 10, 30 },
+    ).Impl
+        .init(
+        allocator,
+        utils.io,
+        "app_http_service_response",
+        .{ .help = "Response time of external service requests in seconds." },
+    );
 
-    m.SQLBucket = try metrics.HistogramVec(f64, AppSQLStatsLabel, &.{ 0.001, 0.003, 0.005, 0.01, 0.02, 0.03, 0.05, 0.1, 0.2, 0.3, 0.5, 0.75, 1, 2, 3, 5, 10, 30 }).Impl
-        .init(allocator, utils.io, "app_sql_response", .{ .help = "Response time of sql query execution in seconds." });
+    m.SQLBucket = try metrics.HistogramVec(
+        f64,
+        AppSQLStatsLabel,
+        &.{ 0.001, 0.003, 0.005, 0.01, 0.02, 0.03, 0.05, 0.1, 0.2, 0.3, 0.5, 0.75, 1, 2, 3, 5, 10, 30 },
+    ).Impl
+        .init(
+        allocator,
+        utils.io,
+        "app_sql_response",
+        .{ .help = "Response time of sql query execution in seconds." },
+    );
     m.DatasourceResponse = metric_cap.CapHistogram(metrics.HistogramVec(f64, DatasourceLabel, datasourceBuckets).Impl).init(
         allocator,
         utils.io,
         try metrics.HistogramVec(f64, DatasourceLabel, datasourceBuckets).Impl
-            .init(allocator, utils.io, "app_datasource_response", .{ .help = "Datasource operation latency in seconds, by backend/operation/status." }),
+            .init(
+            allocator,
+            utils.io,
+            "app_datasource_response",
+            .{ .help = "Datasource operation latency in seconds, by backend/operation/status." },
+        ),
         cap,
     );
     m.DatasourceErrorTotal = metric_cap.CapCounter(metrics.CounterVec(u64, DatasourceLabel).Impl).init(
         allocator,
         utils.io,
         try metrics.CounterVec(u64, DatasourceLabel).Impl
-            .init(allocator, utils.io, "app_datasource_error_total", .{ .help = "Total datasource operation errors, by backend/operation/status." }),
+            .init(
+            allocator,
+            utils.io,
+            "app_datasource_error_total",
+            .{ .help = "Total datasource operation errors, by backend/operation/status." },
+        ),
         cap,
     );
 
@@ -431,7 +489,12 @@ pub fn initialize(allocator: Allocator, comptime _: metrics.RegistryOpts) !*metr
         allocator,
         utils.io,
         try metrics.CounterVec(u64, PubSubPublisherTotalLabel).Impl
-            .init(allocator, utils.io, "app_pubsub_publish_total_count", .{ .help = "Total pubsub publisher counter per topic" }),
+            .init(
+            allocator,
+            utils.io,
+            "app_pubsub_publish_total_count",
+            .{ .help = "Total pubsub publisher counter per topic" },
+        ),
         cap,
     );
 
@@ -439,7 +502,12 @@ pub fn initialize(allocator: Allocator, comptime _: metrics.RegistryOpts) !*metr
         allocator,
         utils.io,
         try metrics.CounterVec(u64, PubSubPublisherSuccessLabel).Impl
-            .init(allocator, utils.io, "app_pubsub_publish_success_count", .{ .help = "Successful pubsub publisher counter per topic" }),
+            .init(
+            allocator,
+            utils.io,
+            "app_pubsub_publish_success_count",
+            .{ .help = "Successful pubsub publisher counter per topic" },
+        ),
         cap,
     );
 
@@ -447,7 +515,12 @@ pub fn initialize(allocator: Allocator, comptime _: metrics.RegistryOpts) !*metr
         allocator,
         utils.io,
         try metrics.CounterVec(u64, PubSubSubscriberTotalLabel).Impl
-            .init(allocator, utils.io, "app_pubsub_subscriber_total_count", .{ .help = "Total pubsub subscriber counter per topic per consumer group" }),
+            .init(
+            allocator,
+            utils.io,
+            "app_pubsub_subscriber_total_count",
+            .{ .help = "Total pubsub subscriber counter per topic per consumer group" },
+        ),
         cap,
     );
 
@@ -455,25 +528,51 @@ pub fn initialize(allocator: Allocator, comptime _: metrics.RegistryOpts) !*metr
         allocator,
         utils.io,
         try metrics.CounterVec(u64, PubSubSubscriberSuccessLabel).Impl
-            .init(allocator, utils.io, "app_pubsub_subscriber_success_count", .{ .help = "Successful pubsub subscriber counter per topic per consumer group" }),
+            .init(
+            allocator,
+            utils.io,
+            "app_pubsub_subscriber_success_count",
+            .{ .help = "Successful pubsub subscriber counter per topic per consumer group" },
+        ),
         cap,
     );
 
     m.CircuitOpenTotal = try metrics.CounterVec(u64, CircuitOpenLabel).Impl
-        .init(allocator, utils.io, "app_circuit_open_total", .{ .help = "Total circuit-breaker open events by downstream name." });
+        .init(
+        allocator,
+        utils.io,
+        "app_circuit_open_total",
+        .{ .help = "Total circuit-breaker open events by downstream name." },
+    );
 
     m.PubSubDLQTotal = metric_cap.CapCounter(metrics.CounterVec(u64, PubSubDLQLabel).Impl).init(
         allocator,
         utils.io,
         try metrics.CounterVec(u64, PubSubDLQLabel).Impl
-            .init(allocator, utils.io, "app_pubsub_dlq_total", .{ .help = "Total dead-lettered messages per topic per consumer." }),
+            .init(
+            allocator,
+            utils.io,
+            "app_pubsub_dlq_total",
+            .{ .help = "Total dead-lettered messages per topic per consumer." },
+        ),
         cap,
     );
 
     m.GraphQLOperationTotal = try metrics.CounterVec(u64, GraphQLOperationLabel).Impl
-        .init(allocator, utils.io, "app_graphql_operation_total", .{ .help = "Total GraphQL operations by operation/kind/status." });
+        .init(
+        allocator,
+        utils.io,
+        "app_graphql_operation_total",
+        .{ .help = "Total GraphQL operations by operation/kind/status." },
+    );
+
     m.GraphQLOperationLatency = try metrics.HistogramVec(f64, GraphQLOperationLabel, datasourceBuckets).Impl
-        .init(allocator, utils.io, "app_graphql_operation_latency_seconds", .{ .help = "GraphQL operation latency in seconds by operation/kind/status." });
+        .init(
+        allocator,
+        utils.io,
+        "app_graphql_operation_latency_seconds",
+        .{ .help = "GraphQL operation latency in seconds by operation/kind/status." },
+    );
 
     m.custom = std.array_list.Managed(CustomMetric).init(allocator);
 

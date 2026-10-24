@@ -7,7 +7,7 @@ const std = @import("std");
 // Also hosted here: the HTTP-mock-backed datasource tests (ClickHouse,
 // Couchbase, InfluxDB) and the `FakeServer` self-test. They drive the
 // `zul` client over loopback through `FakeServer`. Verified under kcov 43 with
-// the `.use_llvm` unit-test build (2026-10-23): a FakeServer loopback test and
+// the `.use_llvm` unit-test build: a FakeServer loopback test and
 // a `sqlitez.Db.init` test both pass the traced run, so the older "aborts under
 // kcov's ptrace" claim no longer holds for this toolchain. These stay in this
 // non-coverage build because they bind real native libraries / extra server

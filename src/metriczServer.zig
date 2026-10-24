@@ -58,6 +58,7 @@ fn metrics(_: *httpz.Request, res: *httpz.Response) !void {
         // the metrics endpoint doesn't accumulate unbounded kernel pages.
         var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
         defer arena.deinit();
+
         try mz.writeRaw(arena.allocator(), res.writer());
     }
 }

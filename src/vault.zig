@@ -60,26 +60,44 @@ fn appRoleLogin(allocator: std.mem.Allocator, io: std.Io, addr: []const u8, role
 
     var client = zul.http.Client.init(io, allocator);
     defer client.deinit();
+
     var req = try client.allocRequest(allocator, url);
     defer req.deinit();
     req.method = .POST;
 
-    const body = try std.fmt.allocPrint(allocator, "{{\"role_id\":\"{s}\",\"secret_id\":\"{s}\"}}", .{ role_id, secret_id });
+    const body = try std.fmt.allocPrint(
+        allocator,
+        "{{\"role_id\":\"{s}\",\"secret_id\":\"{s}\"}}",
+        .{ role_id, secret_id },
+    );
     defer allocator.free(body);
     req.body(body);
 
     var res = try req.getResponse(.{});
-    if (res.status != 200) return error.VaultLoginFailed;
+    if (res.status != 200) {
+        return error.VaultLoginFailed;
+    }
 
     var sb = try res.allocBody(allocator, .{ .max_size = 1 << 20 });
     defer sb.deinit();
-    const parsed = std.json.parseFromSlice(std.json.Value, allocator, sb.string(), .{ .ignore_unknown_fields = true }) catch return error.VaultLoginFailed;
+
+    const parsed = std.json.parseFromSlice(
+        std.json.Value,
+        allocator,
+        sb.string(),
+        .{ .ignore_unknown_fields = true },
+    ) catch return error.VaultLoginFailed;
     defer parsed.deinit();
 
     const auth = parsed.value.object.get("auth") orelse return error.VaultLoginFailed;
-    if (auth != .object) return error.VaultLoginFailed;
+    if (auth != .object) {
+        return error.VaultLoginFailed;
+    }
+
     const token_v = auth.object.get("client_token") orelse return error.VaultLoginFailed;
-    if (token_v != .string) return error.VaultLoginFailed;
+    if (token_v != .string) {
+        return error.VaultLoginFailed;
+    }
 
     return allocator.dupe(u8, token_v.string);
 }
@@ -100,7 +118,12 @@ fn fetchAndMerge(allocator: std.mem.Allocator, io: std.Io, config: *root.config,
 
     var sb = try res.allocBody(allocator, .{ .max_size = 1 << 20 });
     defer sb.deinit();
-    const parsed = std.json.parseFromSlice(std.json.Value, allocator, sb.string(), .{ .ignore_unknown_fields = true }) catch return error.VaultFetchFailed;
+    const parsed = std.json.parseFromSlice(
+        std.json.Value,
+        allocator,
+        sb.string(),
+        .{ .ignore_unknown_fields = true },
+    ) catch return error.VaultFetchFailed;
     defer parsed.deinit();
 
     const secret_obj = extractSecretObject(parsed.value) orelse return error.VaultFetchFailed;

@@ -9,8 +9,7 @@ const utils = root.utils;
 /// serialization, concurrent requests would interleave their RESP frames on the
 /// socket and corrupt the stream. A mutex makes every command a full
 /// request/response round-trip, so the shared connection is safe to use from the
-/// worker pool. (A connection pool is the higher-throughput follow-up — see
-/// ZIG_LEARNINGS.md.)
+/// worker pool. (A connection pool is the higher-throughput follow-up)
 pub const KVRedis = struct {
     client: rediz.Client,
 

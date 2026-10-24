@@ -361,6 +361,7 @@ pub const Context = struct {
     pub fn File(self: *Context, path: []const u8) !void {
         const file = try std.Io.Dir.cwd().openFile(self.io, path, .{});
         defer file.close(self.io);
+
         var rbuf: [8192]u8 = undefined;
         var reader = file.reader(self.io, &rbuf);
         const data = try reader.interface.allocRemainingAlignedSentinel(
@@ -370,6 +371,7 @@ pub const Context = struct {
             null,
         );
         self.response.header("content-type", mimeForPath(path));
+
         const name = std.fs.path.basename(path);
         const disp = try std.fmt.allocPrint(
             self.allocator,
@@ -378,6 +380,7 @@ pub const Context = struct {
         );
         self.response.header("content-disposition", disp);
         self.response.setStatus(.ok);
+
         // Write the body through the response writer (not `response.body`): the
         // returned slice is request-arena owned and would be freed before httpz
         // flushes `response.body` to the socket.

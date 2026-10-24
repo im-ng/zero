@@ -40,12 +40,23 @@ fn ExecCtx(comptime Ctx: type) type {
     };
 }
 
-pub fn handle(ctx: anytype, comptime Query: type, comptime Mutation: ?type, query_root: *const Query, mutation_root: ?*const anyopaque) !void {
+pub fn handle(
+    ctx: anytype,
+    comptime Query: type,
+    comptime Mutation: ?type,
+    query_root: *const Query,
+    mutation_root: ?*const anyopaque,
+) !void {
     const start = utils.nowMonotonic();
     const body = ctx.request.?.body() orelse "";
     var req: GraphQLRequest = .{};
     if (body.len > 0) {
-        req = std.json.parseFromSliceLeaky(GraphQLRequest, ctx.allocator, body, .{ .ignore_unknown_fields = true }) catch blk: {
+        req = std.json.parseFromSliceLeaky(
+            GraphQLRequest,
+            ctx.allocator,
+            body,
+            .{ .ignore_unknown_fields = true },
+        ) catch blk: {
             break :blk try readFromQueryString(ctx);
         };
     } else {
@@ -88,6 +99,7 @@ pub fn handle(ctx: anytype, comptime Query: type, comptime Mutation: ?type, quer
         try ctx.container.metricz.graphqlOperation(.{ .operation = op_name, .kind = op_kind, .status = "error" }, utils.elapsedSeconds(start));
         ctx.response.setStatus(.bad_request);
         ctx.response.header("content-type", "application/json");
+
         try ctx.response.json(.{ .errors = .{.{ .message = "no mutation root configured" }} }, .{});
         return;
     }
@@ -120,13 +132,18 @@ pub fn handle(ctx: anytype, comptime Query: type, comptime Mutation: ?type, quer
         try ctx.container.metricz.graphqlOperation(.{ .operation = op_name, .kind = op_kind, .status = "error" }, utils.elapsedSeconds(start));
         ctx.response.setStatus(.internal_server_error);
         ctx.response.header("content-type", "application/json");
+
         var err_arr = std.json.Array.init(ctx.allocator);
         var o = std.json.ObjectMap.empty;
+
         try o.put(ctx.allocator, "message", .{ .string = "Internal server error" });
         try err_arr.append(std.json.Value{ .object = o });
+
         var out = std.json.ObjectMap.empty;
         try out.put(ctx.allocator, "errors", std.json.Value{ .array = err_arr });
+
         try ctx.response.json(std.json.Value{ .object = out }, .{});
+
         return;
     };
 
@@ -139,6 +156,7 @@ pub fn handle(ctx: anytype, comptime Query: type, comptime Mutation: ?type, quer
             try o.put(ctx.allocator, "message", .{ .string = e.message });
             try err_arr.append(std.json.Value{ .object = o });
         }
+
         try out.put(ctx.allocator, "errors", std.json.Value{ .array = err_arr });
     }
 
@@ -229,9 +247,13 @@ fn dispatch(comptime T: type, root: *const anyopaque, ss: ast.SelectionSetNode, 
 fn resolve(comptime T: type, instance: T, ss: ast.SelectionSetNode, ec: anytype) !std.json.Value {
     // Bound recursion depth before descending into nested selection sets.
     if (ec.depth >= max_query_depth) {
-        try ec.errors.append(.{ .message = try std.fmt.allocPrint(ec.alloc, "query exceeds maximum depth of {d}", .{max_query_depth}) });
+        try ec.errors.append(
+            .{ .message = try std.fmt.allocPrint(ec.alloc, "query exceeds maximum depth of {d}", .{max_query_depth}) },
+        );
+
         return .{ .object = std.json.ObjectMap.empty };
     }
+
     ec.depth += 1;
     var obj = std.json.ObjectMap.empty;
 
@@ -497,15 +519,20 @@ fn parseFloatT(comptime T: type, s: []const u8) !T {
 }
 
 fn stringToT(comptime T: type, s: []const u8) !T {
-    if (T == []const u8) return s;
+    if (T == []const u8) {
+        return s;
+    }
 
-    if (@typeInfo(T) == .optional and @typeInfo(T).optional.child == []const u8) return s;
+    if (@typeInfo(T) == .optional and @typeInfo(T).optional.child == []const u8) {
+        return s;
+    }
 
     if (@typeInfo(T) == .@"enum") return std.meta.stringToEnum(T, s) orelse error.TypeMismatch;
 
     if (@typeInfo(T) == .optional and @typeInfo(T).optional.child == .@"enum") {
         return std.meta.stringToEnum(@typeInfo(T).optional.child, s) orelse error.TypeMismatch;
     }
+
     return error.TypeMismatch;
 }
 

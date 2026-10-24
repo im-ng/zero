@@ -23,7 +23,7 @@ pub const ErrData = struct {
 /// this every uncaught error collapses to 500; the `HttpError` taxonomy exists
 /// precisely so 4xx-class client errors (bad/missing params, not-found,
 /// conflict) are reported as such instead of masquerading as a server fault
-/// (audit #28). Server-side faults and anything unmapped stay 500.
+/// Server-side faults and anything unmapped stay 500.
 pub fn statusForError(err: anyerror) std.http.Status {
     return switch (err) {
         error.InvalidParam, error.MissingParam => .bad_request,

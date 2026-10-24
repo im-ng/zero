@@ -103,7 +103,11 @@ pub const Client = struct {
             // back off instead of hammering a downstream that is flapping.
             if (self.breaker) |*b| {
                 b.before() catch {
-                    std.Io.sleep(self.ctx.io, std.Io.Duration.fromSeconds(@intCast(nextBackoff(backoff))), .awake) catch {};
+                    std.Io.sleep(
+                        self.ctx.io,
+                        std.Io.Duration.fromSeconds(@intCast(nextBackoff(backoff))),
+                        .awake,
+                    ) catch {};
                     backoff = nextBackoff(backoff);
                     continue;
                 };
@@ -129,6 +133,7 @@ pub const Client = struct {
                     hdr.appendSlice(self.allocator, term) catch return;
                 }
             }
+
             if (self.auth) |a| {
                 if (a.mode == .oauth) {
                     const cfg = a.oauth orelse {
@@ -181,6 +186,7 @@ pub const Client = struct {
                 backoff = nextBackoff(backoff);
                 continue;
             };
+
             conn.handshake(self.path, .{ .headers = headers_arg }) catch |e| {
                 conn.deinit();
                 // Surface handshake failures so a dead/unreachable endpoint is
@@ -191,9 +197,11 @@ pub const Client = struct {
                 continue;
             };
 
-            if (self.breaker) |*b| b.recordSuccess();
-
+            if (self.breaker) |*b| {
+                b.recordSuccess();
+            }
             std.log.info("websocket connected to {s}{s}", .{ self.host, self.path });
+
             self.conn = conn;
             if (self.on_open) |o| {
                 // A failed subscribe/login should not tear down the live connection.
@@ -201,6 +209,7 @@ pub const Client = struct {
             }
 
             const c = &self.conn.?;
+
             // Best-effort read timeout; a failure here only means reads block longer.
             c.readTimeout(1000) catch {};
             while (!self.shutdown.load(.monotonic)) {
@@ -228,9 +237,16 @@ pub const Client = struct {
                 cc.deinit();
             }
             self.conn = null;
+
             // A dropped/closed connection counts as a failure for the breaker.
-            if (self.breaker) |*b| b.recordFailure();
-            if (self.shutdown.load(.monotonic)) break;
+            if (self.breaker) |*b| {
+                b.recordFailure();
+            }
+
+            if (self.shutdown.load(.monotonic)) {
+                break;
+            }
+
             backoff = nextBackoff(backoff);
         }
     }
@@ -298,6 +314,7 @@ pub fn connect(
         allocator.destroy(self);
         return e;
     };
+
     return self;
 }
 
@@ -312,6 +329,7 @@ const UrlParts = struct { host: []const u8, port: u16, tls: bool, path: []const 
 fn parseUrl(url: []const u8) !UrlParts {
     var rest = url;
     var tls = false;
+
     if (std.mem.startsWith(u8, rest, "wss://")) {
         tls = true;
         rest = rest[6..];
@@ -320,14 +338,22 @@ fn parseUrl(url: []const u8) !UrlParts {
     } else {
         return error.InvalidWebSocketUrl;
     }
+
     const slash = std.mem.indexOfScalar(u8, rest, '/') orelse rest.len;
     const authority = rest[0..slash];
     const path = if (slash < rest.len) rest[slash..] else "/";
     var port: u16 = if (tls) 443 else 80;
     var host = authority;
+
     if (std.mem.indexOfScalar(u8, authority, ':')) |colon| {
         host = authority[0..colon];
         port = std.fmt.parseUnsigned(u16, authority[colon + 1 ..], 10) catch return error.InvalidWebSocketUrl;
     }
-    return .{ .host = host, .port = port, .tls = tls, .path = path };
+
+    return .{
+        .host = host,
+        .port = port,
+        .tls = tls,
+        .path = path,
+    };
 }

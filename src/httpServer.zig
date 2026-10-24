@@ -87,12 +87,22 @@ pub fn create(allocator: std.mem.Allocator, container: *root.container) !*server
     // --- Event-loop workers (I/O only: accept/parse/write) -------------------
     // Scale to CPU cores. Your route/handler code does NOT run here; it runs on
     // the separate `thread_pool` (see below). Override via ZERO_HTTP_WORKERS.
-    const workers_count: u16 = configIntOr(u16, hzs.container, "ZERO_HTTP_WORKERS", constants.DEFAULT_HTTP_WORKERS);
+    const workers_count: u16 = configIntOr(
+        u16,
+        hzs.container,
+        "ZERO_HTTP_WORKERS",
+        constants.DEFAULT_HTTP_WORKERS,
+    );
 
     // --- Max request body ----------------------------------------------------
     // Hard ceiling; a body larger than this is rejected with 413 (BodyTooBig).
     // Override via ZERO_HTTP_MAX_BODY_SIZE (bytes).
-    const max_body_size: usize = configIntOr(usize, hzs.container, "ZERO_HTTP_MAX_BODY_SIZE", constants.DEFAULT_HTTP_MAX_BODY_SIZE_BYTES);
+    const max_body_size: usize = configIntOr(
+        usize,
+        hzs.container,
+        "ZERO_HTTP_MAX_BODY_SIZE",
+        constants.DEFAULT_HTTP_MAX_BODY_SIZE_BYTES,
+    );
 
     // --- Body-buffer pool (per event-loop worker, eagerly allocated) ---------
     // httpz pre-allocates `large_buffer_count` buffers of `large_buffer_size`
@@ -101,14 +111,27 @@ pub fn create(allocator: std.mem.Allocator, container: *root.container) !*server
     // pooled buffer (no per-request arena fallback). Bodies larger than the
     // pooled buffer still grow on the per-request arena and free at request end.
     // Override via ZERO_HTTP_LARGE_BUFFER_SIZE / ZERO_HTTP_LARGE_BUFFER_COUNT.
-    const large_buffer_size: u32 = configIntOr(u32, hzs.container, "ZERO_HTTP_LARGE_BUFFER_SIZE", @as(u32, @intCast(max_body_size)));
-    const large_buffer_count: u16 = configIntOr(u16, hzs.container, "ZERO_HTTP_LARGE_BUFFER_COUNT", constants.DEFAULT_HTTP_LARGE_BUFFER_COUNT);
+    const large_buffer_size: u32 = configIntOr(u32, hzs.container, "ZERO_HTTP_LARGE_BUFFER_SIZE", @as(
+        u32,
+        @intCast(max_body_size),
+    ));
+    const large_buffer_count: u16 = configIntOr(
+        u16,
+        hzs.container,
+        "ZERO_HTTP_LARGE_BUFFER_COUNT",
+        constants.DEFAULT_HTTP_LARGE_BUFFER_COUNT,
+    );
 
     // --- Handler thread pool (runs your route code) --------------------------
     // Separate from the I/O event-loop workers above. Keep generous: handlers
     // block on DB/Redis, so more threads hide that latency. Override via
     // ZERO_HTTP_THREAD_POOL_COUNT.
-    const thread_pool_count: u16 = configIntOr(u16, hzs.container, "ZERO_HTTP_THREAD_POOL_COUNT", constants.DEFAULT_HTTP_THREAD_POOL_COUNT);
+    const thread_pool_count: u16 = configIntOr(
+        u16,
+        hzs.container,
+        "ZERO_HTTP_THREAD_POOL_COUNT",
+        constants.DEFAULT_HTTP_THREAD_POOL_COUNT,
+    );
 
     hzs.http = try httpz.Server(*root.handler.Handler).init(
         container.io,
@@ -124,7 +147,9 @@ pub fn create(allocator: std.mem.Allocator, container: *root.container) !*server
                 .large_buffer_size = large_buffer_size,
                 .large_buffer_count = large_buffer_count,
             },
-            .thread_pool = .{ .count = thread_pool_count },
+            .thread_pool = .{
+                .count = thread_pool_count,
+            },
             .timeout = .{
                 .request = request_timeout_s,
                 .keepalive = keepalive_timeout_s,
@@ -363,7 +388,10 @@ fn loadAuthProviderConfig(self: *Self) anyerror!?*authProvider {
 /// sane default (1024); an explicit `0` opts out (unlimited).
 fn parseMaxConcurrent(config: *root.config) u32 {
     const raw = config.getOrDefault("INBOUND_MAX_CONCURRENT", "");
-    if (raw.len == 0) return constants.DEFAULT_INBOUND_MAX_CONCURRENT;
+    if (raw.len == 0) {
+        return constants.DEFAULT_INBOUND_MAX_CONCURRENT;
+    }
+
     return std.fmt.parseInt(u32, raw, 10) catch constants.DEFAULT_INBOUND_MAX_CONCURRENT;
 }
 
