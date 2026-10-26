@@ -2,7 +2,7 @@ const std = @import("std");
 
 // Update this version on every tagged release
 // TODO: Inject this through build step
-pub const FRAMEWORK_VERSION = "0.5.3";
+pub const FRAMEWORK_VERSION = "0.5.4";
 
 pub const APP_ENVIRONMENT = "APP_ENV";
 pub const APP_NAME = "APP_NAME";
