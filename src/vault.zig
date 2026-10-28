@@ -182,24 +182,18 @@ fn fetchOne(allocator: std.mem.Allocator, io: std.Io, config: *root.config, log:
     }
 
     var obj_it = secret_obj.object.iterator();
-    // Lazily create the owned secret map so it only exists (and is only ever
-    // consulted via config.get) once it holds at least one entry. This keeps the
-    // map non-empty, avoiding the sentinel-pointer crash of get() on an empty
-    // map. It is freed in config.deinit.
-    if (config.vault_overrides == null) {
-        config.vault_overrides = std.process.Environ.Map.init(allocator);
-    }
-    const secrets = &config.vault_overrides.?;
+    // Merge each secret key/value into the process-global environ map, exactly
+    // like dotenv's .env injection. Duplicate with the map's own allocator so the
+    // entries live for the process lifetime and are not tracked by the app's
+    // DebugAllocator (the global environ map is never freed by design, matching
+    // dotenv). Vault runs before datasources are wired, so these override any
+    // .env value already present for the same key.
     while (obj_it.next()) |kv| {
         if (kv.value_ptr.* != .string) continue;
-        // Store into the owned vault_overrides map (freed in config.deinit) rather
-        // than the process-global environ map, so these secret entries never leak
-        // from the DebugAllocator shutdown scan. Vault is authoritative at startup,
-        // and config.get consults vault_overrides before the file/env values.
-        const env_alloc = secrets.allocator;
+        const env_alloc = config.environments.allocator;
         const key = try env_alloc.dupe(u8, kv.key_ptr.*);
         const value = try env_alloc.dupe(u8, kv.value_ptr.*.string);
-        try secrets.put(key, value);
+        try config.environments.put(key, value);
     }
 
     var buf: [256]u8 = undefined;

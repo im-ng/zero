@@ -27,9 +27,6 @@ pub fn main(init: std.process.Init) !void {
     const allocator = gpa.allocator();
 
     const app = try App.new(allocator, init.io, init.environ_map);
-    // Deinit at exit so config.deinit frees the Vault-injected secret map and the
-    // DebugAllocator shutdown scan reports no leaks.
-    defer app.deinit();
 
     // Run the per-dialect migrations. Only the migration whose `.dialect` matches
     // the active DB_DIALECT is applied; the rest are skipped.
