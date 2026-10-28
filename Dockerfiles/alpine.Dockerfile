@@ -1,3 +1,7 @@
+# Image for github CI pipeline
+# Bump zig versions when needed and publish
+# docker build -f Dockerfiles/alpine.Dockerfile -t docker.io/imng/zero-kcov:0.3.5 .
+# docker push imng/zero-kcov:0.3.5
 FROM alpine:latest as builder
 
 LABEL maintainer="im-ng"
