@@ -72,13 +72,13 @@
             .url = "git+https://github.com/Arwalk/zig-protobuf#b407c70b3a9820858ed5bdc099ecb050239beb7f",
             .hash = "protobuf-7.0.0-0e82aq_HNADI3q-YiXTdGCf4kNpw7RA63vwUy-azsEmH",
         },
-        .opentelemetry = .{
-            .url = "git+https://github.com/im-ng/opentelemetry-zig#84c11f10af3de5f36fbc1bf707b2b957ceb470f1",
-            .hash = "opentelemetry-0.0.2-U_uKJ8xVIwClnG6g3jeRamSjGPPNSK97xuoCwD_yTceX",
-        },
         .regexp = .{
             .url = "git+https://github.com/tiehuis/zig-regex#094c99b59f96a96e6601e5a84b004cb0e449d97f",
             .hash = "regex-0.1.3-axC357HaAQBlr71qICC02_IwKLZGsa8ee024_rST304b",
+        },
+        .opentelemetry = .{
+            .url = "git+https://github.com/im-ng/opentelemetry-zig#2037ed6818603c87b42c601bc10064944bee15af",
+            .hash = "opentelemetry-0.0.2-U_uKJ8xVIwA5heLAAT_Z860vcCiv-yggjWnAgDxzCm3I",
         },
     },
     .paths = .{
