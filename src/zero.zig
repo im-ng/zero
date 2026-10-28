@@ -18,7 +18,9 @@ pub const natslib = @import("nats");
 pub const graphql = @import("graphql");
 pub const gql = @import("graphql.zig");
 
-pub const rdkafka = @import("cimport.zig").librdkafka;
+// C declarations are generated at build time (translate-c Translator) and
+// exposed directly at the module root, C names unwrapped.
+pub const rdkafka = @import("cimport");
 pub const sqlitez = @import("sqlite");
 
 pub const protobuf = @import("protobuf");

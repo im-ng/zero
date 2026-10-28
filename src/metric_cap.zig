@@ -24,8 +24,8 @@ fn hashLabels(labels: anytype) u64 {
     if (ti != .@"struct") {
         @compileError("metric cap labels must be a struct, got: " ++ @typeName(@TypeOf(labels)));
     }
-    inline for (ti.@"struct".fields) |f| {
-        hashValue(&hasher, @field(labels, f.name));
+    inline for (ti.@"struct".field_names, ti.@"struct".field_types, ti.@"struct".field_attrs) |f_name, _, _| {
+        hashValue(&hasher, @field(labels, f_name));
     }
     return hasher.final();
 }
@@ -34,7 +34,7 @@ fn hashValue(hasher: *std.hash.Wyhash, v: anytype) void {
     const ti = @typeInfo(@TypeOf(v));
     switch (ti) {
         .int, .float => hasher.update(std.mem.asBytes(&v)),
-        .@"enum" => hasher.update(std.mem.asBytes(&@intFromEnum(v))),
+        .@"enum" => hasher.update(std.mem.asBytes(&@backingInt(v))),
         .pointer => |p| if (p.size == .slice) {
             hasher.update(std.mem.sliceAsBytes(v));
         } else {

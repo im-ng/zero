@@ -210,7 +210,7 @@ test "authz blocks request when api key header is missing" {
     try az.execute(ht.req, ht.res, MockExecutor{ .next_called = &next_called });
 
     try std.testing.expect(next_called == false);
-    try std.testing.expect(ht.res.status == @intFromEnum(std.http.Status.unauthorized));
+    try std.testing.expect(ht.res.status == @backingInt(std.http.Status.unauthorized));
 }
 
 test "authz blocks request when api key is invalid" {
@@ -234,7 +234,7 @@ test "authz blocks request when api key is invalid" {
     try az.execute(ht.req, ht.res, MockExecutor{ .next_called = &next_called });
 
     try std.testing.expect(next_called == false);
-    try std.testing.expect(ht.res.status == @intFromEnum(std.http.Status.unauthorized));
+    try std.testing.expect(ht.res.status == @backingInt(std.http.Status.unauthorized));
 }
 
 test "authz proceeds to next when api key is valid" {
@@ -258,7 +258,7 @@ test "authz proceeds to next when api key is valid" {
     try az.execute(ht.req, ht.res, MockExecutor{ .next_called = &next_called });
 
     try std.testing.expect(next_called == true);
-    try std.testing.expect(ht.res.status == @intFromEnum(std.http.Status.ok));
+    try std.testing.expect(ht.res.status == @backingInt(std.http.Status.ok));
 }
 
 test "authz bypasses well-known paths without auth" {
@@ -310,7 +310,7 @@ test "authz blocks request when basic credentials are wrong" {
     // The wrong password returns `InvalidCredentials`, which must deny — not fall
     // through to the next middleware (the pre-fix auth bypass).
     try std.testing.expect(next_called == false);
-    try std.testing.expect(ht.res.status == @intFromEnum(std.http.Status.unauthorized));
+    try std.testing.expect(ht.res.status == @backingInt(std.http.Status.unauthorized));
 }
 
 test "authz proceeds when no provider is configured" {

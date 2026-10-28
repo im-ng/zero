@@ -19,7 +19,6 @@ fn panic(_: []const u8, _: ?*std.builtin.StackTrace, _: ?usize) noreturn {
 }
 
 pub fn main(init: std.process.Init) !void {
-
     var gpa: std.heap.DebugAllocator(.{}) = .init;
     const allocator = gpa.allocator();
     _ = gpa.detectLeaks();

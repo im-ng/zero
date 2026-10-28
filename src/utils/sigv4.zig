@@ -170,7 +170,7 @@ pub fn encodePath(allocator: std.mem.Allocator, path: []const u8) ![]const u8 {
 // ===================== Tests =====================
 
 test "sigv4: hmac-sha256 (RFC 4231 case 2)" {
-    const key = [_]u8{0x0b} ** 20;
+    const key = @as([20]u8, @splat(0x0b));
     const data = "Hi There";
     const got = hmacSha256(&key, data);
     var got_hex: [64]u8 = undefined;

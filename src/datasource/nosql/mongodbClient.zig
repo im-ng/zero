@@ -359,7 +359,7 @@ pub const Connection = struct {
         std.mem.writeInt(u32, header[12..16], 2013, .little); // OP_MSG
         try writer.writeAll(&header);
 
-        var flag_bits: [4]u8 = .{0} ** 4; // flagBits = 0, no checksum
+        var flag_bits: [4]u8 = @splat(0); // flagBits = 0, no checksum
         try writer.writeAll(&flag_bits);
         var kind: [1]u8 = .{0}; // section kind 0 (body)
         try writer.writeAll(&kind);

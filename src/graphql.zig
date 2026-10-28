@@ -263,19 +263,19 @@ fn resolve(comptime T: type, instance: T, ss: ast.SelectionSetNode, ec: anytype)
                 const name = f.name.value;
                 const key = if (f.alias) |a| a.value else name;
                 var matched: bool = false;
-                inline for (@typeInfo(T).@"struct".fields) |field| {
-                    if (std.mem.eql(u8, field.name, name)) {
+                inline for (@typeInfo(T).@"struct".field_names, @typeInfo(T).@"struct".field_types, @typeInfo(T).@"struct".field_attrs) |field_name, field_type, _| {
+                    if (std.mem.eql(u8, field_name, name)) {
                         matched = true;
-                        const FT = field.type;
+                        const FT = field_type;
                         const ft_info = @typeInfo(FT);
                         const is_resolver = ft_info == .pointer and @typeInfo(ft_info.pointer.child) == .@"fn";
                         if (is_resolver) {
                             const FnT = ft_info.pointer.child;
-                            const Args = @typeInfo(FnT).@"fn".params[1].type orelse
-                                @compileError("resolver '" ++ field.name ++ "' must take an args struct");
+                            const Args = @typeInfo(FnT).@"fn".param_types[1] orelse
+                                @compileError("resolver '" ++ field_name ++ "' must take an args struct");
                             const args_res = coerceArguments(f.arguments, Args, ec);
                             if (args_res) |args| {
-                                const ret_res = @call(.auto, @field(instance, field.name), .{ ec.ctx, args });
+                                const ret_res = @call(.auto, @field(instance, field_name), .{ ec.ctx, args });
                                 if (ret_res) |ret| {
                                     try obj.put(ec.alloc, key, try resolveValue(ret, f.selection_set, ec));
                                 } else |_| {
@@ -287,7 +287,7 @@ fn resolve(comptime T: type, instance: T, ss: ast.SelectionSetNode, ec: anytype)
                                 try obj.put(ec.alloc, key, .null);
                             }
                         } else {
-                            const val = @field(instance, field.name);
+                            const val = @field(instance, field_name);
                             try obj.put(ec.alloc, key, try resolveValue(val, f.selection_set, ec));
                         }
                     }
@@ -470,10 +470,10 @@ fn coerceArguments(
     if (Args == void) return {};
     var args: Args = std.mem.zeroes(Args);
     if (arguments) |args_nodes| {
-        inline for (@typeInfo(Args).@"struct".fields) |af| {
+        inline for (@typeInfo(Args).@"struct".field_names, @typeInfo(Args).@"struct".field_types, @typeInfo(Args).@"struct".field_attrs) |af_name, af_type, _| {
             for (args_nodes) |an| {
-                if (std.mem.eql(u8, an.name.value, af.name)) {
-                    @field(args, af.name) = try coerceValue(an.value, af.type, ec);
+                if (std.mem.eql(u8, an.name.value, af_name)) {
+                    @field(args, af_name) = try coerceValue(an.value, af_type, ec);
                     break;
                 }
             }

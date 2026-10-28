@@ -47,7 +47,7 @@ const BucketUpperNs = [_]u64{
 };
 
 const Histogram = struct {
-    counts: [BucketUpperNs.len]u64 = [_]u64{0} ** BucketUpperNs.len,
+    counts: [BucketUpperNs.len]u64 = @as([BucketUpperNs.len]u64, @splat(0)),
     total: u64 = 0,
     sum_ns: u64 = 0,
     min_ns: u64 = std.math.maxInt(u64),

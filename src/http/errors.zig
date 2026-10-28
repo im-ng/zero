@@ -180,7 +180,7 @@ test "classifyHttpStatus maps status to ErrorKind" {
 
 test "DataSourceError from lastError carries ErrorKind tag" {
     const snapshot: ?DataSourceError = .{ .status = 503, .code = @tagName(ErrorKind.upstream), .message = "" };
-    try std.testing.expectEqual(ErrorKind.upstream, @as(ErrorKind, @enumFromInt(@intFromEnum(ErrorKind.upstream))));
+    try std.testing.expectEqual(ErrorKind.upstream, @as(ErrorKind, @fromBackingInt(@intCast(@backingInt(ErrorKind.upstream)))));
     try std.testing.expectEqual(@as(u16, 503), snapshot.?.status);
     try std.testing.expectEqualStrings("upstream", snapshot.?.code);
 }
