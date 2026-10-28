@@ -16,6 +16,13 @@ const defaultFile = "./configs/.env";
 // const defaultFile = "/media/ng/home/zig-self-learning/zero/examples/zero-sqlite/configs/.env";
 
 environments: *std.process.Environ.Map,
+/// Secrets injected by the Vault loader at startup. Owned by this config and
+/// freed in `deinit`, so they never leak from the process-global `environments`
+/// map (which is intentionally never freed and would otherwise trip the
+/// DebugAllocator shutdown scan). Vault values take precedence over file/env.
+/// `null` until the Vault loader populates at least one secret, so `get` is
+/// never called on an empty map (which would dereference a sentinel pointer).
+vault_overrides: ?std.process.Environ.Map = null,
 allocator: std.mem.Allocator,
 log: *root.logger,
 loadMessage: []const u8 = undefined,
@@ -40,6 +47,8 @@ pub fn create(self: Self) !*config {
 /// Frees the `config` struct. The wrapped `environments` map is the process-global
 /// `std.process.environ` and is not owned here, so only the struct itself is freed.
 pub fn deinit(self: *Self) void {
+    // Free Vault-injected secrets (owned here) before dropping the struct.
+    if (self.vault_overrides) |*vo| vo.deinit();
     self.allocator.free(self.loadMessage);
 
     self.allocator.destroy(self);
@@ -149,10 +158,24 @@ pub fn getEnvironSubset(self: *Self, allocator: std.mem.Allocator, prefix: []con
             try out.put(kv.key_ptr.*, kv.value_ptr.*);
         }
     }
+    // Include Vault-injected secrets so callers see the same values the rest of
+    // the app does.
+    if (self.vault_overrides) |vo| {
+        var vit = vo.iterator();
+        while (vit.next()) |kv| {
+            if (std.mem.startsWith(u8, kv.key_ptr.*, prefix)) {
+                try out.put(kv.key_ptr.*, kv.value_ptr.*);
+            }
+        }
+    }
     return out;
 }
 
 pub fn getOrDefault(self: *Self, key: []const u8, default: []const u8) []const u8 {
+    // Vault-injected secrets override file/env values.
+    if (self.vault_overrides) |vo| {
+        if (vo.get(key)) |v| return v;
+    }
     const value = if (builtin.is_test)
         std.testing.environ.getPosix(key)
     else

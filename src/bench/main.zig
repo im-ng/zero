@@ -179,7 +179,13 @@ fn fire(client: *zul.http.Client, req: Req) bool {
     // Optional response content-type assertion (e.g. JSON vs HTML health check).
     if (req.expect_ct) |want| {
         const got_ct = res.header("content-type") orelse "";
-        if (std.ascii.indexOfIgnoreCase(got_ct, want) == null) {
+        const got_lower = std.ascii.allocLowerString(std.heap.page_allocator, got_ct) catch "";
+        const want_lower = std.ascii.allocLowerString(std.heap.page_allocator, want) catch "";
+        defer {
+            if (got_lower.len > 0) std.heap.page_allocator.free(got_lower);
+            if (want_lower.len > 0) std.heap.page_allocator.free(want_lower);
+        }
+        if (std.mem.indexOf(u8, got_lower, want_lower) == null) {
             if (!first_ct_printed.swap(true, .monotonic)) {
                 std.debug.print("content-type mismatch: expected '{s}', got '{s}' (url={s})\n", .{ want, got_ct, req.url });
             }

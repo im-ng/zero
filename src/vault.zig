@@ -10,11 +10,19 @@ const zul = @import("zul");
 /// into the process environment. Subsequent datasource wiring (`DB_*`, `REDIS_*`,
 /// ...) then reads credentials that never lived in a file or image. Secret
 /// values are never logged.
+///
+/// KV v2 nests secrets under `mount/data/path`; KV v1 under `mount/path`. The
+/// `vault kv` CLI inserts the `data/` segment automatically, so we accept either
+/// form: a `404` on the given path is retried once with `data/` inserted.
 pub fn load(allocator: std.mem.Allocator, io: std.Io, config: *root.config, log: *root.logger) !void {
-    const addr = config.getOrDefault("VAULT_ADDR", "");
+    var addr = std.mem.trim(u8, config.getOrDefault("VAULT_ADDR", ""), " \t\r\n");
+    if (addr.len > 0 and std.mem.endsWith(u8, addr, "/")) {
+        addr = addr[0 .. addr.len - 1];
+    }
     if (addr.len == 0) return;
 
-    const token = try resolveToken(allocator, io, config, addr);
+    const token_raw = try resolveToken(allocator, io, config, addr);
+    const token = std.mem.trim(u8, token_raw, " \t\r\n");
     if (token.len == 0) {
         log.err("vault: VAULT_ADDR set but no token available (set VAULT_TOKEN or VAULT_ROLE_ID+VAULT_SECRET_ID)");
         return;
@@ -103,6 +111,28 @@ fn appRoleLogin(allocator: std.mem.Allocator, io: std.Io, addr: []const u8, role
 }
 
 fn fetchAndMerge(allocator: std.mem.Allocator, io: std.Io, config: *root.config, log: *root.logger, addr: []const u8, token: []const u8, path: []const u8) !void {
+    fetchOne(allocator, io, config, log, addr, token, path) catch |err| {
+        // KV v2 convenience: if the literal path 404s, retry once with the
+        // `data/` segment inserted (matching `vault kv` CLI behaviour).
+        if (err == error.VaultNotFound and std.mem.indexOf(u8, path, "data/") == null) {
+            const v2 = try insertDataSegment(allocator, path);
+            defer allocator.free(v2);
+            fetchOne(allocator, io, config, log, addr, token, v2) catch {
+                return error.VaultFetchFailed;
+            };
+            return;
+        }
+        return err;
+    };
+}
+
+/// `mount/zero/db` -> `mount/data/zero/db` (insert `data/` after the first `/`).
+fn insertDataSegment(allocator: std.mem.Allocator, path: []const u8) ![]u8 {
+    const idx = std.mem.indexOfScalar(u8, path, '/') orelse return allocator.dupe(u8, path);
+    return std.fmt.allocPrint(allocator, "{s}data/{s}", .{ path[0 .. idx + 1], path[idx + 1 ..] });
+}
+
+fn fetchOne(allocator: std.mem.Allocator, io: std.Io, config: *root.config, log: *root.logger, addr: []const u8, token: []const u8, path: []const u8) !void {
     const url = try std.fmt.allocPrint(allocator, "{s}/v1/{s}", .{ addr, path });
     defer allocator.free(url);
 
@@ -114,28 +144,62 @@ fn fetchAndMerge(allocator: std.mem.Allocator, io: std.Io, config: *root.config,
     req.header("X-Vault-Token", token) catch {};
 
     var res = try req.getResponse(.{});
-    if (res.status != 200) return error.VaultFetchFailed;
-
     var sb = try res.allocBody(allocator, .{ .max_size = 1 << 20 });
     defer sb.deinit();
+
+    if (res.status == 404) {
+        // Let the caller retry with the KV v2 `data/` segment, or surface as a
+        // miss if the path already contained one.
+        return error.VaultNotFound;
+    }
+    if (res.status != 200) {
+        const body = sb.string();
+        const n = if (body.len > 240) 240 else body.len;
+        var buf: [320]u8 = undefined;
+        const msg = std.fmt.bufPrint(&buf, "vault: GET {s} -> HTTP {d}: {s}", .{ url, res.status, body[0..n] }) catch "vault: secret fetch returned non-200";
+        log.err(msg);
+        return error.VaultFetchFailed;
+    }
+
     const parsed = std.json.parseFromSlice(
         std.json.Value,
         allocator,
         sb.string(),
         .{ .ignore_unknown_fields = true },
-    ) catch return error.VaultFetchFailed;
+    ) catch {
+        log.err("vault: failed to parse secret JSON response");
+        return error.VaultFetchFailed;
+    };
     defer parsed.deinit();
 
-    const secret_obj = extractSecretObject(parsed.value) orelse return error.VaultFetchFailed;
-    if (secret_obj != .object) return error.VaultFetchFailed;
+    const secret_obj = extractSecretObject(parsed.value) orelse {
+        log.err("vault: secret response missing a 'data' object");
+        return error.VaultFetchFailed;
+    };
+    if (secret_obj != .object) {
+        log.err("vault: secret 'data' is not an object");
+        return error.VaultFetchFailed;
+    }
 
     var obj_it = secret_obj.object.iterator();
+    // Lazily create the owned secret map so it only exists (and is only ever
+    // consulted via config.get) once it holds at least one entry. This keeps the
+    // map non-empty, avoiding the sentinel-pointer crash of get() on an empty
+    // map. It is freed in config.deinit.
+    if (config.vault_overrides == null) {
+        config.vault_overrides = std.process.Environ.Map.init(allocator);
+    }
+    const secrets = &config.vault_overrides.?;
     while (obj_it.next()) |kv| {
         if (kv.value_ptr.* != .string) continue;
-        const key = try allocator.dupe(u8, kv.key_ptr.*);
-        const value = try allocator.dupe(u8, kv.value_ptr.*.string);
-        // Overwrite silently: Vault is the authoritative secret source at startup.
-        try config.environments.put(key, value);
+        // Store into the owned vault_overrides map (freed in config.deinit) rather
+        // than the process-global environ map, so these secret entries never leak
+        // from the DebugAllocator shutdown scan. Vault is authoritative at startup,
+        // and config.get consults vault_overrides before the file/env values.
+        const env_alloc = secrets.allocator;
+        const key = try env_alloc.dupe(u8, kv.key_ptr.*);
+        const value = try env_alloc.dupe(u8, kv.value_ptr.*.string);
+        try secrets.put(key, value);
     }
 
     var buf: [256]u8 = undefined;
