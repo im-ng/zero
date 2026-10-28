@@ -60,10 +60,6 @@
             .url = "git+https://codeberg.org/ziglang/translate-c?ref=2.0.2#c11030012dc325d446474d17b78c242fd1d622ec",
             .hash = "translate_c-2.0.2-Q_BUWvBNBwBgPKQJPblip6M7AHNK_IPNPmyv4rSIQMQc",
         },
-        .sqlite = .{
-            .url = "git+https://github.com/im-ng/zig-sqlite.git#8009440d2c199b03eaa7118862185122ecb88a3f",
-            .hash = "sqlite-3.48.1-F2R_azqdDgAOhuh9SL_WykI3veIHNFBsAeabc-14cm7Y",
-        },
         .httpz = .{
             .url = "git+https://github.com/im-ng/http.zig#2b623aa3323df9a1a05ff02093b7eedfcc4d6771",
             .hash = "httpz-0.0.17-PNVzrGMYCQDr8ZuCn_1Cz75ZnVcg46JlYk66_ARWR_qa",
@@ -79,6 +75,10 @@
         .opentelemetry = .{
             .url = "git+https://github.com/im-ng/opentelemetry-zig#2037ed6818603c87b42c601bc10064944bee15af",
             .hash = "opentelemetry-0.0.2-U_uKJ8xVIwA5heLAAT_Z860vcCiv-yggjWnAgDxzCm3I",
+        },
+        .sqlite = .{
+            .url = "git+https://github.com/im-ng/zig-sqlite.git#331d006d6b6414640cd9328b342548a12a6d4689",
+            .hash = "sqlite-3.48.1-F2R_azKdDgAI2lUmmktjoMnMkLm9iafo3FOvjbrZy-_k",
         },
     },
     .paths = .{
