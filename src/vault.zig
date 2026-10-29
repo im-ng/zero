@@ -182,18 +182,16 @@ fn fetchOne(allocator: std.mem.Allocator, io: std.Io, config: *root.config, log:
     }
 
     var obj_it = secret_obj.object.iterator();
-    // Merge each secret key/value into the process-global environ map, exactly
-    // like dotenv's .env injection. Duplicate with the map's own allocator so the
-    // entries live for the process lifetime and are not tracked by the app's
-    // DebugAllocator (the global environ map is never freed by design, matching
-    // dotenv). Vault runs before datasources are wired, so these override any
-    // .env value already present for the same key.
     while (obj_it.next()) |kv| {
         if (kv.value_ptr.* != .string) continue;
-        const env_alloc = config.environments.allocator;
+        if (config.vault_overrides == null) {
+            config.vault_overrides = std.process.Environ.Map.init(std.heap.page_allocator);
+        }
+        const secrets = &config.vault_overrides.?;
+        const env_alloc = secrets.allocator;
         const key = try env_alloc.dupe(u8, kv.key_ptr.*);
         const value = try env_alloc.dupe(u8, kv.value_ptr.*.string);
-        try config.environments.put(key, value);
+        try secrets.put(key, value);
     }
 
     var buf: [256]u8 = undefined;
