@@ -71,20 +71,31 @@ pub const Provider = struct {
             return p;
         }
 
+        // OTel provider state is process-lifetime: `shutdown` deliberately never
+        // frees the SDK structs (a background export fiber may still be unwinding),
+        // so the OS reclaims them at exit. Allocating them through the app's
+        // tracking allocator makes `detectLeaks()` flag every one of them at
+        // shutdown. Route the init/lifetime allocations through `c_allocator`
+        // (libc malloc/free) instead: it is non-tracking, so the DebugAllocator
+        // never sees them, yet it still frees correctly during operation, so
+        // per-flush batch buffers don't accumulate in production. Per-request
+        // span allocation below keeps using the tracked `allocator`.
+        const la = std.heap.c_allocator;
+
         // Narrow, config-resolved env map for the SDK. This limits the OTel SDK
         // to the `OTEL_*` keys (honoring `.env` + env overrides) instead of the
         // full process environment captured directly.
-        p.otel_env = try cfg.getEnvironSubset(allocator, "OTEL_");
+        p.otel_env = try cfg.getEnvironSubset(la, "OTEL_");
 
         // Make the SDK honor OTEL_* config (service.name resource, sampler,
         // propagators, resource attributes). Derive
         // service.name from APP_NAME so no new config keys are required.
         if (sdk.config.Configuration.get() == null) {
             if (p.otel_env.get("OTEL_SERVICE_NAME") == null) {
-                const app_name = try allocator.dupe(u8, cfg.getOrDefault("APP_NAME", "zero"));
+                const app_name = try la.dupe(u8, cfg.getOrDefault("APP_NAME", "zero"));
                 try p.otel_env.put("OTEL_SERVICE_NAME", app_name);
             }
-            const configuration = try sdk.config.Configuration.init(allocator, io, &p.otel_env);
+            const configuration = try sdk.config.Configuration.init(la, io, &p.otel_env);
             sdk.config.Configuration.set(configuration);
         }
 
@@ -96,14 +107,14 @@ pub const Provider = struct {
 
         // The ID generator stores a `std.Random` interface that points at `prng`,
         // so `prng` must live for the provider's whole lifetime — heap-allocate it.
-        p.prng = try allocator.create(std.Random.DefaultPrng);
+        p.prng = try la.create(std.Random.DefaultPrng);
         p.prng.?.* = std.Random.DefaultPrng.init(seed);
         const id_generator = sdk.trace.IDGenerator{ .Random = sdk.trace.RandomIDGenerator.init(p.prng.?.random()) };
 
-        p.tracer_provider = try sdk.trace.TracerProvider.init(allocator, io, id_generator);
-        p.config = try sdk.otlp.ConfigOptions.init(allocator, &p.otel_env);
-        p.otlp_exporter = try sdk.trace.OTLPExporter.init(allocator, io, p.config.?);
-        p.batch_processor = try sdk.trace.BatchingProcessor.init(allocator, io, p.otlp_exporter.?.asSpanExporter(), .{});
+        p.tracer_provider = try sdk.trace.TracerProvider.init(la, io, id_generator);
+        p.config = try sdk.otlp.ConfigOptions.init(la, &p.otel_env);
+        p.otlp_exporter = try sdk.trace.OTLPExporter.init(la, io, p.config.?);
+        p.batch_processor = try sdk.trace.BatchingProcessor.init(la, io, p.otlp_exporter.?.asSpanExporter(), .{});
 
         try p.tracer_provider.?.addSpanProcessor(p.batch_processor.?.asSpanProcessor());
 
@@ -117,15 +128,15 @@ pub const Provider = struct {
         // Logs: a parallel OTLP exporter that runs alongside the existing stdout
         // writer. When no collector is reachable the background exporter logs (and
         // drops) — the app keeps logging locally regardless.
-        p.log_config = try sdk.otlp.ConfigOptions.init(allocator, &p.otel_env);
-        p.log_exporter = try sdk.logs.OTLPExporter.init(allocator, io, p.log_config.?);
+        p.log_config = try sdk.otlp.ConfigOptions.init(la, &p.otel_env);
+        p.log_exporter = try sdk.logs.OTLPExporter.init(la, io, p.log_config.?);
         p.log_processor = try sdk.logs.BatchingLogRecordProcessor.init(
-            allocator,
+            la,
             io,
             p.log_exporter.?.asLogRecordExporter(),
             .{},
         );
-        p.logger_provider = try sdk.logs.LoggerProvider.init(allocator, io, null);
+        p.logger_provider = try sdk.logs.LoggerProvider.init(la, io, null);
         try p.logger_provider.?.addLogRecordProcessor(p.log_processor.?.asLogRecordProcessor());
         p.logger = try p.logger_provider.?.getLogger(p.server_scope);
         active_log_logger = p.logger;
@@ -134,16 +145,18 @@ pub const Provider = struct {
         //   OTEL_EXPORTER_OTLP_AUTH_HEADER : bare credential, e.g. "Bearer <token>"
         //       or "Basic <b64>" — mapped to the standard `Authorization` header.
         //   OTEL_EXPORTER_OTLP_HEADERS     : raw "Key=Value,..." custom headers.
-        try applyOtlpHeaders(allocator, cfg, p.config.?);
+        try applyOtlpHeaders(la, cfg, p.config.?);
 
-        try applyOtlpHeaders(allocator, cfg, p.log_config.?);
+        try applyOtlpHeaders(la, cfg, p.log_config.?);
 
         return p;
     }
 
     // Reads OTLP auth/custom headers from the framework config and installs them
     // on a ConfigOptions instance. `config.headers` is consumed by the SDK's
-    // exporter on every send. We dupe into `allocator` and free it in `shutdown`.
+    // exporter on every send. Backed by the provider's non-tracking lifetime
+    // allocator (`la` = c_allocator) like the rest of the OTel init state, so it
+    // is never explicitly freed — the OS reclaims it at exit.
     fn applyOtlpHeaders(allocator: std.mem.Allocator, cfg: *root.config, config: *sdk.otlp.ConfigOptions) !void {
         var buf = std.ArrayList(u8).empty;
         errdefer buf.deinit(allocator);

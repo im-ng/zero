@@ -321,7 +321,7 @@ pub const Connection = struct {
             defer use_body.deinit();
             try writeLongString(&use_body, use_cql);
             var cf: [3]u8 = undefined;
-            std.mem.writeInt(u16, cf[0..2], @intFromEnum(Consistency.one), .big);
+            std.mem.writeInt(u16, cf[0..2], @backingInt(Consistency.one), .big);
             cf[2] = 0x00; // flags: no values
             try use_body.appendSlice(&cf);
             try self.writeFrame(Opcode.query, use_body.items);
@@ -342,7 +342,7 @@ pub const Connection = struct {
         defer body.deinit();
         try writeLongString(&body, cql);
         var cf: [3]u8 = undefined;
-        std.mem.writeInt(u16, cf[0..2], @intFromEnum(Consistency.one), .big);
+        std.mem.writeInt(u16, cf[0..2], @backingInt(Consistency.one), .big);
         cf[2] = 0x00; // flags: no values
         try body.appendSlice(&cf);
         try self.writeFrame(Opcode.query, body.items);

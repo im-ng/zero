@@ -47,7 +47,7 @@ pub const Couchbase = struct {
     /// `error.CouchbaseQueryFailed`.
     fn runN1ql(self: *Couchbase, ctx: *root.Context, statement: []const u8) !std.json.Value {
         self.last_status.store(0, .monotonic);
-        self.last_kind.store(@intFromEnum(root.Error.ErrorKind.none), .monotonic);
+        self.last_kind.store(@backingInt(root.Error.ErrorKind.none), .monotonic);
         const url = try std.fmt.allocPrint(ctx.allocator, "http://{s}/query", .{self.contact_point});
         var req = try self.client.allocRequest(ctx.allocator, url);
         defer {
@@ -78,7 +78,7 @@ pub const Couchbase = struct {
             const sb = try res.allocBody(ctx.allocator, .{});
             defer sb.deinit();
             self.last_status.store(res.status, .monotonic);
-            self.last_kind.store(@intFromEnum(root.Error.classifyHttpStatus(res.status)), .monotonic);
+            self.last_kind.store(@backingInt(root.Error.classifyHttpStatus(res.status)), .monotonic);
             return error.CouchbaseQueryFailed;
         }
         const sb = try res.allocBody(ctx.allocator, .{});
@@ -88,7 +88,7 @@ pub const Couchbase = struct {
             if (parsed.object.get("errors")) |errs| {
                 if (errs == .array and errs.array.items.len > 0) {
                     self.last_status.store(res.status, .monotonic);
-                    self.last_kind.store(@intFromEnum(root.Error.classifyHttpStatus(res.status)), .monotonic);
+                    self.last_kind.store(@backingInt(root.Error.classifyHttpStatus(res.status)), .monotonic);
                     return error.CouchbaseQueryFailed;
                 }
             }
@@ -147,7 +147,7 @@ pub const Couchbase = struct {
     /// and `status` is the last HTTP status (0 for non-HTTP). The returned
     /// struct is a copy with no shared heap buffer, so it is safe to read.
     pub fn lastError(self: *Couchbase) ?root.Error.DataSourceError {
-        const kind = @as(root.Error.ErrorKind, @enumFromInt(self.last_kind.load(.monotonic)));
+        const kind = @as(root.Error.ErrorKind, @fromBackingInt(@intCast(self.last_kind.load(.monotonic))));
         if (kind == .none) return null;
         return .{
             .status = self.last_status.load(.monotonic),

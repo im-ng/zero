@@ -34,30 +34,30 @@ pub const AutoCrudOptions = struct {
 };
 
 fn tupleTypes(comptime T: type, comptime skip_id: ?usize) []const type {
-    const fields = @typeInfo(T).@"struct".fields;
-    comptime var arr: [fields.len]type = undefined;
+    const fields = .{ .names = @typeInfo(T).@"struct".field_names, .types = @typeInfo(T).@"struct".field_types, .attrs = @typeInfo(T).@"struct".field_attrs };
+    comptime var arr: [fields.names.len]type = undefined;
     comptime var k: usize = 0;
-    inline for (fields, 0..) |f, i| {
+    inline for (fields.names, fields.types, fields.attrs, 0..) |_, f_type, _, i| {
         if (skip_id) |s| if (i == s) continue;
-        arr[k] = f.type;
+        arr[k] = f_type;
         k += 1;
     }
     if (skip_id) |s| {
-        arr[k] = fields[s].type;
+        arr[k] = fields.types[s];
     }
     return &arr;
 }
 
-fn toTuple(comptime T: type, obj: T, comptime skip_id: ?usize) std.meta.Tuple(tupleTypes(T, skip_id)) {
-    var r: std.meta.Tuple(tupleTypes(T, skip_id)) = undefined;
+fn toTuple(comptime T: type, obj: T, comptime skip_id: ?usize) @Tuple(tupleTypes(T, skip_id)) {
+    var r: @Tuple(tupleTypes(T, skip_id)) = undefined;
     comptime var dst: usize = 0;
-    inline for (@typeInfo(T).@"struct".fields, 0..) |f, i| {
+    inline for (@typeInfo(T).@"struct".field_names, @typeInfo(T).@"struct".field_types, @typeInfo(T).@"struct".field_attrs, 0..) |f_name, _, _, i| {
         if (skip_id) |s| if (i == s) continue;
-        r[dst] = @field(obj, f.name);
+        r[dst] = @field(obj, f_name);
         dst += 1;
     }
     if (skip_id) |s| {
-        r[dst] = @field(obj, @typeInfo(T).@"struct".fields[s].name);
+        r[dst] = @field(obj, @typeInfo(T).@"struct".field_names[s]);
     }
     return r;
 }
@@ -83,15 +83,15 @@ const Stmts = struct {
 };
 
 fn buildStmts(comptime T: type, comptime table: []const u8, comptime id_field: []const u8, id_idx: usize) Stmts {
-    const fields = @typeInfo(T).@"struct".fields;
-    const n = fields.len;
+    const fields = .{ .names = @typeInfo(T).@"struct".field_names, .types = @typeInfo(T).@"struct".field_types, .attrs = @typeInfo(T).@"struct".field_attrs };
+    const n = fields.names.len;
 
     comptime var c: []const u8 = "";
-    inline for (fields, 0..) |f, i| {
+    inline for (fields.names, fields.types, fields.attrs, 0..) |f_name, _, _, i| {
         if (i > 0) {
             c = c ++ ",";
         }
-        c = c ++ f.name;
+        c = c ++ f_name;
     }
 
     comptime var pgph: []const u8 = "";
@@ -113,15 +113,15 @@ fn buildStmts(comptime T: type, comptime table: []const u8, comptime id_field: [
     comptime var set_pg: []const u8 = "";
     comptime var set_q: []const u8 = "";
     var p: usize = 0;
-    inline for (fields, 0..) |f, i| {
+    inline for (fields.names, fields.types, fields.attrs, 0..) |f_name, _, _, i| {
         if (i == id_idx) continue;
         p += 1;
         if (p > 1) {
             set_pg = set_pg ++ ",";
             set_q = set_q ++ ",";
         }
-        set_pg = set_pg ++ f.name ++ std.fmt.comptimePrint("=${d}", .{p});
-        set_q = set_q ++ f.name ++ "=?";
+        set_pg = set_pg ++ f_name ++ std.fmt.comptimePrint("=${d}", .{p});
+        set_q = set_q ++ f_name ++ "=?";
     }
 
     const non_id = n - 1;
@@ -201,7 +201,7 @@ fn listHandler(comptime T: type, comptime st: Stmts) *const fn (*Context) anyerr
 }
 
 fn getHandler(comptime T: type, comptime st: Stmts, comptime id_idx: usize) *const fn (*Context) anyerror!void {
-    const IdType = @typeInfo(T).@"struct".fields[id_idx].type;
+    const IdType = @typeInfo(T).@"struct".field_types[id_idx];
     const impl = struct {
         fn call(ctx: *Context) anyerror!void {
             const raw = ctx.param("id");
@@ -261,7 +261,7 @@ fn createHandler(comptime T: type, comptime st: Stmts) *const fn (*Context) anye
 }
 
 fn updateHandler(comptime T: type, comptime st: Stmts, comptime id_idx: usize) *const fn (*Context) anyerror!void {
-    const IdType = @typeInfo(T).@"struct".fields[id_idx].type;
+    const IdType = @typeInfo(T).@"struct".field_types[id_idx];
     const impl = struct {
         fn call(ctx: *Context) anyerror!void {
             const raw = ctx.param("id");
@@ -316,7 +316,7 @@ fn updateHandler(comptime T: type, comptime st: Stmts, comptime id_idx: usize) *
 }
 
 fn deleteHandler(comptime T: type, comptime st: Stmts, comptime id_idx: usize) *const fn (*Context) anyerror!void {
-    const IdType = @typeInfo(T).@"struct".fields[id_idx].type;
+    const IdType = @typeInfo(T).@"struct".field_types[id_idx];
     const impl = struct {
         fn call(ctx: *Context) anyerror!void {
             const raw = ctx.param("id");
@@ -373,10 +373,10 @@ pub fn addRestHandlers(self: *App, comptime T: type, comptime opts: AutoCrudOpti
     const table = if (opts.table.len > 0) opts.table else opts.resource;
     const id_field = opts.id_field;
 
-    const fields = @typeInfo(T).@"struct".fields;
+    const fields = .{ .names = @typeInfo(T).@"struct".field_names, .types = @typeInfo(T).@"struct".field_types, .attrs = @typeInfo(T).@"struct".field_attrs };
     comptime var id_idx: ?usize = null;
-    inline for (fields, 0..) |f, i| {
-        if (comptime std.mem.eql(u8, f.name, id_field)) id_idx = i;
+    inline for (fields.names, fields.types, fields.attrs, 0..) |f_name, _, _, i| {
+        if (comptime std.mem.eql(u8, f_name, id_field)) id_idx = i;
     }
     if (id_idx == null) {
         @compileError("AutoCrud: struct " ++ @typeName(T) ++ " has no field '" ++ id_field ++ "'");

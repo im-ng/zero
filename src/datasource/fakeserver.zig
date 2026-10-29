@@ -45,7 +45,7 @@ pub const FakeServer = struct {
             .family = linux.AF.INET,
             .port = 0,
             .addr = std.mem.nativeToBig(u32, 0x7F000001), // 127.0.0.1
-            .zero = [_]u8{0} ** 8,
+            .zero = @as([8]u8, @splat(0)),
         };
         try check(linux.bind(sock, @ptrCast(&sa), @sizeOf(@TypeOf(sa))));
         try check(linux.listen(sock, 1));
@@ -94,7 +94,7 @@ pub const FakeServer = struct {
             var it = std.mem.splitScalar(u8, head, '\n');
             while (it.next()) |line| {
                 const l = std.mem.trim(u8, line, "\r");
-                if (std.ascii.indexOfIgnoreCase(l, "content-length")) |p| {
+                if (std.ascii.findIgnoreCase(l, "content-length")) |p| {
                     if (l.len > p + 15) {
                         const v = std.mem.trim(u8, l[p + 15 ..], " \r\n");
                         content_len = std.fmt.parseInt(usize, v, 10) catch 0;
@@ -146,7 +146,7 @@ fn clientRun(port: u16) void {
         .family = linux.AF.INET,
         .port = std.mem.nativeToBig(u16, port),
         .addr = std.mem.nativeToBig(u32, 0x7F000001),
-        .zero = [_]u8{0} ** 8,
+        .zero = @as([8]u8, @splat(0)),
     };
     FakeServer.check(linux.connect(sock, @ptrCast(&sa), @sizeOf(@TypeOf(sa)))) catch @panic("connect");
 

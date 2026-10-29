@@ -60,7 +60,7 @@ pub fn build(b: *std.Build) void {
     const mqttz = b.dependency("mqttz", .{});
     module.addImport("mqttz", mqttz.module("mqttz"));
 
-    const jwt = b.dependency("jwt", .{});
+    const jwt = b.dependency("zig_jwt", .{});
     module.addImport("jwt", jwt.module("zig-jwt"));
 
     const sqlite = b.dependency("sqlite", .{});
@@ -103,6 +103,23 @@ pub fn build(b: *std.Build) void {
         module.addLibraryPath(.{ .cwd_relative = "/usr/local/opt/openssl@3/lib" });
     }
 
+    // 0.17 dropped `@cImport`, so the librdkafka bindings are generated with
+    // the vendored translate-c Translator just like the OpenSSL ones above.
+    const rdkafka_mod = blk: {
+        var t = openssl_translator.init(openssl_dep, .{
+            .name = "rdkafka",
+            .c_source_file = b.path("src/cimport/rdkafka.h"),
+            .target = target,
+            .optimize = optimize,
+        });
+        if (builtin.os.tag == .macos) {
+            t.addIncludePath(.{ .cwd_relative = "/usr/local/Cellar/librdkafka/2.15.1/include" });
+        }
+        break :blk t.mod;
+    };
+
+    module.addImport("cimport", rdkafka_mod);
+
     const test_module = b.createModule(.{
         .root_source_file = b.path("src/tests.zig"),
         .target = target,
@@ -137,6 +154,7 @@ pub fn build(b: *std.Build) void {
     test_module.linkSystemLibrary("duckdb", .{ .weak = true });
 
     test_module.addImport("openssl", openssl_mod);
+    test_module.addImport("cimport", rdkafka_mod);
     test_module.linkSystemLibrary("ssl", .{});
     test_module.linkSystemLibrary("crypto", .{});
     if (builtin.os.tag == .macos) {
@@ -189,6 +207,7 @@ pub fn build(b: *std.Build) void {
     integration_module.linkSystemLibrary("duckdb", .{ .weak = true });
 
     integration_module.addImport("openssl", openssl_mod);
+    integration_module.addImport("cimport", rdkafka_mod);
     integration_module.linkSystemLibrary("ssl", .{});
     integration_module.linkSystemLibrary("crypto", .{});
     if (builtin.os.tag == .macos) {
@@ -339,5 +358,5 @@ pub fn build(b: *std.Build) void {
             b.path("."),
         },
     });
-    gen_proto.dependOn(&protoc_step.step);
+    gen_proto.dependOn(protoc_step.step);
 }

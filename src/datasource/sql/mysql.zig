@@ -719,42 +719,50 @@ pub const Connection = struct {
         return try self.handleResult(self.allocator, col_count, drain);
     }
 
-    fn collectFields(comptime Type: type) []const std.builtin.Type.StructField {
-        comptime {
-            const ti = @typeInfo(Type);
-            if (ti != .@"struct") {
-                @compileError("MySQL row type must be a struct");
-            }
-            return ti.@"struct".fields;
+    const FieldSet = struct {
+        names: []const []const u8,
+        types: []const type,
+        attrs: []const std.builtin.Type.Struct.FieldAttributes,
+    };
+
+    fn collectFields(comptime Type: type) FieldSet {
+        const ti = @typeInfo(Type);
+        if (ti != .@"struct") {
+            @compileError("MySQL row type must be a struct");
         }
+        return .{
+            .names = ti.@"struct".field_names,
+            .types = ti.@"struct".field_types,
+            .attrs = ti.@"struct".field_attrs,
+        };
     }
 
     fn decodeRow(
         self: *Self,
         comptime Type: type,
         packet: []const u8,
-        comptime fields: []const std.builtin.Type.StructField,
+        comptime fields: FieldSet,
     ) !Type {
         var row: Type = undefined;
         var off: usize = 0;
-        inline for (fields) |field| {
+        inline for (fields.names, fields.types, fields.attrs) |field_name, field_type, _| {
             if (off < packet.len and packet[off] == 0xFB) {
                 off += 1;
-                if (@typeInfo(field.type) != .optional) {
+                if (@typeInfo(field_type) != .optional) {
                     // A NULL column landing in a non-optional field would
                     // otherwise leave the field holding undefined memory;
                     // fail instead of returning poison (same rule duckdb.zig
                     // applies via NonNullColumnIsNull).
                     return error.NonNullColumnIsNull;
                 }
-                @field(row, field.name) = null;
+                @field(row, field_name) = null;
             } else {
                 if (off >= packet.len) return error.MySqlProtocol;
                 const len = try self.readLenEncInt(packet, &off);
                 if (off + len > packet.len) return error.MySqlProtocol;
                 const value = packet[off .. off + len];
                 off += len;
-                try self.parseField(&@field(row, field.name), value, field.type);
+                try self.parseField(&@field(row, field_name), value, field_type);
             }
         }
         return row;
