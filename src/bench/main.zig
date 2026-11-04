@@ -1,5 +1,6 @@
 const std = @import("std");
 const zero = @import("zero");
+const build_options = @import("build_options");
 const zul = @import("zul");
 const protobuf = @import("zero").protobuf;
 const alloc_probe = @import("allocProbe.zig");
@@ -866,9 +867,11 @@ pub fn main(init: std.process.Init) !void {
         try app.post("/filestore", filestorePostHandler);
 
         // Round-1 datasource routes (501 when the backend isn't configured).
-        try app.addDuckDB(":memory:");
-        try app.get("/duckdb/write", duckdbWriteHandler);
-        try app.get("/duckdb/query", duckdbQueryHandler);
+        if (build_options.duckdb) {
+            try app.addDuckDB(":memory:");
+            try app.get("/duckdb/write", duckdbWriteHandler);
+            try app.get("/duckdb/query", duckdbQueryHandler);
+        }
         try app.get("/ts/write", tsWriteHandler);
         try app.get("/ts/query", tsQueryHandler);
         try app.get("/solr/index", solrIndexHandler);

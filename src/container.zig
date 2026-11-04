@@ -1,5 +1,6 @@
 const std = @import("std");
 const root = @import("zero.zig");
+const build_options = @import("build_options");
 const container = @This();
 const Self = @This();
 
@@ -320,9 +321,11 @@ pub fn destroy(self: *Self) void {
     // structures (audit #12). The unified PubSub wrapper is heap-allocated in
     // loadPubSub and freed here too. Runs before config/log teardown because the
     // client destroy paths log through `container.log`.
-    if (self.Kakfa) |k| {
-        k.destroy();
-        allocator.destroy(k);
+    if (comptime build_options.kafka) {
+        if (self.Kakfa) |k| {
+            k.destroy();
+            allocator.destroy(k);
+        }
     }
     if (self.mqtt) |m| {
         m.destroy();
@@ -376,8 +379,10 @@ pub fn destroy(self: *Self) void {
 
     // In-process OLAP engine (DuckDB): closes the C database/connection and the
     // struct allocated by `create` / `addDuckDB`.
-    if (self.DuckDB) |db| {
-        db.deinit(allocator);
+    if (comptime build_options.duckdb) {
+        if (self.DuckDB) |db| {
+            db.deinit(allocator);
+        }
     }
 
     // Wired (network) DuckDB client: closes the pgz pool, then frees the struct
@@ -454,6 +459,7 @@ fn loadPubSub(self: *Self) !void {
 }
 
 fn loadKafkaPubSub(self: *Self) !void {
+    if (comptime !build_options.kafka) return;
     var mode: c_uint = rdkafka.RD_KAFKA_PRODUCER;
 
     var buffer: []u8 = undefined;
@@ -1232,6 +1238,7 @@ fn loadSQLite(self: *Self) !void {
 // Defaults to an in-memory database when the path is empty. The shared library
 // (`libs/libduckdb.so`) is linked at build time, so this adds no runtime dep.
 fn loadDuckDB(self: *Self) !void {
+    if (comptime !build_options.duckdb) return;
     if (self.DuckDB != null) return;
     const path = self.config.get("DUCKDB_PATH");
     if (path.len == 0) return;

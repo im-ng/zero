@@ -4,7 +4,10 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    const zero = b.dependency("zero", .{});
+    const kafka = b.option(bool, "kafka", "Enable Kafka/RDKafka pub-sub support (default on)") orelse true;
+    const duckdb = b.option(bool, "duckdb", "Enable DuckDB in-process OLAP support (default on)") orelse true;
+
+    const zero = b.dependency("zero", .{ .kafka = kafka, .duckdb = duckdb });
 
     const exe = b.addExecutable(.{
         .name = "vaultpg",

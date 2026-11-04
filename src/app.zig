@@ -1,5 +1,6 @@
 const std = @import("std");
 const root = @import("zero.zig");
+const build_options = @import("build_options");
 const EnvMap = std.process.Environ.Map;
 
 const App = @This();
@@ -671,10 +672,12 @@ fn startPubSubSubscriptions(self: Self) !void {
         try pubsub.startSubscription();
     }
 
-    if (self.container.Kakfa) |k| {
-        if (k.kafkaMode == root.rdkafka.RD_KAFKA_CONSUMER) {
-            self.container.log.info("starting kafka subscriptions");
-            try k.startSubscription();
+    if (comptime build_options.kafka) {
+        if (self.container.Kakfa) |k| {
+            if (k.kafkaMode == root.rdkafka.RD_KAFKA_CONSUMER) {
+                self.container.log.info("starting kafka subscriptions");
+                try k.startSubscription();
+            }
         }
     }
 
@@ -1249,6 +1252,7 @@ pub fn addClickhouse(self: *Self, url: []const u8, database: []const u8, opts: s
 }
 
 pub fn addDuckDB(self: *Self, path: []const u8) !void {
+    if (comptime !build_options.duckdb) return error.FeatureDisabled;
     const db = try root.DuckDB.create(self.container.allocator, path);
     self.container.DuckDB = db;
     self.container.datasource = root.Datasource.init(
