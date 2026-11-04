@@ -7,7 +7,6 @@ const tlso = root.tlso;
 // full-auth as cleartext over TLS, or RSA-OAEP over a plain socket via the
 // server's public key) so it works against MySQL 8.0+ defaults with and
 // without TLS. No native driver or C library is required.
-//
 // Two layers:
 //   * `Connection` — one TCP socket (optionally upgraded to TLS via the
 //     framework's OpenSSL layer `tlso`) speaking the COM_QUERY text protocol, with
@@ -211,7 +210,6 @@ pub const Connection = struct {
         // 0x01 traffic flows), or AuthMoreData (caching_sha2 fast-auth /
         // full-auth subcodes). Every non-terminal reply is followed by
         // another packet, so respond and loop until OK or ERR arrives.
-        //
         // `scramble_current` tracks which scramble the server considered when
         // evaluating every subsequent token: the greeting's until a switch
         // request replaces it, and the one a full-auth encrypt must XOR
@@ -1312,7 +1310,6 @@ fn appendLiteral(allocator: std.mem.Allocator, buf: *std.ArrayList(u8), value: a
 
 // ===================== Tests =====================
 // These tests breaks the kcov coverage, investigate further
-//
 // test "mysql: interpolateSql substitutes ? placeholders" {
 //     const alloc = std.testing.allocator;
 //     const q = try interpolateSql(alloc, "SELECT * FROM t WHERE id = ? AND name = ?", .{ 42, "zig" });

@@ -678,5 +678,9 @@ test "graphql: resolve query with constant, resolver and arguments" {
     try testing.expectEqualSlices(u8, "42", user.object.get("id").?.string);
     try testing.expectEqualSlices(u8, "User 42", user.object.get("name").?.string);
 
+    // The test resolver allocated `name` from `std.testing.allocator`; free it so
+    // the leak checker stays clean (matches the arena-backed `data` lifetime).
+    std.testing.allocator.free(user.object.get("name").?.string);
+
     try testing.expect(ec.errors.items.len == 0);
 }

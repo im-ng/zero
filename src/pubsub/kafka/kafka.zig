@@ -68,6 +68,7 @@ pub fn create(
             .{c.err_message},
         );
         container.log.err(msg);
+        container.allocator.free(msg);
     }
 
     if (client != null) {
@@ -77,6 +78,7 @@ pub fn create(
             .{},
         );
         container.log.info(msg);
+        container.allocator.free(msg);
     }
 
     c.client = client;
@@ -109,6 +111,7 @@ pub fn getTopicHandler(self: *Self, ctx: *Context, name: []const u8) !*kafkaTopi
             .{rdkafka.rd_kafka_err2str(err_code)},
         );
         ctx.err(msg);
+        ctx.allocator.free(msg);
     }
 
     const topic = rdkafka.rd_kafka_topic_new(
@@ -123,6 +126,7 @@ pub fn getTopicHandler(self: *Self, ctx: *Context, name: []const u8) !*kafkaTopi
             .{rdkafka.rd_kafka_err2str(err_code)},
         );
         ctx.err(msg);
+        ctx.allocator.free(msg);
     }
 
     return topic.?;
@@ -220,6 +224,7 @@ pub fn publish(self: *Self, ctx: *Context, topic: *kafkaTopic, key: []const u8, 
         );
 
         ctx.info(msg);
+        ctx.allocator.free(msg);
 
         self.container.metricz.publisherSuccess(.{ .topic = self.getTopicName(topic) }) catch |e| std.debug.print("kafka publisherSuccess metric failed: {}\n", .{e});
     } else {
@@ -230,6 +235,7 @@ pub fn publish(self: *Self, ctx: *Context, topic: *kafkaTopic, key: []const u8, 
         );
 
         ctx.err(msg);
+        ctx.allocator.free(msg);
     }
 
     self.container.metricz.publisherTotal(.{ .topic = self.getTopicName(topic) }) catch |e| std.debug.print("kafka publisherTotal metric failed: {}\n", .{e});
@@ -471,6 +477,7 @@ pub fn addSubscriber(self: *Self, topic: []const u8, hook: *const fn (*root.Cont
             return;
         };
         self.container.log.info(msg);
+        self.container.allocator.free(msg);
     }
 
     for (topics) |topic_name| {
@@ -498,6 +505,7 @@ pub fn addSubscriber(self: *Self, topic: []const u8, hook: *const fn (*root.Cont
     };
 
     self.container.log.info(msg);
+    self.container.allocator.free(msg);
 }
 
 inline fn getTopicName(_: *Self, topic: *kafkaTopic) []const u8 {

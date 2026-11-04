@@ -216,6 +216,7 @@ fn checkRequiredConfigKeys(allocator: std.mem.Allocator, config: *root.config, l
         if (trimmed.len == 0) continue;
         if (config.get(trimmed).len == 0) {
             const msg = try utils.combine(allocator, "required config key missing or empty: {s}", .{trimmed});
+            defer allocator.free(msg);
             log.err(msg);
             return error.MissingRequiredConfig;
         }
@@ -274,16 +275,8 @@ pub fn destroy(self: *Self) void {
     if (self.cronz) |cronz| {
         cronz.destroy();
     }
-    if (self.container.Nats) |n| {
-        n.destroy();
-    }
-    if (self.container.mqtt) |pb| {
-        pb.destroy();
-    }
-    if (self.container.Kakfa) |k| {
-        k.destroy();
-    }
-
+    // Nats / mqtt / Kakfa are torn down by `container.destroy()` below, which is
+    // their single owner. Destroying them here too double-frees the same structs
     self.migrations.deinit();
     self.subcommands.deinit();
     self.container.destroy();
@@ -1352,15 +1345,24 @@ pub fn addOAuthKeyRefresher(self: *Self) anyerror!void {
     if (self.httpServer.provider) |provider| {
         switch (provider.mode) {
             .OAuth => {
+                // Build the refresh cron schedule. A refresh interval under a minute
+                // becomes "*/N * * * * *" (every N seconds); under an hour becomes
+                // "0 */N * * * *" (every N minutes at second 0); an hour or more
+                // becomes "0 0 */N * * *" (every N hours). The old code emitted
+                // "0 <refresh/60> * * * *" which ran the job once an hour instead of
+                // every interval, and produced an invalid minute (>59) for intervals
+                // >= 3600
                 var schedule: []u8 = undefined;
                 if (provider.refreshInterval < 60) {
-                    schedule = try self.container.allocator.alloc(u8, 100);
-                    schedule = try std.fmt.bufPrint(schedule, "*/{d} * * * * *", .{provider.refreshInterval});
-                } else {
+                    schedule = try std.fmt.allocPrint(self.container.allocator, "*/{d} * * * * *", .{provider.refreshInterval});
+                } else if (provider.refreshInterval < 3600) {
                     const occurance: u16 = @as(u16, @intCast(provider.refreshInterval)) / 60;
-                    schedule = try self.container.allocator.alloc(u8, 100);
-                    schedule = try std.fmt.bufPrint(schedule, "0 {d} * * * *", .{occurance});
+                    schedule = try std.fmt.allocPrint(self.container.allocator, "0 */{d} * * * *", .{occurance});
+                } else {
+                    const occurance: u16 = @as(u16, @intCast(provider.refreshInterval)) / 3600;
+                    schedule = try std.fmt.allocPrint(self.container.allocator, "0 0 */{d} * * *", .{occurance});
                 }
+                defer self.container.allocator.free(schedule);
                 self.container.log.info(schedule);
 
                 //register http client

@@ -24,7 +24,10 @@ pub fn runHook(
     const allocator = container.allocator;
     const ca = allocator.create(std.heap.ArenaAllocator) catch return .failed;
     ca.* = std.heap.ArenaAllocator.init(allocator);
-    errdefer {
+    // `runHook` returns a non-error enum (`DispatchStatus`), so `errdefer` would
+    // never fire on the success/handled path and leak the per-message arena on
+    // every message. Use `defer` so the arena is always released
+    defer {
         ca.deinit();
         allocator.destroy(ca);
     }

@@ -33,6 +33,8 @@ pub const GCP = struct {
     subscription: []const u8,
     subscribers: std.array_list.Managed(Subscriber),
     running: std.atomic.Value(bool),
+    // Consumer thread handle; null until `subscribe` spawns it
+    thread: ?std.Thread = null,
 
     const Subscriber = struct {
         topic: []const u8,
@@ -94,6 +96,13 @@ pub const GCP = struct {
     }
 
     pub fn deinit(self: *GCP) void {
+        // Stop the polling loop and join its thread before freeing any state it
+        // touches
+        self.running.store(false, .release);
+        if (self.thread) |t| {
+            t.join();
+            self.thread = null;
+        }
         const a = self.allocator;
         a.free(self.project);
         a.free(self.endpoint);
@@ -174,7 +183,7 @@ pub const GCP = struct {
         try self.subscribers.append(.{ .topic = try self.allocator.dupe(u8, subject), .hook = hook });
         if (!self.running.load(.acquire)) {
             self.running.store(true, .release);
-            _ = std.Thread.spawn(.{}, run, .{self}) catch {
+            self.thread = std.Thread.spawn(.{}, run, .{self}) catch {
                 self.running.store(false, .release);
                 return error.GcpSubscriberSpawnFailed;
             };

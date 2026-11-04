@@ -25,10 +25,16 @@ wbuf: [1024]u8 = undefined,
 conn: std.Io.net.Stream = undefined,
 reader: std.Io.net.Stream.Reader = undefined,
 writer: std.Io.net.Stream.Writer = undefined,
+// Canonical Redis client. All consumers (KV, rate limiter, health probe) send
+// through this and serialize on `mu` so concurrent commands can't interleave
+// RESP frames on the single shared socket
+client: rediz.Client = undefined,
+mu: std.Io.Mutex = .init,
 
 pub fn create(allocator: std.mem.Allocator) !*rdz {
     const rz = try allocator.create(rdz);
     errdefer allocator.destroy(rz);
+    rz.client = undefined;
     return rz;
 }
 

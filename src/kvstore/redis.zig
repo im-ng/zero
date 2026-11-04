@@ -1,6 +1,5 @@
 const std = @import("std");
 const root = @import("../zero.zig");
-const rediz = root.rediz;
 const utils = root.utils;
 
 /// Redis-backed KV store, wrapping `rediz.Client` (okredis).
@@ -11,45 +10,45 @@ const utils = root.utils;
 /// request/response round-trip, so the shared connection is safe to use from the
 /// worker pool. (A connection pool is the higher-throughput follow-up)
 pub const KVRedis = struct {
-    client: rediz.Client,
-
-    // Async-aware mutex: `lock` suspends the Io task while contended instead of
-    // spinning the CPU across a network round-trip (audit #27).
-    mutex: std.Io.Mutex = .init,
+    // Shared Redis connection + lock. All Redis consumers (KV, rate limiter,
+    // health probe) serialize on `rdz.mu` around the single socket, so concurrent
+    // requests can't interleave RESP frames The `client` lives
+    // on `rdz` and outlives this wrapper.
+    rdz: *root.rdz,
 
     pub fn get(self: *KVRedis, ctx: *root.Context, key: []const u8) !?[]const u8 {
-        self.mutex.lock(utils.io) catch {};
-        defer self.mutex.unlock(utils.io);
-        return try self.client.sendAlloc(?[]const u8, ctx.allocator, .{ "GET", key });
+        self.rdz.mu.lock(utils.io) catch {};
+        defer self.rdz.mu.unlock(utils.io);
+        return try self.rdz.client.sendAlloc(?[]const u8, ctx.allocator, .{ "GET", key });
     }
 
     pub fn set(self: *KVRedis, _: *root.Context, key: []const u8, value: []const u8) !void {
-        self.mutex.lock(utils.io) catch {};
-        defer self.mutex.unlock(utils.io);
-        try self.client.send(void, .{ "SET", key, value });
+        self.rdz.mu.lock(utils.io) catch {};
+        defer self.rdz.mu.unlock(utils.io);
+        try self.rdz.client.send(void, .{ "SET", key, value });
     }
 
     pub fn delete(self: *KVRedis, _: *root.Context, key: []const u8) !void {
-        self.mutex.lock(utils.io) catch {};
-        defer self.mutex.unlock(utils.io);
-        try self.client.send(void, .{ "DEL", key });
+        self.rdz.mu.lock(utils.io) catch {};
+        defer self.rdz.mu.unlock(utils.io);
+        try self.rdz.client.send(void, .{ "DEL", key });
     }
 
     pub fn exists(self: *KVRedis, _: *root.Context, key: []const u8) !bool {
-        self.mutex.lock(utils.io) catch {};
-        defer self.mutex.unlock(utils.io);
-        const n = try self.client.send(i64, .{ "EXISTS", key });
+        self.rdz.mu.lock(utils.io) catch {};
+        defer self.rdz.mu.unlock(utils.io);
+        const n = try self.rdz.client.send(i64, .{ "EXISTS", key });
         return n > 0;
     }
 
     pub fn expire(self: *KVRedis, _: *root.Context, key: []const u8, ms: i64) !void {
-        self.mutex.lock(utils.io) catch {};
-        defer self.mutex.unlock(utils.io);
-        try self.client.send(void, .{ "PEXPIRE", key, ms });
+        self.rdz.mu.lock(utils.io) catch {};
+        defer self.rdz.mu.unlock(utils.io);
+        try self.rdz.client.send(void, .{ "PEXPIRE", key, ms });
     }
 
-    /// Frees the wrapper. `client` is borrowed from `container.redis`, which is
-    /// destroyed separately during container teardown.
+    /// Frees the wrapper. `rdz` (and its client) are owned by the container and
+    /// destroyed separately during teardown.
     pub fn deinit(self: *KVRedis, allocator: std.mem.Allocator) void {
         allocator.destroy(self);
     }

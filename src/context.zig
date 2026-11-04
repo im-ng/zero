@@ -154,6 +154,11 @@ pub const Context = struct {
 
         if (container.SQL != null or container.SQLite != null or container.DuckDB != null or container.ClickHouse != null or container.DuckGres != null) {
             c.SQL = container.datasource;
+        } else if (container.MySQL != null) {
+            // Mirror `init`: MySQL needs a per-request session so CLI/cron/pub-sub
+            // contexts get a working `ctx.SQL` instead of a null handle
+            const session = try root.MySQL.createSession(allocator, container.MySQL.?);
+            c.SQL = root.Datasource.init(session, .mysql, container.datasource.breaker, container.metricz);
         }
         if (container.defaultKV) |kv| {
             c.KV = kv;
@@ -250,6 +255,27 @@ pub const Context = struct {
             b.deinit();
         }
         self.allocator.destroy(self);
+    }
+
+    /// Tear down a request context. Called via `defer ctx.cleanup()` at the end of
+    /// each HTTP handler. Rolls back any open SQL transaction so a handler error
+    /// can't leak an open transaction onto a pooled connection, and frees the W3C
+    /// baggage. The request arena is reset by httpz after the handler returns, which
+    /// frees the per-request SQL session and every arena allocation, so we must not
+    /// free those here (doing so would double-free). Replaces the old
+    /// `defer req.arena.destroy(&ctx)`, which destroyed the on-stack `ctx` value
+    /// through the arena
+    pub fn cleanup(self: *Context) void {
+        const has_sql = self.container.SQL != null or self.container.MySQL != null or
+            self.container.SQLite != null or self.container.DuckDB != null or
+            self.container.ClickHouse != null or self.container.DuckGres != null;
+        if (has_sql) {
+            self.SQL.rollback();
+        }
+        if (self.baggage) |*b| {
+            b.deinit();
+            self.baggage = null;
+        }
     }
 
     /// returns traceID of the service request

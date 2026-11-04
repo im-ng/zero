@@ -178,7 +178,7 @@ test "well-known path constants are correct" {
     try std.testing.expectEqualStrings("/.well-known/health", constants.HEALTH_PATH);
     try std.testing.expectEqualStrings("/.well-known/live", constants.LIVE_PATH);
     try std.testing.expectEqualStrings("/metrics", constants.METRICS_PATH);
-    try std.testing.expectEqualStrings("./well-known/", constants.WELL_KNOWN);
+    try std.testing.expectEqualStrings("/.well-known/", constants.WELL_KNOWN);
 }
 
 test "authz Config struct can be initialized" {

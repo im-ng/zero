@@ -110,6 +110,7 @@ pub fn enforceRequired(self: *Self, keys: []const []const u8) !void {
                 "required config key missing or empty: {s}",
                 .{k},
             );
+            defer self.allocator.free(msg);
             self.log.err(msg);
             return error.MissingRequiredConfig;
         }

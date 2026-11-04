@@ -61,6 +61,7 @@ pub const Job: type = struct {
         };
 
         ctx.info(msg);
+        ctx.allocator.free(msg);
     }
 
     pub fn getTick(_: *Job, now: DateTime) *const tick {

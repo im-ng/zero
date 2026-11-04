@@ -36,6 +36,9 @@ fn hashValue(hasher: *std.hash.Wyhash, v: anytype) void {
         .int, .float => hasher.update(std.mem.asBytes(&v)),
         .@"enum" => hasher.update(std.mem.asBytes(&@backingInt(v))),
         .pointer => |p| if (p.size == .slice) {
+            // Hash the length before the bytes so `{ .a = "ab", .b = "c" }` and
+            // `{ .a = "a", .b = "bc" }` don't collide
+            hasher.update(std.mem.asBytes(&v.len));
             hasher.update(std.mem.sliceAsBytes(v));
         } else {
             @compileError("metric cap: unsupported label pointer field");
@@ -131,4 +134,11 @@ pub fn CapCounter(comptime Vec: type) type {
 
 pub fn CapHistogram(comptime Vec: type) type {
     return Cap(Vec, false);
+}
+
+test "hashLabels does not collide across field boundaries (argon T16)" {
+    const Labels = struct { a: []const u8, b: []const u8 };
+    const x = Labels{ .a = "ab", .b = "c" };
+    const y = Labels{ .a = "a", .b = "bc" };
+    try std.testing.expect(hashLabels(x) != hashLabels(y));
 }

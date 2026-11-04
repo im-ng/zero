@@ -200,6 +200,7 @@ pub fn addSubscriber(self: *Self, topic: []const u8, hook: *const fn (*root.Cont
 
     const msg = utils.combine(self.allocator, "topic:{s} redis subscriber added", .{topic}) catch return;
     self.container.log.info(msg);
+    self.allocator.free(msg);
 }
 
 pub fn startSubscription(self: *Self) !void {
@@ -282,7 +283,9 @@ fn dispatch(self: *Self, channel: []const u8, payload: []const u8) void {
 fn runHook(self: *Self, hook: *const fn (*root.Context) anyerror!void, channel: []const u8, payload: []const u8) void {
     const ca = self.allocator.create(arena_t) catch return;
     ca.* = arena_t.init(self.allocator);
-    errdefer {
+    // `runHook` returns `void`, so `errdefer` would never fire on the normal path
+    // and leak the per-message arena on every message. Use `defer`
+    defer {
         ca.deinit();
         self.allocator.destroy(ca);
     }

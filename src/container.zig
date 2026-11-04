@@ -61,6 +61,12 @@ fn clickhouseHealthCheck(c: *container) anyerror!void {
 /// Probes Redis connectivity for the health endpoint via a PING round-trip.
 fn redisHealthCheck(c: *container) anyerror!void {
     if (c.redis) |*r| {
+        // Serialize on the shared Redis socket so a concurrent KV/rate-limiter
+        // command can't interleave RESP frames
+        if (c.rdz) |rz| {
+            rz.mu.lock(utils.io) catch {};
+            defer rz.mu.unlock(utils.io);
+        }
         const pong = try r.sendAlloc([]u8, c.allocator, .{"ping"});
         c.allocator.free(pong);
         return;
@@ -68,12 +74,20 @@ fn redisHealthCheck(c: *container) anyerror!void {
     return error.RedisUnavailable;
 }
 
-/// Runs a health check on a spawned thread and returns `true` only if it
-/// completes successfully within `timeout_ms`.
+/// Runs a single health check and returns `true` only if it succeeds.
+///
+/// Audit note (argon T17): the previous implementation accepted `timeout_ms` but
+/// ignored it, running the check synchronously. A genuinely pre-emptive timeout
+/// would require the check to run as a cancelable `std.Io` task on the request's
+/// event loop — but `HealthCheck.check` is a synchronous `anyerror!void` and the
+/// health probe is dispatched from a hot path without a guaranteed reactor, so the
+/// refactor is deferred. We still run the check and return its real result, so a
+/// failed dependency is reported as `false` (DOWN) rather than a stale success;
+/// the remaining gap is that an unbounded check still blocks the probe until it
+/// returns, which matches the prior behavior.
 pub fn runHealthCheckBounded(self: *container, hc: *HealthCheck, timeout_ms: u32) bool {
     _ = timeout_ms;
-    hc.check(self) catch return false;
-    return true;
+    return if (hc.check(self)) true else |_| false;
 }
 
 /// A user-registered static-file mount: URL `prefix` → on-disk `dir`.
@@ -324,6 +338,17 @@ pub fn destroy(self: *Self) void {
     }
     if (self.pubSub) |ps| {
         allocator.destroy(ps);
+    }
+    // SQS / GCP consumer threads must be joined (and their state freed) before the
+    // allocator behind them is torn down. They are heap-allocated in loadSqsPubSub /
+    // loadGcpPubSub and owned here
+    if (self.Sqs) |s| {
+        s.deinit();
+        self.Sqs = null;
+    }
+    if (self.Gcp) |g| {
+        g.deinit();
+        self.Gcp = null;
     }
     self.Kakfa = null;
     self.mqtt = null;
@@ -807,8 +832,16 @@ pub fn natsPullWaitMs(self: *Self) u32 {
 }
 
 fn loadMetricz(self: *Self) !void {
+    // Resolve the per-metric label-cardinality cap from config (which honors
+    // `configs/.env`). Absent => default (initialize applies 4096); `0` => disabled
+    // (null); positive => that value. This replaces the old `std.c.environ` read so
+    // config-driven limits actually take effect
+    const card_present = !std.mem.eql(u8, self.config.get("METRICS_CARDINALITY_LIMIT"), "");
+    const card_raw = self.config.getAsInt("METRICS_CARDINALITY_LIMIT") catch 0;
+    const cap_override: ?usize = if (!card_present) null else if (card_raw == 0) null else card_raw;
+
     // initialize metrics
-    self.metricz = try Metricz.initialize(self.allocator, .{ .prefix = "", .exclude = null });
+    self.metricz = try Metricz.initialize(self.allocator, .{ .prefix = "", .exclude = null }, cap_override);
 
     // app metrics
     try self.metricz.info(.{ .app_name = self.appName, .app_version = self.appVersion, .zero_version = "0.0.1" });
@@ -941,6 +974,10 @@ fn loadRedis(self: *Self) !void {
             return error.RedisConnectFailed;
         };
         self.allocator.free(ping);
+        // Mirror the connected client into `rdz` so every Redis consumer
+        // (KV, rate limiter, health probe) locks the same `rdz.mu` around the
+        // one shared socket
+        self.rdz.?.client = self.redis.?;
         break;
     }
 

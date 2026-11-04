@@ -33,7 +33,7 @@ test "datasource sqlite backend integration" {
 
     const log = try root.logger.create(allocator);
     defer allocator.destroy(log);
-    const m = try root.metricz.initialize(allocator, .{ .prefix = "", .exclude = null });
+    const m = try root.metricz.initialize(allocator, .{ .prefix = "", .exclude = null }, null);
     defer allocator.destroy(m);
 
     const sqlite = try root.SQLite.init(allocator, ":memory:", true, true, root.sqlitez.ThreadingMode.MultiThread, log, m);
@@ -127,7 +127,7 @@ test "datasource postgres backend integration" {
 
     const log = try root.logger.create(allocator);
     defer allocator.destroy(log);
-    const m = try root.metricz.initialize(allocator, .{ .prefix = "", .exclude = null });
+    const m = try root.metricz.initialize(allocator, .{ .prefix = "", .exclude = null }, null);
     defer allocator.destroy(m);
 
     var cfg: root.SQL.dbConfig = .{};
@@ -171,7 +171,6 @@ test "datasource postgres backend integration" {
 // concurrent transactions no longer share a single `transaction_conn` /
 // `lastId`. If the sessions weren't isolated, concurrent `begin()` calls would
 // clobber each other's pinned connection and the final counter would be wrong.
-//
 // Gated on `DB_HOST`; skips cleanly when no Postgres is configured.
 test "datasource postgres concurrent transactions isolation" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
@@ -207,7 +206,7 @@ test "datasource postgres concurrent transactions isolation" {
 
     const log = try root.logger.create(allocator);
     defer allocator.destroy(log);
-    const m = try root.metricz.initialize(allocator, .{ .prefix = "", .exclude = null });
+    const m = try root.metricz.initialize(allocator, .{ .prefix = "", .exclude = null }, null);
     defer allocator.destroy(m);
 
     var cfg: root.SQL.dbConfig = .{};
@@ -302,10 +301,14 @@ test "redis kvstore concurrent set/get (mutex serialization)" {
         return;
     };
 
-    var kr: KVRedis = .{ .client = client };
+    // KVRedis now shares the container's `rdz` socket + mutex,
+    // so build a heap `rdz` wrapping the raw client and point KVRedis at it.
+    const rz = try root.rdz.create(allocator);
+    rz.client = client;
+    var kr: KVRedis = .{ .rdz = rz };
 
     // Verify reachability before spawning workers.
-    _ = kr.client.sendAlloc([]u8, allocator, .{"ping"}) catch {
+    _ = kr.rdz.client.sendAlloc([]u8, allocator, .{"ping"}) catch {
         std.debug.print("redis ping failed, skipping redis concurrency test\n", .{});
         return;
     };
