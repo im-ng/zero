@@ -69,9 +69,45 @@ jobs:
           name: zero-${{ matrix.short }}
           path: dist/*
 
+  sbom:
+    name: Generate SBOM
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Zig 0.17.0
+        uses: korandoru/setup-zig@v1
+        with:
+          version: "0.17.0"
+
+      - name: Install system libraries (Linux)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y librdkafka-dev libssl-dev
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install tooling (cdxgen, cyclonedx-cli, syft)
+        run: |
+          npm install -g @cyclonedx/cdxgen @cyclonedx/cyclonedx-cli
+          curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh | sh -s -- -b /usr/local/bin
+
+      - name: Generate merged SBOM
+        run: ./scripts/gen-sbom.sh
+
+      - name: Upload SBOM artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: zero-sbom
+          path: final-sbom.json
+
   release:
     name: Create GitHub Release
-    needs: build
+    needs: [build, sbom]
     runs-on: ubuntu-latest
     steps:
       - name: Download all artifacts
