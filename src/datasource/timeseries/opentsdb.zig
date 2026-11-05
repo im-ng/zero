@@ -47,7 +47,7 @@ pub const OpenTSDB = struct {
     /// server returns 204 (no body) or 200 with an errors array on success.
     pub fn write(self: *OpenTSDB, ctx: *root.Context, statement: []const u8) !void {
         self.last_status.store(0, .monotonic);
-        self.last_kind.store(@intFromEnum(root.Error.ErrorKind.none), .monotonic);
+        self.last_kind.store(@backingInt(root.Error.ErrorKind.none), .monotonic);
 
         const url = try std.fmt.allocPrint(ctx.allocator, "{s}/api/put", .{self.base_url});
         defer ctx.allocator.free(url);
@@ -64,7 +64,7 @@ pub const OpenTSDB = struct {
             const sb = try res.allocBody(ctx.allocator, .{});
             defer sb.deinit();
             self.last_status.store(res.status, .monotonic);
-            self.last_kind.store(@intFromEnum(root.Error.classifyHttpStatus(res.status)), .monotonic);
+            self.last_kind.store(@backingInt(root.Error.classifyHttpStatus(res.status)), .monotonic);
             return error.OpenTSDBWriteFailed;
         }
     }
@@ -73,7 +73,7 @@ pub const OpenTSDB = struct {
     /// by `ctx.allocator`. Caller frees.
     pub fn query(self: *OpenTSDB, ctx: *root.Context, q: []const u8) ![]const u8 {
         self.last_status.store(0, .monotonic);
-        self.last_kind.store(@intFromEnum(root.Error.ErrorKind.none), .monotonic);
+        self.last_kind.store(@backingInt(root.Error.ErrorKind.none), .monotonic);
 
         const url = try std.fmt.allocPrint(ctx.allocator, "{s}/api/query", .{self.base_url});
         defer ctx.allocator.free(url);
@@ -91,7 +91,7 @@ pub const OpenTSDB = struct {
             const sb = try res.allocBody(ctx.allocator, .{});
             defer sb.deinit();
             self.last_status.store(res.status, .monotonic);
-            self.last_kind.store(@intFromEnum(root.Error.classifyHttpStatus(res.status)), .monotonic);
+            self.last_kind.store(@backingInt(root.Error.classifyHttpStatus(res.status)), .monotonic);
             return error.OpenTSDBQueryFailed;
         }
 
@@ -106,13 +106,13 @@ pub const OpenTSDB = struct {
     pub fn createDatabase(self: *OpenTSDB, ctx: *root.Context, _: []const u8) !void {
         _ = ctx;
         self.last_status.store(0, .monotonic);
-        self.last_kind.store(@intFromEnum(root.Error.ErrorKind.none), .monotonic);
+        self.last_kind.store(@backingInt(root.Error.ErrorKind.none), .monotonic);
     }
 
     /// Thread-safe last-failure accessor. Returns `null` when the most recent
     /// attempt succeeded (or none has been made).
     pub fn lastError(self: *OpenTSDB) ?root.Error.DataSourceError {
-        const kind = @as(root.Error.ErrorKind, @enumFromInt(self.last_kind.load(.monotonic)));
+        const kind = @as(root.Error.ErrorKind, @fromBackingInt(@intCast(self.last_kind.load(.monotonic))));
         if (kind == .none) return null;
         return .{
             .status = self.last_status.load(.monotonic),

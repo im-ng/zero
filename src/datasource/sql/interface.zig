@@ -1,5 +1,6 @@
 const std = @import("std");
 const root = @import("../../zero.zig");
+const build_options = @import("build_options");
 
 const SQLite = root.SQLite;
 const SQL = root.SQL;
@@ -177,12 +178,12 @@ pub const Interface = struct {
                 stmt,
                 args,
             ),
-            .duckdb => @as(*root.DuckDB, @ptrCast(@alignCast(self.ptr))).queryRow(
+            .duckdb => if (comptime build_options.duckdb) @as(*root.DuckDB, @ptrCast(@alignCast(self.ptr))).queryRow(
                 ctx,
                 Type,
                 stmt,
                 args,
-            ),
+            ) else unreachable,
             .clickhouse => @as(*root.ClickHouse, @ptrCast(@alignCast(self.ptr))).queryRow(
                 ctx,
                 Type,
@@ -240,12 +241,12 @@ pub const Interface = struct {
                 stmt,
                 args,
             ),
-            .duckdb => @as(*root.DuckDB, @ptrCast(@alignCast(self.ptr))).queryRows(
+            .duckdb => if (comptime build_options.duckdb) @as(*root.DuckDB, @ptrCast(@alignCast(self.ptr))).queryRows(
                 ctx,
                 Type,
                 stmt,
                 args,
-            ),
+            ) else unreachable,
             .clickhouse => @as(*root.ClickHouse, @ptrCast(@alignCast(self.ptr))).queryRows(
                 ctx,
                 Type,
@@ -303,12 +304,12 @@ pub const Interface = struct {
                 stmt,
                 args,
             ),
-            .duckdb => @as(*root.DuckDB, @ptrCast(@alignCast(self.ptr))).queryRowContext(
+            .duckdb => if (comptime build_options.duckdb) @as(*root.DuckDB, @ptrCast(@alignCast(self.ptr))).queryRowContext(
                 ctx,
                 Type,
                 stmt,
                 args,
-            ),
+            ) else unreachable,
             .clickhouse => @as(*root.ClickHouse, @ptrCast(@alignCast(self.ptr))).queryRowContext(
                 ctx,
                 Type,
@@ -366,12 +367,12 @@ pub const Interface = struct {
                 stmt,
                 args,
             ),
-            .duckdb => @as(*root.DuckDB, @ptrCast(@alignCast(self.ptr))).queryRowsContext(
+            .duckdb => if (comptime build_options.duckdb) @as(*root.DuckDB, @ptrCast(@alignCast(self.ptr))).queryRowsContext(
                 ctx,
                 Type,
                 stmt,
                 args,
-            ),
+            ) else unreachable,
             .clickhouse => @as(*root.ClickHouse, @ptrCast(@alignCast(self.ptr))).queryRowsContext(
                 ctx,
                 Type,
@@ -432,13 +433,13 @@ pub const Interface = struct {
                 stmt,
                 args,
             ),
-            .duckdb => @as(*root.DuckDB, @ptrCast(@alignCast(self.ptr))).selectSlice(
+            .duckdb => if (comptime build_options.duckdb) @as(*root.DuckDB, @ptrCast(@alignCast(self.ptr))).selectSlice(
                 ctx,
                 Type,
                 list,
                 stmt,
                 args,
-            ),
+            ) else unreachable,
             .clickhouse => @as(*root.ClickHouse, @ptrCast(@alignCast(self.ptr))).selectSlice(
                 ctx,
                 Type,
@@ -496,11 +497,11 @@ pub const Interface = struct {
                 stmt,
                 args,
             ),
-            .duckdb => @as(*root.DuckDB, @ptrCast(@alignCast(self.ptr))).execWithContext(
+            .duckdb => if (comptime build_options.duckdb) @as(*root.DuckDB, @ptrCast(@alignCast(self.ptr))).execWithContext(
                 ctx,
                 stmt,
                 args,
-            ),
+            ) else unreachable,
             .clickhouse => @as(*root.ClickHouse, @ptrCast(@alignCast(self.ptr))).execWithContext(
                 ctx,
                 stmt,
@@ -536,7 +537,7 @@ pub const Interface = struct {
             .sqlite => @as(*SQLite, @ptrCast(@alignCast(self.ptr))).lastInsertRowID(),
             .postgres => @as(*SQL, @ptrCast(@alignCast(self.ptr))).lastInsertRowID(),
             .mock => @as(*MockBackend, @ptrCast(@alignCast(self.ptr))).lastInsertRowID(),
-            .duckdb => @as(*root.DuckDB, @ptrCast(@alignCast(self.ptr))).lastInsertRowID(),
+            .duckdb => if (comptime build_options.duckdb) @as(*root.DuckDB, @ptrCast(@alignCast(self.ptr))).lastInsertRowID() else unreachable,
             .clickhouse => @as(*root.ClickHouse, @ptrCast(@alignCast(self.ptr))).lastInsertRowID(),
             .mysql => @as(*root.MySQL, @ptrCast(@alignCast(self.ptr))).lastInsertRowID(),
             .duckgres => @as(*root.DuckGres, @ptrCast(@alignCast(self.ptr))).lastInsertRowID(),
@@ -549,7 +550,7 @@ pub const Interface = struct {
             .sqlite => @as(*SQLite, @ptrCast(@alignCast(self.ptr))).rowsAffected(),
             .postgres => @as(*SQL, @ptrCast(@alignCast(self.ptr))).rowsAffected(),
             .mock => @as(*MockBackend, @ptrCast(@alignCast(self.ptr))).rowsAffected(),
-            .duckdb => @as(*root.DuckDB, @ptrCast(@alignCast(self.ptr))).rowsAffected(),
+            .duckdb => if (comptime build_options.duckdb) @as(*root.DuckDB, @ptrCast(@alignCast(self.ptr))).rowsAffected() else unreachable,
             .clickhouse => @as(*root.ClickHouse, @ptrCast(@alignCast(self.ptr))).rowsAffected(),
             .mysql => @as(*root.MySQL, @ptrCast(@alignCast(self.ptr))).rowsAffected(),
             .duckgres => @as(*root.DuckGres, @ptrCast(@alignCast(self.ptr))).rowsAffected(),
@@ -562,7 +563,7 @@ pub const Interface = struct {
             .sqlite => @as(*SQLite, @ptrCast(@alignCast(self.ptr))).begin(),
             .postgres => @as(*SQL, @ptrCast(@alignCast(self.ptr))).begin(),
             .mock => @as(*MockBackend, @ptrCast(@alignCast(self.ptr))).begin(),
-            .duckdb => @as(*root.DuckDB, @ptrCast(@alignCast(self.ptr))).begin(),
+            .duckdb => if (comptime build_options.duckdb) @as(*root.DuckDB, @ptrCast(@alignCast(self.ptr))).begin() else unreachable,
             .clickhouse => @as(*root.ClickHouse, @ptrCast(@alignCast(self.ptr))).begin(),
             .mysql => @as(*root.MySQL, @ptrCast(@alignCast(self.ptr))).begin(),
             .duckgres => @as(*root.DuckGres, @ptrCast(@alignCast(self.ptr))).begin(),
@@ -575,7 +576,7 @@ pub const Interface = struct {
             .sqlite => @as(*SQLite, @ptrCast(@alignCast(self.ptr))).commit(),
             .postgres => @as(*SQL, @ptrCast(@alignCast(self.ptr))).commit(),
             .mock => @as(*MockBackend, @ptrCast(@alignCast(self.ptr))).commit(),
-            .duckdb => @as(*root.DuckDB, @ptrCast(@alignCast(self.ptr))).commit(),
+            .duckdb => if (comptime build_options.duckdb) @as(*root.DuckDB, @ptrCast(@alignCast(self.ptr))).commit() else unreachable,
             .clickhouse => @as(*root.ClickHouse, @ptrCast(@alignCast(self.ptr))).commit(),
             .mysql => @as(*root.MySQL, @ptrCast(@alignCast(self.ptr))).commit(),
             .duckgres => @as(*root.DuckGres, @ptrCast(@alignCast(self.ptr))).commit(),
@@ -588,7 +589,7 @@ pub const Interface = struct {
             .sqlite => @as(*SQLite, @ptrCast(@alignCast(self.ptr))).rollback(),
             .postgres => @as(*SQL, @ptrCast(@alignCast(self.ptr))).rollback(),
             .mock => @as(*MockBackend, @ptrCast(@alignCast(self.ptr))).rollback(),
-            .duckdb => @as(*root.DuckDB, @ptrCast(@alignCast(self.ptr))).rollback(),
+            .duckdb => if (comptime build_options.duckdb) @as(*root.DuckDB, @ptrCast(@alignCast(self.ptr))).rollback() else unreachable,
             .clickhouse => @as(*root.ClickHouse, @ptrCast(@alignCast(self.ptr))).rollback(),
             .mysql => @as(*root.MySQL, @ptrCast(@alignCast(self.ptr))).rollback(),
             .duckgres => @as(*root.DuckGres, @ptrCast(@alignCast(self.ptr))).rollback(),

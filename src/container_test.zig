@@ -1,5 +1,6 @@
 const std = @import("std");
 const container = @import("container.zig");
+const utils = @import("utils.zig");
 
 const StaticMount = container.StaticMount;
 const staticResolve = container.staticResolve;
@@ -24,4 +25,30 @@ test "staticResolve matches mount with path boundary" {
     // prefix must be a path boundary, not a substring
     try std.testing.expect(staticResolve(&mounts, "/assets2/x") == null);
     try std.testing.expect(staticResolve(&mounts, "/nope/x") == null);
+}
+
+test "runHealthCheck reports the real check result (argon T17)" {
+    // T17: a health check must report its real outcome, never a stale success and
+    // never crash on a failing check. The check runs synchronously on the probe
+    // thread with no timeout enforcement (crouton #11): a healthy check is UP and
+    // a throwing check is DOWN.
+    var c: container = .{ .allocator = std.testing.allocator };
+
+    var healthy: container.HealthCheck = .{
+        .name = "cache",
+        .check = struct {
+            fn check(_: *container) anyerror!void {}
+        }.check,
+    };
+    try std.testing.expect(c.runHealthCheck(&healthy));
+
+    var failing: container.HealthCheck = .{
+        .name = "billing",
+        .check = struct {
+            fn check(_: *container) anyerror!void {
+                return error.DependencyDown;
+            }
+        }.check,
+    };
+    try std.testing.expect(!c.runHealthCheck(&failing));
 }

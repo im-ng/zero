@@ -1,6 +1,7 @@
 const std = @import("std");
 const root = @import("zero.zig");
 const metric_cap = @import("metric_cap.zig");
+const constants = root.constants;
 
 /// Reads a process environment variable by scanning `std.c.environ`. Zig 0.16
 /// dropped `std.process.getEnv`, and this project always links libc, so the C
@@ -356,19 +357,15 @@ fn addCustom(self: *Self, ptr: *anyopaque, write_fn: *const fn (*anyopaque, *std
     try self.custom.append(.{ .ptr = ptr, .write = write_fn, .deinit = deinit_fn });
 }
 
-pub fn initialize(allocator: Allocator, comptime _: metrics.RegistryOpts) !*metricz {
+pub fn initialize(allocator: Allocator, comptime _: metrics.RegistryOpts, cap_override: ?usize) !*metricz {
     metrics.setIo(utils.io);
 
-    // Honor an operator-configured cap on distinct label sets per metric so a
-    // runaway label cardinality can't OOM the process. Off (null) unless the
-    // env var is set to a positive integer. Dropped series surface as the
-    // `otel_metric_overflow` series emitted by `writeRaw`.
-    var cap: ?usize = null;
-    if (envGet("METRICS_CARDINALITY_LIMIT")) |raw| {
-        if (std.fmt.parseUnsigned(usize, raw, 10)) |lim| {
-            cap = lim;
-        } else |_| {}
-    }
+    // Cap on distinct label sets per metric so a runaway cardinality can't OOM the
+    // process. The caller (container.loadMetricz) resolves this from config (which
+    // honors `configs/.env`): `0` disables the cap (passes null), a positive value
+    // sets it, and an absent value defaults to a safe ceiling. Dropped series
+    // surface as the `otel_metric_overflow` series emitted by `writeRaw`.
+    const cap: ?usize = cap_override orelse constants.DEFAULT_METRICS_CARDINALITY_LIMIT;
 
     const m = try allocator.create(metricz);
     errdefer allocator.destroy(m);
@@ -623,6 +620,7 @@ pub fn writeRaw(self: *Self, allocator: Allocator, writer: *std.Io.Writer) !void
     try self.Info.write(writer);
     if (builtin.os.tag == .linux) {
         const path = try utils.combine(allocator, "/proc/{d}/status", .{std.c.getpid()});
+        defer allocator.free(path);
 
         const ps = try Process.usage(allocator, path);
 

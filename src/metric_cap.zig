@@ -24,8 +24,8 @@ fn hashLabels(labels: anytype) u64 {
     if (ti != .@"struct") {
         @compileError("metric cap labels must be a struct, got: " ++ @typeName(@TypeOf(labels)));
     }
-    inline for (ti.@"struct".fields) |f| {
-        hashValue(&hasher, @field(labels, f.name));
+    inline for (ti.@"struct".field_names, ti.@"struct".field_types, ti.@"struct".field_attrs) |f_name, _, _| {
+        hashValue(&hasher, @field(labels, f_name));
     }
     return hasher.final();
 }
@@ -34,8 +34,11 @@ fn hashValue(hasher: *std.hash.Wyhash, v: anytype) void {
     const ti = @typeInfo(@TypeOf(v));
     switch (ti) {
         .int, .float => hasher.update(std.mem.asBytes(&v)),
-        .@"enum" => hasher.update(std.mem.asBytes(&@intFromEnum(v))),
+        .@"enum" => hasher.update(std.mem.asBytes(&@backingInt(v))),
         .pointer => |p| if (p.size == .slice) {
+            // Hash the length before the bytes so `{ .a = "ab", .b = "c" }` and
+            // `{ .a = "a", .b = "bc" }` don't collide
+            hasher.update(std.mem.asBytes(&v.len));
             hasher.update(std.mem.sliceAsBytes(v));
         } else {
             @compileError("metric cap: unsupported label pointer field");
@@ -131,4 +134,11 @@ pub fn CapCounter(comptime Vec: type) type {
 
 pub fn CapHistogram(comptime Vec: type) type {
     return Cap(Vec, false);
+}
+
+test "hashLabels does not collide across field boundaries (argon T16)" {
+    const Labels = struct { a: []const u8, b: []const u8 };
+    const x = Labels{ .a = "ab", .b = "c" };
+    const y = Labels{ .a = "a", .b = "bc" };
+    try std.testing.expect(hashLabels(x) != hashLabels(y));
 }

@@ -46,7 +46,7 @@ pub const Context = struct {
     params: std.StringHashMap([]const u8) = undefined,
 
     /// Active OpenTelemetry span for this request (set by the `tracz` middleware
-    /// before dispatch). Null when OTEL_EXPERIMENTAL is off or outside a request.
+    /// before dispatch). Null when OTel is disabled (no endpoint) or outside a request.
     otel_span: ?otel.ActiveSpan = null,
 
     /// W3C Baggage parsed from the inbound `baggage` header. Handlers read and
@@ -117,7 +117,7 @@ pub const Context = struct {
             c.MQ = pb;
         }
 
-        if (container.Kakfa) |k| {
+        if (container.Kafka) |k| {
             c.KF = k;
         }
 
@@ -154,6 +154,11 @@ pub const Context = struct {
 
         if (container.SQL != null or container.SQLite != null or container.DuckDB != null or container.ClickHouse != null or container.DuckGres != null) {
             c.SQL = container.datasource;
+        } else if (container.MySQL != null) {
+            // Mirror `init`: MySQL needs a per-request session so CLI/cron/pub-sub
+            // contexts get a working `ctx.SQL` instead of a null handle
+            const session = try root.MySQL.createSession(allocator, container.MySQL.?);
+            c.SQL = root.Datasource.init(session, .mysql, container.datasource.breaker, container.metricz);
         }
         if (container.defaultKV) |kv| {
             c.KV = kv;
@@ -176,7 +181,7 @@ pub const Context = struct {
         if (container.mqtt) |pb| {
             c.MQ = pb;
         }
-        if (container.Kakfa) |k| {
+        if (container.Kafka) |k| {
             c.KF = k;
         }
         if (container.Nats) |n| {
@@ -252,6 +257,27 @@ pub const Context = struct {
         self.allocator.destroy(self);
     }
 
+    /// Tear down a request context. Called via `defer ctx.cleanup()` at the end of
+    /// each HTTP handler. Rolls back any open SQL transaction so a handler error
+    /// can't leak an open transaction onto a pooled connection, and frees the W3C
+    /// baggage. The request arena is reset by httpz after the handler returns, which
+    /// frees the per-request SQL session and every arena allocation, so we must not
+    /// free those here (doing so would double-free). Replaces the old
+    /// `defer req.arena.destroy(&ctx)`, which destroyed the on-stack `ctx` value
+    /// through the arena
+    pub fn cleanup(self: *Context) void {
+        const has_sql = self.container.SQL != null or self.container.MySQL != null or
+            self.container.SQLite != null or self.container.DuckDB != null or
+            self.container.ClickHouse != null or self.container.DuckGres != null;
+        if (has_sql) {
+            self.SQL.rollback();
+        }
+        if (self.baggage) |*b| {
+            b.deinit();
+            self.baggage = null;
+        }
+    }
+
     /// returns traceID of the service request
     pub fn trace(self: *Context) ?[]const u8 {
         if (self.request) |r| {
@@ -269,7 +295,7 @@ pub const Context = struct {
     }
 
     /// Returns the active OpenTelemetry span handle for this request, or null when
-    /// OTEL_EXPERIMENTAL is off or outside a request context.
+    /// OTel is disabled (no endpoint) or outside a request context.
     pub fn span(self: *Context) ?otel.ActiveSpan {
         return self.otel_span;
     }
@@ -335,6 +361,20 @@ pub const Context = struct {
     /// available as `ctx.FileStore`.
     pub fn GetFileStore(self: *Context, name: []const u8) ?*root.FileStore {
         return self.container.fileStores.get(name);
+    }
+
+    /// Look up a named SQL datasource registered via `App.addSQL`. The default
+    /// datasource (wired from `DB_*`/`SQL_*` config) is also available as
+    /// `ctx.SQL` and under the `"default"` key.
+    pub fn GetSQL(self: *Context, name: []const u8) ?root.Datasource {
+        return self.container.sqlStores.get(name);
+    }
+
+    /// Look up a named pub/sub backend registered via `App.addPubSub`. The default
+    /// backend (wired from `PUBSUB_BACKEND`) is also available as `ctx.PubSub` and
+    /// under the `"default"` key.
+    pub fn GetPubSub(self: *Context, name: []const u8) ?*root.PubSub {
+        return self.container.pubSubBackends.get(name);
     }
 
     /// Returns an uploaded file from a `multipart/form-data` request, or `null`

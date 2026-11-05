@@ -44,7 +44,7 @@ pub const ClickHouse = struct {
     /// Caller frees.
     pub fn runRaw(self: *ClickHouse, alloc: std.mem.Allocator, sql: []const u8) ![]u8 {
         self.last_status.store(0, .monotonic);
-        self.last_kind.store(@intFromEnum(root.Error.ErrorKind.none), .monotonic);
+        self.last_kind.store(@backingInt(root.Error.ErrorKind.none), .monotonic);
         const req_url = try std.fmt.allocPrint(alloc, "{s}", .{self.url});
         var req = try self.client.allocRequest(alloc, req_url);
         defer {
@@ -68,7 +68,7 @@ pub const ClickHouse = struct {
             const sb = try res.allocBody(alloc, .{});
             defer sb.deinit();
             self.last_status.store(res.status, .monotonic);
-            self.last_kind.store(@intFromEnum(root.Error.classifyHttpStatus(res.status)), .monotonic);
+            self.last_kind.store(@backingInt(root.Error.classifyHttpStatus(res.status)), .monotonic);
             return error.ClickHouseQueryFailed;
         }
         const sb = try res.allocBody(alloc, .{});
@@ -82,16 +82,16 @@ pub const ClickHouse = struct {
     fn interpolate(self: *ClickHouse, comptime stmt: []const u8, args: anytype) ![]u8 {
         const ArgType = @TypeOf(args);
         if (comptime @typeInfo(ArgType) != .@"struct") return self.allocator.dupe(u8, stmt);
-        const fields = @typeInfo(ArgType).@"struct".fields;
-        if (fields.len == 0) return self.allocator.dupe(u8, stmt);
+        const field_names = @typeInfo(ArgType).@"struct".field_names;
+        if (field_names.len == 0) return self.allocator.dupe(u8, stmt);
 
         var buf: std.array_list.Managed(u8) = .init(self.allocator);
         var it = std.mem.splitScalar(u8, stmt, '?');
-        inline for (fields) |field| {
+        inline for (field_names) |field_name| {
             if (it.next()) |part| {
                 try buf.appendSlice(part);
             }
-            try appendLiteral(&buf, @field(args, field.name));
+            try appendLiteral(&buf, @field(args, field_name));
         }
         // Trailing text after the final `?` (if any).
         if (it.next()) |part| {
@@ -234,7 +234,7 @@ pub const ClickHouse = struct {
     /// and `status` is the last HTTP status (0 for non-HTTP). The returned
     /// struct is a copy with no shared heap buffer, so it is safe to read.
     pub fn lastError(self: *ClickHouse) ?root.Error.DataSourceError {
-        const kind = @as(root.Error.ErrorKind, @enumFromInt(self.last_kind.load(.monotonic)));
+        const kind = @as(root.Error.ErrorKind, @fromBackingInt(@intCast(self.last_kind.load(.monotonic))));
         if (kind == .none) return null;
         return .{
             .status = self.last_status.load(.monotonic),

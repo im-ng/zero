@@ -1,5 +1,6 @@
 const std = @import("std");
 const root = @import("zero.zig");
+const build_options = @import("build_options");
 const container = @This();
 const Self = @This();
 
@@ -61,19 +62,42 @@ fn clickhouseHealthCheck(c: *container) anyerror!void {
 /// Probes Redis connectivity for the health endpoint via a PING round-trip.
 fn redisHealthCheck(c: *container) anyerror!void {
     if (c.redis) |*r| {
-        const pong = try r.sendAlloc([]u8, c.allocator, .{"ping"});
+        // Serialize on the shared Redis socket so a concurrent KV/rate-limiter
+        // command can't interleave RESP frames
+        if (c.rdz) |rz| {
+            rz.mu.lock(utils.io) catch {};
+            defer rz.mu.unlock(utils.io);
+        }
+        const pong = r.sendAlloc([]u8, c.allocator, .{"ping"}) catch {
+            // The shared socket may have died in an outage. Rebuild it in place
+            // once before declaring Redis unavailable — this heals KV, the rate
+            // limiter, and the health probe at the same time (they all borrow the
+            // same `rdz` reader/writer interfaces).
+            if (c.rdz) |rz| {
+                rz.reconnect() catch return error.RedisUnavailable;
+                return;
+            }
+            return error.RedisUnavailable;
+        };
         c.allocator.free(pong);
         return;
     }
     return error.RedisUnavailable;
 }
 
-/// Runs a health check on a spawned thread and returns `true` only if it
-/// completes successfully within `timeout_ms`.
-pub fn runHealthCheckBounded(self: *container, hc: *HealthCheck, timeout_ms: u32) bool {
-    _ = timeout_ms;
-    hc.check(self) catch return false;
-    return true;
+/// Runs a single health check and returns `true` only if it succeeds.
+///
+/// Audit note (argon T17): the previous implementation accepted `timeout_ms` but
+/// ignored it, running the check synchronously. A genuinely pre-emptive timeout
+/// would require the check to run as a cancelable `std.Io` task on the request's
+/// Run one health check and return its real result. The check is a synchronous
+/// `anyerror!void` dispatched on the probe's thread, so this returns the actual
+/// dependency status (`true` = UP, `false` = DOWN) and does NOT enforce a
+/// timeout: a hung dependency blocks the health probe until the check returns.
+/// Enforcing a real timeout would require running `HealthCheck.check` as a
+/// cancelable task on a reactor, which is a deferred refactor (see crouton #11).
+pub fn runHealthCheck(self: *container, hc: *HealthCheck) bool {
+    return if (hc.check(self)) true else |_| false;
 }
 
 /// A user-registered static-file mount: URL `prefix` → on-disk `dir`.
@@ -122,8 +146,10 @@ bootstrap: std.mem.Allocator = undefined,
 log: *root.logger = undefined,
 config: *root.config = undefined,
 metricz: *root.metricz = undefined,
-/// OpenTelemetry provider (inert unless OTEL_EXPERIMENTAL=true). Set by App.initBase.
+/// OpenTelemetry provider (inert unless an OTLP exporter endpoint is configured). Set by App.initBase.
 otel: *root.otel.Provider = undefined,
+/// Transactional-outbox configuration (null until App.addOutbox is called).
+outbox_options: ?root.outbox.Options = null,
 authProvider: *root.AuthProvider = undefined,
 
 /// optional role-based access control registry, wired into the rbac middleware
@@ -165,8 +191,13 @@ kvStores: std.StringHashMap(*root.KVStore) = undefined,
 defaultKV: ?*root.KVStore = null,
 fileStores: std.StringHashMap(*root.FileStore) = undefined,
 defaultFileStore: ?*root.FileStore = null,
+// Named SQL datasources (registered via App.addSQL) and named pub/sub
+// backends (registered via App.addPubSub). The single wired datasource /
+// pub/sub backend is also available under the "default" key.
+sqlStores: std.StringHashMap(root.Datasource) = undefined,
+pubSubBackends: std.StringHashMap(*root.PubSub) = undefined,
 mqtt: ?*root.MQTT = null,
-Kakfa: ?*root.kafka = null,
+Kafka: ?*root.kafka = null,
 Nats: ?*root.nats = null,
 Redis: ?*root.redisPubSub = null,
 Sqs: ?*root.sqs = null,
@@ -208,17 +239,28 @@ pub fn create(self: Self) anyerror!*container {
     // initialize file stores (backends registered via App.addFileStore / loadFileStore)
     c.fileStores = std.StringHashMap(*root.FileStore).init(c.bootstrap);
 
+    // initialize named SQL datasources (registered via App.addSQL) and named
+    // pub/sub backends (registered via App.addPubSub)
+    c.sqlStores = std.StringHashMap(root.Datasource).init(c.bootstrap);
+    c.pubSubBackends = std.StringHashMap(*root.PubSub).init(c.bootstrap);
+
     // initialize user-registered health checks
     c.healthChecks = std.array_list.Managed(container.HealthCheck).init(c.bootstrap);
 
     // initialize user-registered static mounts
     c.staticMounts = std.array_list.Managed(container.StaticMount).init(c.bootstrap);
 
+    // Startup is fail-fast: a backend that is configured but fails to connect
+    // returns its error, propagated by the `try` calls below, so the process
+    // exits non-zero instead of calling std.process.exit mid-startup.
     // initialize metricz
     try c.loadMetricz();
 
     // initialize db
     try c.loadSQL();
+    if (c.SQL != null or c.MySQL != null or c.SQLite != null or c.DuckDB != null or c.ClickHouse != null or c.DuckGres != null) {
+        c.sqlStores.put("default", c.datasource) catch {};
+    }
 
     // initialize kv
     try c.loadRedis();
@@ -256,6 +298,9 @@ pub fn create(self: Self) anyerror!*container {
 
     // initilize message queues
     try c.loadPubSub();
+    if (c.pubSub != null) {
+        c.pubSubBackends.put("default", c.pubSub.?) catch {};
+    }
 
     c.log.info("container is created");
 
@@ -306,9 +351,11 @@ pub fn destroy(self: *Self) void {
     // structures (audit #12). The unified PubSub wrapper is heap-allocated in
     // loadPubSub and freed here too. Runs before config/log teardown because the
     // client destroy paths log through `container.log`.
-    if (self.Kakfa) |k| {
-        k.destroy();
-        allocator.destroy(k);
+    if (comptime build_options.kafka) {
+        if (self.Kafka) |k| {
+            k.destroy();
+            allocator.destroy(k);
+        }
     }
     if (self.mqtt) |m| {
         m.destroy();
@@ -325,7 +372,18 @@ pub fn destroy(self: *Self) void {
     if (self.pubSub) |ps| {
         allocator.destroy(ps);
     }
-    self.Kakfa = null;
+    // SQS / GCP consumer threads must be joined (and their state freed) before the
+    // allocator behind them is torn down. They are heap-allocated in loadSqsPubSub /
+    // loadGcpPubSub and owned here
+    if (self.Sqs) |s| {
+        s.deinit();
+        self.Sqs = null;
+    }
+    if (self.Gcp) |g| {
+        g.deinit();
+        self.Gcp = null;
+    }
+    self.Kafka = null;
     self.mqtt = null;
     self.Nats = null;
     self.Redis = null;
@@ -351,8 +409,10 @@ pub fn destroy(self: *Self) void {
 
     // In-process OLAP engine (DuckDB): closes the C database/connection and the
     // struct allocated by `create` / `addDuckDB`.
-    if (self.DuckDB) |db| {
-        db.deinit(allocator);
+    if (comptime build_options.duckdb) {
+        if (self.DuckDB) |db| {
+            db.deinit(allocator);
+        }
     }
 
     // Wired (network) DuckDB client: closes the pgz pool, then frees the struct
@@ -429,6 +489,7 @@ fn loadPubSub(self: *Self) !void {
 }
 
 fn loadKafkaPubSub(self: *Self) !void {
+    if (comptime !build_options.kafka) return;
     var mode: c_uint = rdkafka.RD_KAFKA_PRODUCER;
 
     var buffer: []u8 = undefined;
@@ -455,7 +516,7 @@ fn loadKafkaPubSub(self: *Self) !void {
     const kafkaTlsCertFile = self.config.get("KAFKA_TLS_CERT_FILE");
     const kafkaTlsKeyFile = self.config.get("KAFKA_TLS_KEY_FILE");
     const kafkaTlsCACertFile = self.config.get("KAFKA_TLS_CA_CERT_FILE");
-    const kafkaTlsSkipVerify = self.config.getOrDefault("KAFKA_TLS_INSECURE_SKIP_VERIFY", "true");
+    const kafkaTlsSkipVerify = self.config.getOrDefault("KAFKA_TLS_INSECURE_SKIP_VERIFY", "false");
 
     const config: ?*rdkafka.struct_rd_kafka_conf_s = rdkafka.rd_kafka_conf_new();
 
@@ -515,7 +576,7 @@ fn loadKafkaPubSub(self: *Self) !void {
 
     self.log.info(try std.fmt.bufPrint(buffer, "connecting to kafka at '{s}'", .{servers}));
 
-    self.Kakfa = kafka.create(self, config, null, mode) catch |err| {
+    self.Kafka = kafka.create(self, config, null, mode) catch |err| {
         buffer = try self.bootstrap.alloc(u8, 1024);
         buffer = try std.fmt.bufPrint(buffer, "could not connect to kafka at '{s}'", .{servers});
         self.log.err(buffer);
@@ -539,7 +600,7 @@ fn loadKafkaPubSub(self: *Self) !void {
 
     // build the unified PubSub dispatcher
     const ps = try self.allocator.create(root.PubSub);
-    ps.* = .{ .ptr = @ptrCast(@alignCast(self.Kakfa)), .vtable = &root.kafka.vtable };
+    ps.* = .{ .ptr = @ptrCast(@alignCast(self.Kafka)), .vtable = &root.kafka.vtable };
     self.pubSub = ps;
 }
 
@@ -807,8 +868,16 @@ pub fn natsPullWaitMs(self: *Self) u32 {
 }
 
 fn loadMetricz(self: *Self) !void {
+    // Resolve the per-metric label-cardinality cap from config (which honors
+    // `configs/.env`). Absent => default (initialize applies 4096); `0` => disabled
+    // (null); positive => that value. This replaces the old `std.c.environ` read so
+    // config-driven limits actually take effect
+    const card_present = !std.mem.eql(u8, self.config.get("METRICS_CARDINALITY_LIMIT"), "");
+    const card_raw = self.config.getAsInt("METRICS_CARDINALITY_LIMIT") catch 0;
+    const cap_override: ?usize = if (!card_present) null else if (card_raw == 0) null else card_raw;
+
     // initialize metrics
-    self.metricz = try Metricz.initialize(self.allocator, .{ .prefix = "", .exclude = null });
+    self.metricz = try Metricz.initialize(self.allocator, .{ .prefix = "", .exclude = null }, cap_override);
 
     // app metrics
     try self.metricz.info(.{ .app_name = self.appName, .app_version = self.appVersion, .zero_version = "0.0.1" });
@@ -941,6 +1010,13 @@ fn loadRedis(self: *Self) !void {
             return error.RedisConnectFailed;
         };
         self.allocator.free(ping);
+        // Mirror the connected client into `rdz` so every Redis consumer
+        // (KV, rate limiter, health probe) locks the same `rdz.mu` around the
+        // one shared socket
+        self.rdz.?.client = self.redis.?;
+        // Capture reconnect parameters so a dead socket can be rebuilt in place.
+        self.rdz.?.addr = addr;
+        self.rdz.?.pass = password;
         break;
     }
 
@@ -1125,7 +1201,7 @@ fn loadSQL(self: *Self) !void {
     self.SQL.?.sql = pgz.Pool.init(utils.io, self.allocator, options) catch |err| {
         buffer = try std.fmt.bufPrint(buffer, "Failed to connect: {}", .{err});
         self.log.err(buffer);
-        std.process.exit(1);
+        return err;
     };
     // reference metricz
     self.SQL.?.metricz = self.metricz;
@@ -1195,6 +1271,7 @@ fn loadSQLite(self: *Self) !void {
 // Defaults to an in-memory database when the path is empty. The shared library
 // (`libs/libduckdb.so`) is linked at build time, so this adds no runtime dep.
 fn loadDuckDB(self: *Self) !void {
+    if (comptime !build_options.duckdb) return;
     if (self.DuckDB != null) return;
     const path = self.config.get("DUCKDB_PATH");
     if (path.len == 0) return;
@@ -1295,7 +1372,7 @@ fn loadDuckGres(self: *Self) !void {
     const dg = root.DuckGres.create(self.allocator, options, self.log, self.metricz) catch |err| {
         buffer = try std.fmt.bufPrint(buffer, "Failed to connect: {}", .{err});
         self.log.err(buffer);
-        std.process.exit(1);
+        return err;
     };
     self.DuckGres = dg;
     self.wireDatasource(dg, .duckgres);

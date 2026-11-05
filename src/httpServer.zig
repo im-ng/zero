@@ -208,6 +208,24 @@ pub fn create(allocator: std.mem.Allocator, container: *root.container) !*server
     const rlWindowRaw = hzs.container.config.getAsInt("RATE_LIMIT_WINDOW") catch 0;
     const rlWindowS: i64 = if (rlWindowRaw == 0) constants.DEFAULT_RATE_LIMIT_WINDOW_MS / 1000 else rlWindowRaw;
 
+    // `RATE_LIMIT_TRUSTED_PROXIES` lets header-keyed rate limiting trust a known set
+    // of proxy IPs (so clients can't spoof `X-Forwarded-For`). Parsed into a
+    // bootstrap-allocated slice and handed to the limiter; ignored (empty) otherwise
+    // so header spoofing can't dodge the limit
+    var rlTrustedProxies: []const []const u8 = &[0][]const u8{};
+    const tp_raw = hzs.container.config.get("RATE_LIMIT_TRUSTED_PROXIES");
+    if (std.mem.eql(u8, tp_raw, "") != false) {
+        var list: std.ArrayList([]const u8) = .empty;
+        errdefer list.deinit(hzs.container.bootstrap);
+        var it = std.mem.splitScalar(u8, tp_raw, ',');
+        while (it.next()) |tok| {
+            const trimmed = std.mem.trim(u8, tok, " ");
+            if (trimmed.len == 0) continue;
+            try list.append(hzs.container.bootstrap, try hzs.container.bootstrap.dupe(u8, trimmed));
+        }
+        rlTrustedProxies = try list.toOwnedSlice(hzs.container.bootstrap);
+    }
+
     // `RATE_LIMIT_STORE` selects the counter backend. `redis` enforces a single
     // limit across replicas via a shared Redis key; falls back to the in-process
     // limiter if Redis is not configured.
@@ -231,8 +249,10 @@ pub fn create(allocator: std.mem.Allocator, container: *root.container) !*server
         .window_ms = @as(i64, rlWindowS) * 1000,
         .key_mode = rlKeyMode,
         .header_name = rlHeaderName,
+        .trusted_proxies = rlTrustedProxies,
         .store = rlStore,
         .redis = rlRedis,
+        .rdz = hzs.container.rdz,
     });
 
     hzs.router = try hzs.http.router(.{
@@ -344,28 +364,32 @@ fn loadAuthProviderConfig(self: *Self) anyerror!?*authProvider {
             var encodedKeys = std.mem.splitAny(u8, keyConfig, ",");
 
             while (encodedKeys.next()) |key| {
-                var payload: []u8 = undefined;
-                payload = try self.container.bootstrap.alloc(u8, 1024);
+                // Skip empty/whitespace-only tokens; a stray comma must not decode
+                // to garbage.
+                const trimmed = std.mem.trim(u8, key, " \t\r\n");
+                if (trimmed.len == 0) continue;
 
                 const codecs = std.base64.standard;
-                try codecs.Decoder.decode(payload, key);
+                // Decode into an exact-length buffer so there is no trailing
+                // uninitialized memory. The old code allocated 1024 bytes and split
+                // the whole slab, so the decoded password was compared against
+                // ~1000 bytes of garbage and never matched
+                // `calcSizeForSlice` validates the input up front.
+                const dec_len = codecs.Decoder.calcSizeForSlice(trimmed) catch continue;
+                const payload = try self.container.bootstrap.alloc(u8, dec_len);
+                codecs.Decoder.decode(payload, trimmed) catch {
+                    self.container.bootstrap.free(payload);
+                    continue;
+                };
 
-                var splitValues = std.mem.splitAny(u8, payload, ":");
-
-                var index: i8 = 0;
-                var configKey: []const u8 = undefined;
-                var configPassword: []const u8 = undefined;
-                while (splitValues.next()) |value| {
-                    if (index == 1) {
-                        configPassword = try self.container.bootstrap.alloc(u8, value.len);
-                        configPassword = value;
-                        break;
-                    }
-                    configKey = try self.container.bootstrap.alloc(u8, value.len);
-                    configKey = value;
-                    index += 1;
-                }
-
+                // Split on the first ':' only, preserving ':' inside the password.
+                // The slices borrow `payload`, which outlives the provider.
+                const sep = std.mem.indexOfScalar(u8, payload, ':') orelse {
+                    self.container.bootstrap.free(payload);
+                    continue;
+                };
+                const configKey = payload[0..sep];
+                const configPassword = payload[sep + 1 ..];
                 try keys.put(configKey, configPassword);
             }
 

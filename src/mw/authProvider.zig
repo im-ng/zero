@@ -115,7 +115,7 @@ last_refresh_ok: bool = true,
 
 pub fn create(c: *root.container, m: AuthMode) anyerror!*AuthProvider {
     const auth = try c.allocator.create(AuthProvider);
-    errdefer c.allocator.destroy(c);
+    errdefer c.allocator.destroy(auth);
     auth.* = .{ .container = c, .mode = m };
     return auth;
 }
@@ -405,8 +405,29 @@ pub fn retrieveClaims(_: *Self, allocator: std.mem.Allocator, authHeader: []cons
     };
     defer claims.deinit();
 
-    // return jwtClaims{ .aud = "", .exp = 0, .iat = 0, .iss = "", .jti = "", .nbf = 0, .sub = "" };
-    return claims.value;
+    // The claim strings live inside `jwtTokenizer`'s internal arena, which
+    // `jwtTokenizer.deinit()` frees. Returning `claims.value` directly would hand
+    // the caller slices into freed memory (use-after-free). Dup each present
+    // string field into `allocator` (the request arena in RBAC/request paths) so
+    // the returned struct stays valid after the arena is released. Callers own
+    // the duped slices.
+    var result: jwtClaims = .{};
+    if (claims.value.iss) |v| {
+        result.iss = try allocator.dupe(u8, v);
+    }
+    if (claims.value.aud) |v| {
+        result.aud = try allocator.dupe(u8, v);
+    }
+    if (claims.value.sub) |v| {
+        result.sub = try allocator.dupe(u8, v);
+    }
+    if (claims.value.jti) |v| {
+        result.jti = try allocator.dupe(u8, v);
+    }
+    if (claims.value.role.len > 0) {
+        result.role = try allocator.dupe(u8, claims.value.role);
+    }
+    return result;
 }
 
 pub fn refreshKeys(ctx: *Context) !void {
@@ -677,7 +698,6 @@ test "validateAPIKeyAuth rejects unknown bare key" {
 }
 
 // --- OAuth `aud` / `iss` / expiry enforcement -------------------------------
-//
 // `validateOAuthToken` checks the `kid`, `exp`, `nbf`, `aud` and `iss` claims
 // but (by design) does not cryptographically verify the RSA signature — the
 // signature is trusted once the `kid` resolves to a configured JWKS key. So we
