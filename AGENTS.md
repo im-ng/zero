@@ -54,11 +54,11 @@ the affected example (`zig build` inside `examples/<name>`) must still pass.
 
 ## Toolchain
 
-- **Zig 0.16.0** minimum, pinned in `build.zig.zon`
+- **Zig 0.17.0** minimum, pinned in `build.zig.zon`
 - Requires `librdkafka-dev` (`apt install librdkafka-dev` / `brew install librdkafka`)
-- On macOS, `build.zig` hardcodes `/usr/local/Cellar/librdkafka/2.15.1` include/lib paths
+- On macOS, `build.zig` resolves the Homebrew librdkafka prefix at configure time and falls back to `pkg-config`; CI and release target Linux x86_64 + aarch64 only
 - **Always `rm -rf .zig-cache zig-out zig-pkg/` before switching Zig versions** — stale cache causes build failures and runtime corruption
-- This environment builds and tests with **Zig 0.16.0** (`/usr/local/zig-x86_64-linux-0.16.0/zig`); the deps vendored in `zig-pkg/` compile under it.
+- This environment builds and tests with **Zig 0.17.0** (`/usr/local/zig-x86_64-linux-0.17.0/zig`); the deps vendored in `zig-pkg/` compile under it.
 
 ## Commands
 
@@ -174,13 +174,9 @@ Three dependency imports have non-obvious module names in `build.zig`:
   - `DEFAULT_CASSANDRA_CONNECT_RETRIES` (20) / `DEFAULT_CASSANDRA_CONNECT_BACKOFF_MS` (1000) — Cassandra connect retry window.
   - `DB_DIALECT=mysql` + `MYSQL_*` — pure-Zig MySQL/MariaDB client. `MYSQL_SSL_MODE` (`disabled`/`preferred`/`required`; `required` encrypts, `MYSQL_SSL_CA` verifies server cert+host) and `MYSQL_POOL_SIZE` (default 10, connection pool + per-request sessions in `datasource/sql/mysql.zig`).
 
-## Deliberate typos in public API (do not "fix")
+## Public API identifier spelling
 
-These are used consistently across the codebase and must be referenced as-is:
-
-- `AuthProvder` (not `AuthProvider`) — in `zero.zig`, `context.zig`, `container.zig`, `httpServer.zig`, `authz.zig`
-- `container.Kakfa` (not `Kafka`) — in `container.zig`, `context.zig`, `app.zig`
-- `onStatup` (not `onStartup`) — in `app.zig`
+Standard spelling is used throughout: `AuthProvider`, `container.Kafka`, and `onStartup`. The earlier misspellings `AuthProvder`, `Kakfa`, and `onStatup` were corrected — do not reintroduce them.
 
 ## Examples
 

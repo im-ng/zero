@@ -11,6 +11,24 @@ pub fn build(b: *std.Build) void {
     const kafka_enabled = b.option(bool, "kafka", "Build with Apache Kafka (librdkafka) support") orelse true;
     const duckdb_enabled = b.option(bool, "duckdb", "Build with DuckDB (in-process OLAP SQL) support") orelse true;
 
+    // macOS Homebrew installs rdkafka into a versioned Cellar directory. Resolve
+    // it at configure time instead of hardcoding a version; on non-macOS (or when
+    // the Cellar is absent) we rely on pkg-config via linkSystemLibrary below.
+    const rdkafka_prefix: ?[]const u8 = blk: {
+        if (!kafka_enabled or builtin.os.tag != .macos) break :blk null;
+        var dir = std.fs.openDirAbsolute("/usr/local/Cellar/librdkafka", .{ .iterate = true }) catch break :blk null;
+        defer dir.close();
+        var it = dir.iterate();
+        while (it.next() catch break :blk null) |entry| {
+            if (entry.kind == .directory) {
+                break :blk b.allocator.allocPrint(b.allocator, "/usr/local/Cellar/librdkafka/{s}", .{entry.name}) catch break :blk null;
+            }
+        }
+        break :blk null;
+    };
+    const rdkafka_include: ?[]const u8 = if (rdkafka_prefix) |p| b.allocator.allocPrint(b.allocator, "{s}/include", .{p}) catch null else null;
+    const rdkafka_lib: ?[]const u8 = if (rdkafka_prefix) |p| b.allocator.allocPrint(b.allocator, "{s}/lib", .{p}) catch null else null;
+
     const build_options = b.addOptions();
     build_options.addOption(bool, "kafka", kafka_enabled);
     build_options.addOption(bool, "duckdb", duckdb_enabled);
@@ -85,10 +103,8 @@ pub fn build(b: *std.Build) void {
     module.addImport("graphql", graphql.module("graphql"));
 
     if (kafka_enabled) {
-        if (builtin.os.tag == .macos) {
-            module.addIncludePath(.{ .cwd_relative = "/usr/local/Cellar/librdkafka/2.15.1/include" });
-            module.addLibraryPath(.{ .cwd_relative = "/usr/local/Cellar/librdkafka/2.15.1/lib" });
-        }
+        if (rdkafka_include) |p| module.addIncludePath(.{ .cwd_relative = p });
+        if (rdkafka_lib) |p| module.addLibraryPath(.{ .cwd_relative = p });
         module.linkSystemLibrary("rdkafka", .{ .weak = true });
     }
 
@@ -130,9 +146,7 @@ pub fn build(b: *std.Build) void {
                 .target = target,
                 .optimize = optimize,
             });
-            if (builtin.os.tag == .macos) {
-                t.addIncludePath(.{ .cwd_relative = "/usr/local/Cellar/librdkafka/2.15.1/include" });
-            }
+            if (rdkafka_include) |p| t.addIncludePath(.{ .cwd_relative = p });
             break :blk t.mod;
         };
         module.addImport("cimport", rdkafka_mod.?);
@@ -163,10 +177,8 @@ pub fn build(b: *std.Build) void {
     test_module.addImport("build_options", build_options_mod);
 
     if (kafka_enabled) {
-        if (builtin.os.tag == .macos) {
-            test_module.addIncludePath(.{ .cwd_relative = "/usr/local/Cellar/librdkafka/2.15.1/include" });
-            test_module.addLibraryPath(.{ .cwd_relative = "/usr/local/Cellar/librdkafka/2.15.1/lib" });
-        }
+        if (rdkafka_include) |p| test_module.addIncludePath(.{ .cwd_relative = p });
+        if (rdkafka_lib) |p| test_module.addLibraryPath(.{ .cwd_relative = p });
         test_module.linkSystemLibrary("rdkafka", .{ .weak = true });
         test_module.addImport("cimport", rdkafka_mod.?);
     }
@@ -221,10 +233,8 @@ pub fn build(b: *std.Build) void {
     integration_module.addImport("build_options", build_options_mod);
 
     if (kafka_enabled) {
-        if (builtin.os.tag == .macos) {
-            integration_module.addIncludePath(.{ .cwd_relative = "/usr/local/Cellar/librdkafka/2.15.1/include" });
-            integration_module.addLibraryPath(.{ .cwd_relative = "/usr/local/Cellar/librdkafka/2.15.1/lib" });
-        }
+        if (rdkafka_include) |p| integration_module.addIncludePath(.{ .cwd_relative = p });
+        if (rdkafka_lib) |p| integration_module.addLibraryPath(.{ .cwd_relative = p });
         integration_module.linkSystemLibrary("rdkafka", .{ .weak = true });
         integration_module.addImport("cimport", rdkafka_mod.?);
     }
@@ -278,10 +288,8 @@ pub fn build(b: *std.Build) void {
     validation_module.addImport("build_options", build_options_mod);
 
     if (kafka_enabled) {
-        if (builtin.os.tag == .macos) {
-            validation_module.addIncludePath(.{ .cwd_relative = "/usr/local/Cellar/librdkafka/2.15.1/include" });
-            validation_module.addIncludePath(.{ .cwd_relative = "/usr/local/Cellar/librdkafka/2.15.1/lib" });
-        }
+        if (rdkafka_include) |p| validation_module.addIncludePath(.{ .cwd_relative = p });
+        if (rdkafka_lib) |p| validation_module.addLibraryPath(.{ .cwd_relative = p });
         validation_module.linkSystemLibrary("rdkafka", .{ .weak = true });
     }
 
@@ -327,10 +335,8 @@ pub fn build(b: *std.Build) void {
     bench_module.addImport("build_options", build_options_mod);
 
     if (kafka_enabled) {
-        if (builtin.os.tag == .macos) {
-            bench_module.addIncludePath(.{ .cwd_relative = "/usr/local/Cellar/librdkafka/2.15.1/include" });
-            bench_module.addLibraryPath(.{ .cwd_relative = "/usr/local/Cellar/librdkafka/2.15.1/lib" });
-        }
+        if (rdkafka_include) |p| bench_module.addIncludePath(.{ .cwd_relative = p });
+        if (rdkafka_lib) |p| bench_module.addLibraryPath(.{ .cwd_relative = p });
         bench_module.linkSystemLibrary("rdkafka", .{ .weak = true });
         bench_module.addImport("cimport", rdkafka_mod.?);
     }

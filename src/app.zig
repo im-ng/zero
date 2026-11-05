@@ -16,6 +16,7 @@ const Cronz = root.cronz;
 const AuthProvider = root.AuthProvider;
 const favoriteIcon = root.favIcon;
 const otel = root.otel;
+const outbox = root.outbox;
 const wsclient = @import("wsclient.zig");
 
 /// Signature for a CLI subcommand handler. The handler uses `ctx` to access
@@ -49,7 +50,8 @@ pub const swaggerUIJs = root.swaggerUIJs;
 
 envMap: *EnvMap = undefined,
 log: *root.logger = undefined,
-/// OpenTelemetry provider. Inert unless `OTEL_EXPERIMENTAL=true` is set in config.
+/// OpenTelemetry provider. Inert unless an OTLP exporter endpoint is configured
+/// (`OTEL_EXPORTER_OTLP_ENDPOINT` or a per-signal endpoint). See src/otel.zig.
 otelProvider: otel.Provider = .{ .enabled = false },
 config: *root.config = undefined,
 container: *root.container = undefined,
@@ -129,12 +131,16 @@ fn initBase(allocator: std.mem.Allocator, io: std.Io, em: *EnvMap) !*App {
     app.bootstrap_fba = std.heap.FixedBufferAllocator.init(backing);
     const bootstrap_alloc = app.bootstrap_fba.allocator();
 
-    // OpenTelemetry: opt-in via otel_experimental=true. When off, the provider is
-    // inert (no SDK objects, no background threads). See src/otel.zig. Accept both
-    // the lowercase config key and the uppercase OTEL_EXPERIMENTAL env convention.
+    // OpenTelemetry: enabled when an OTLP exporter endpoint is configured
+    // (OTEL_EXPORTER_OTLP_ENDPOINT, or the per-signal *_TRACES_ENDPOINT /
+    // *_LOGS_ENDPOINT). With no endpoint the provider is inert (no SDK objects,
+    // no background threads) — see src/otel.zig. Honors the OTEL_* env/`.env`
+    // conventions the SDK itself reads.
     const otel_enabled = blk: {
-        const a = config.getOrDefault("OTEL_EXPERIMENTAL", "false");
-        break :blk std.mem.eql(u8, a, "true");
+        if (config.getOrDefault("OTEL_EXPORTER_OTLP_ENDPOINT", "").len > 0) break :blk true;
+        if (config.getOrDefault("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT", "").len > 0) break :blk true;
+        if (config.getOrDefault("OTEL_EXPORTER_OTLP_LOGS_ENDPOINT", "").len > 0) break :blk true;
+        break :blk false;
     };
 
     // NOTE: the OTel provider deliberately uses the general `allocator`, NOT the
@@ -276,14 +282,14 @@ pub fn destroy(self: *Self) void {
     if (self.cronz) |cronz| {
         cronz.destroy();
     }
-    // Nats / mqtt / Kakfa are torn down by `container.destroy()` below, which is
+    // Nats / mqtt / Kafka are torn down by `container.destroy()` below, which is
     // their single owner. Destroying them here too double-frees the same structs
     self.migrations.deinit();
     self.subcommands.deinit();
     self.container.destroy();
 
     // Flush any in-flight OpenTelemetry spans/metrics and stop its background
-    // exporters before the process exits. No-op when OTEL_EXPERIMENTAL is off.
+    // exporters before the process exits. No-op when OTel is disabled (no endpoint).
     self.otelProvider.shutdown();
 
     // All framework subsystems are torn down; release the bootstrap arena.
@@ -631,11 +637,18 @@ pub fn run(self: *Self) !void {
     // HTTP server is now listening — signal the startup probe as ready.
     self.container.started.store(true, .monotonic);
 
-    // Bounded graceful-shutdown drain: wait for a shutdown signal, then give
-    // in-flight requests up to SHUTDOWN_DRAIN_TIMEOUT_MS to finish before
-    // tearing the server down, so an in-progress request is not abruptly cut.
-    // (Worker-side draining of the connection is the remaining httpz fork
-    // patch; this bound guarantees shutdown can never hang.)
+    // Graceful shutdown (bounded drain):
+    //   1. On SIGINT/SIGTERM the HTTP server stops accepting new connections
+    //      immediately (startShutdownHandler -> hServer.shutdown()).
+    //   2. In-flight requests (handler.in_flight) get up to
+    //      SHUTDOWN_DRAIN_TIMEOUT_MS to finish; default 10s, overridable via the
+    //      SHUTDOWN_DRAIN_TIMEOUT_MS env var. No new requests are accepted in
+    //      this window.
+    //   3. After the timeout any request still in flight is cut and the server
+    //      is torn down. Worker-side keep-alive connection draining is NOT
+    //      implemented in the bundled httpz fork, so idle keep-alive
+    //      connections are closed at teardown rather than flushed. This bound
+    //      exists so shutdown can never hang on a slow or disconnected client.
     const drain_timeout_ms: u64 = blk: {
         const v = self.container.config.getAsInt("SHUTDOWN_DRAIN_TIMEOUT_MS") catch 0;
         break :blk if (v == 0) 10_000 else @as(u64, v);
@@ -673,7 +686,7 @@ fn startPubSubSubscriptions(self: Self) !void {
     }
 
     if (comptime build_options.kafka) {
-        if (self.container.Kakfa) |k| {
+        if (self.container.Kafka) |k| {
             if (k.kafkaMode == root.rdkafka.RD_KAFKA_CONSUMER) {
                 self.container.log.info("starting kafka subscriptions");
                 try k.startSubscription();
@@ -964,10 +977,10 @@ pub fn health(ctx: *Context) !void {
     defer components.deinit(ctx.allocator);
 
     // Run user-registered health checks; any failure flips the overall status.
-    // Each check is bounded so a hung dependency can't block the probe forever.
-    const check_timeout_ms: u32 = ctx.container.config.getAsInt("HEALTH_CHECK_TIMEOUT_MS") catch constants.DEFAULT_HEALTH_CHECK_TIMEOUT_MS;
+    // NOTE: checks run synchronously and are not timeout-bounded (crouton #11) —
+    // a hung dependency blocks this probe until the check returns.
     for (ctx.container.healthChecks.items) |*hc| {
-        if (ctx.container.runHealthCheckBounded(hc, check_timeout_ms)) {
+        if (ctx.container.runHealthCheck(hc)) {
             try components.put(ctx.allocator, hc.name, std.json.Value{ .string = up });
         } else {
             all_up = false;
@@ -976,8 +989,9 @@ pub fn health(ctx: *Context) !void {
     }
 
     // Aggregate registered downstream HTTP services so the readiness probe also
-    // reflects their health. Each is probed with a bounded timeout; a failed
-    // probe flips the overall status but can't hang the readiness endpoint.
+    // reflects their health. Each is probed via its client; a failed probe
+    // (non-2xx or error) flips the overall status. Like the datasource checks,
+    // this runs synchronously and is not timeout-bounded (crouton #11).
     if (ctx.container.services) |svcs| {
         const svc_path = ctx.container.config.getOrDefault("HEALTH_CHECK_SERVICE_PATH", constants.HEALTH_PATH);
         var svc_iter = svcs.iterator();
@@ -1170,6 +1184,17 @@ pub fn addCronJob(self: *Self, schedule: []const u8, name: []const u8, hook: fn 
     try self.cronz.?.addCron(schedule, name, hook);
 }
 
+/// Register an opt-in transactional outbox. Creates the outbox table lazily and
+/// starts a background cron poller that publishes pending rows to the configured
+/// pub/sub backend. See `src/outbox.zig` for the pattern.
+pub fn addOutbox(self: *Self, opts: outbox.Options) !void {
+    self.container.outbox_options = opts;
+    const step = if (opts.poll_interval_minutes == 0) 1 else opts.poll_interval_minutes;
+    var buf: [32]u8 = undefined;
+    const schedule = std.fmt.bufPrint(&buf, "*/{d} * * * * *", .{step}) catch "* * * * * *";
+    try self.addCronJob(schedule, "outbox-poll", outbox.outboxPoll);
+}
+
 pub fn addSubscription(self: *Self, topic: []const u8, hook: fn (*root.Context) anyerror!void) !void {
     if (self.container.pubsub == null) {
         self.container.log.err("pubsub is disabled, topic subscription is not available.");
@@ -1199,6 +1224,22 @@ pub fn addFileStore(self: *Self, name: []const u8, backend: root.filestore.Backe
     if (self.container.defaultFileStore == null) {
         self.container.defaultFileStore = store;
     }
+}
+
+/// Register a named SQL datasource. The default datasource (wired from
+/// `DB_*`/`SQL_*` config) is always available as `ctx.SQL`; this adds an
+/// additional named one reachable via `ctx.GetSQL(name)` — for example a second
+/// Postgres cluster or a DuckDB analytics store alongside the primary.
+pub fn addSQL(self: *Self, name: []const u8, ds: root.Datasource) !void {
+    try self.container.sqlStores.put(name, ds);
+}
+
+/// Register a named pub/sub backend. The default backend (wired from
+/// `PUBSUB_BACKEND`) is always available as `ctx.PubSub`; this adds an
+/// additional named one reachable via `ctx.GetPubSub(name)` (e.g. a second
+/// Kafka cluster or an MQTT broker alongside the primary).
+pub fn addPubSub(self: *Self, name: []const u8, ps: *root.PubSub) !void {
+    try self.container.pubSubBackends.put(name, ps);
 }
 
 /// Register the time-series datasource backend (influxdb). Exposed on the request
@@ -1304,12 +1345,12 @@ pub fn addRestHandlers(self: *Self, comptime T: type, comptime opts: root.AutoCr
 }
 
 pub fn addKafkaSubscription(self: *Self, topic: []const u8, hook: fn (*root.Context) anyerror!void) !void {
-    if (self.container.Kakfa == null) {
+    if (self.container.Kafka == null) {
         self.container.log.err("pubsub is disabled, topic subscription is not available.");
         return;
     }
 
-    try self.container.Kakfa.?.addSubscriber(topic, hook);
+    try self.container.Kafka.?.addSubscriber(topic, hook);
 }
 
 pub fn addNatsSubscription(self: *Self, topic: []const u8, hook: fn (*root.Context) anyerror!void) !void {

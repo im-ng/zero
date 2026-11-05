@@ -345,7 +345,7 @@ fn mockContainer(allocator: std.mem.Allocator) root.container {
         .SQL = undefined,
         .services = undefined,
         .mqtt = null,
-        .Kakfa = null,
+        .Kafka = null,
         .Nats = null,
         .pubSub = null,
     };

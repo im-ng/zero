@@ -30,12 +30,36 @@ writer: std.Io.net.Stream.Writer = undefined,
 // RESP frames on the single shared socket
 client: rediz.Client = undefined,
 mu: std.Io.Mutex = .init,
+// Reconnect parameters captured at startup so a dead socket can be rebuilt
+// in place (the shared `reader`/`writer`/`client` stay at the same addresses,
+// so every consumer heals without re-pointing). `addr` is the resolved
+// endpoint; `pass` points at config-owned memory (app-lifetime stable).
+addr: std.Io.net.IpAddress = undefined,
+pass: []const u8 = "",
 
 pub fn create(allocator: std.mem.Allocator) !*rdz {
     const rz = try allocator.create(rdz);
     errdefer allocator.destroy(rz);
     rz.client = undefined;
     return rz;
+}
+
+/// Re-establish the shared socket after an outage. Reuses the same heap
+/// `reader`/`writer`/`client` slots so `container.redis` (which borrows their
+/// `.interface` addresses) is healed transparently. No-op-safe: a failed
+/// reconnect leaves the caller to report the outage.
+pub fn reconnect(self: *Self) !void {
+    self.mu.lock(utils.io) catch {};
+    defer self.mu.unlock(utils.io);
+    // Best-effort tear-down of the dead socket; ignore errors (already broken).
+    self.conn.close(utils.io);
+    const connection = self.addr.connect(utils.io, .{ .mode = .stream }) catch return error.RedisConnectFailed;
+    self.conn = connection;
+    self.reader = connection.reader(utils.io, &self.rbuf);
+    self.writer = connection.writer(utils.io, &self.wbuf);
+    self.client = try Client.init(utils.io, &self.reader.interface, &self.writer.interface, .{ .user = null, .pass = self.pass });
+    const pong = self.client.sendAlloc([]u8, self.allocator, .{"ping"}) catch return error.RedisConnectFailed;
+    self.allocator.free(pong);
 }
 
 pub fn close(self: *Self) void {

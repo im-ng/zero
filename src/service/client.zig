@@ -308,6 +308,20 @@ fn retryBackoffMs(self: *Self, attempt: u32) i64 {
     return @as(i64, base) * @as(i64, attempt);
 }
 
+/// Backoff before the next retry attempt. Honors a `Retry-After` hint (integer
+/// seconds) on 429/503 so we back off as the upstream asks, capped at 60s;
+/// otherwise falls back to the linear `base * attempt` backoff.
+fn retryDelayMs(self: *Self, attempt: u32, res: zul.http.Response) i64 {
+    if (res.header("Retry-After")) |ra| {
+        const secs = std.fmt.parseUnsigned(u64, std.mem.trim(u8, ra, " \r\n"), 10) catch 0;
+        if (secs > 0) {
+            const capped: u64 = if (secs > 60) 60 else secs;
+            return @as(i64, @intCast(capped)) * 1000;
+        }
+    }
+    return self.retryBackoffMs(attempt);
+}
+
 pub fn get(
     self: *Self,
     ctx: *Context,
@@ -598,10 +612,25 @@ fn createAndSendRequest(
                 }
                 return ClientError.EntityNotFound;
             },
+            429 => {
+                // Too Many Requests: a backpressure signal, not an outage. Retry
+                // honoring `Retry-After` so we pace ourselves to the upstream's
+                // ask instead of hammering it.
+                if (attempt < max_attempts) {
+                    attempt += 1;
+                    const backoff = self.retryDelayMs(attempt, res);
+                    std.Io.sleep(self.container.io, std.Io.Duration.fromMilliseconds(backoff), .awake) catch {};
+                    continue;
+                }
+                if (self.breaker) |*b| {
+                    b.recordFailure();
+                }
+                return ClientError.ServiceNotReachable;
+            },
             500...600 => {
                 if (attempt < max_attempts) {
                     attempt += 1;
-                    const backoff = self.retryBackoffMs(attempt);
+                    const backoff = self.retryDelayMs(attempt, res);
                     std.Io.sleep(self.container.io, std.Io.Duration.fromMilliseconds(backoff), .awake) catch {};
                     continue;
                 }

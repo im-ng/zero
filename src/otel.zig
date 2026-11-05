@@ -29,8 +29,8 @@ pub const ActiveSpan = struct {
 };
 
 /// App-wide OpenTelemetry provider. When `enabled` is false every method is a
-/// no-op and no SDK objects are allocated — so the experimental feature costs
-/// nothing when `OTEL_EXPERIMENTAL` is unset.
+/// no-op and no SDK objects are allocated — so the feature costs nothing when no
+/// OTLP exporter endpoint is configured.
 pub const Provider = struct {
     enabled: bool = false,
 

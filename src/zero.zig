@@ -51,6 +51,7 @@ pub const responder = @import("responder.zig");
 pub const tracz = @import("mw/tracz.zig");
 pub const baggage = @import("mw/baggage.zig");
 pub const otel = @import("otel.zig");
+pub const outbox = @import("outbox.zig");
 pub const rateLimiter = @import("mw/rateLimiter.zig");
 pub const kvstore = @import("kvstore/interface.zig");
 pub const KVStore = kvstore.KVStore;

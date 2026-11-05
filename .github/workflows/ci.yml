@@ -228,3 +228,17 @@ jobs:
           git add bench/baseline.json
           git commit -m "chore: update bench baseline" || echo "No changes to commit"
           git push
+
+  helm_template:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Helm
+        run: curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+
+      - name: Lint and template chart
+        run: |
+          helm lint charts/zero
+          helm template zero charts/zero > /dev/null

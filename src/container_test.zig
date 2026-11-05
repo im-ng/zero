@@ -27,12 +27,11 @@ test "staticResolve matches mount with path boundary" {
     try std.testing.expect(staticResolve(&mounts, "/nope/x") == null);
 }
 
-test "runHealthCheckBounded reports the real check result (argon T17)" {
+test "runHealthCheck reports the real check result (argon T17)" {
     // T17: a health check must report its real outcome, never a stale success and
-    // never crash on a failing check. Run as the synchronous probe (the bounded
-    // pre-emptive timeout is deferred to a cancelable std.Io task; the harness
-    // listener can't exercise a non-blocking thread wait), so a healthy check is
-    // UP and a throwing check is DOWN.
+    // never crash on a failing check. The check runs synchronously on the probe
+    // thread with no timeout enforcement (crouton #11): a healthy check is UP and
+    // a throwing check is DOWN.
     var c: container = .{ .allocator = std.testing.allocator };
 
     var healthy: container.HealthCheck = .{
@@ -41,7 +40,7 @@ test "runHealthCheckBounded reports the real check result (argon T17)" {
             fn check(_: *container) anyerror!void {}
         }.check,
     };
-    try std.testing.expect(c.runHealthCheckBounded(&healthy, 20));
+    try std.testing.expect(c.runHealthCheck(&healthy));
 
     var failing: container.HealthCheck = .{
         .name = "billing",
@@ -51,5 +50,5 @@ test "runHealthCheckBounded reports the real check result (argon T17)" {
             }
         }.check,
     };
-    try std.testing.expect(!c.runHealthCheckBounded(&failing, 20));
+    try std.testing.expect(!c.runHealthCheck(&failing));
 }

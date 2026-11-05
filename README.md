@@ -294,9 +294,12 @@ Per-service logs, RSS samples and the exact thresholds are in the report.
 Prometheus metrics are exposed at `/metrics` and a health endpoint at `/.well-known/health` (liveness/status). Distributed tracing via TraceID is attached to every request.
 
 ```bash
-curl localhost:8080/metrics   # http_requests_total, app_sql_response, ...
-curl localhost:8080/.well-known/health
+curl 127.0.0.1:8080/metrics   # http_requests_total, app_sql_response, ...
+curl 127.0.0.1:8080/.well-known/health
 ```
+
+The endpoints listen on the loopback/`HTTP_PORT` (default `8080`); `Address.all`
+binds every interface, so `127.0.0.1` and the host's LAN address both work.
 
 See [Observability](https://zerofmk.in/observability)
 
@@ -462,7 +465,7 @@ build.zig             build wiring (test / integration / validation / bench)
 - **DuckDB** needs `libduckdb.so`/`duckdb.h` on the library path (see
   [DuckDB](https://zerofmk.in/duckdb)).
 
-- The `kafka` build option is commented out; rdkafka is always linked.
+- Zero links `librdkafka` (Kafka) and `libduckdb` (DuckDB) weakly, and both are enabled by default. Build a minimal binary without them: `zig build -Dkafka=false -Dduckdb=false`. Each example forwards the same flags, so `zig build -Dkafka=false -Dduckdb=false` works there too.
 
 ## Built with zero
 

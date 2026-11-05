@@ -46,7 +46,7 @@ pub const Context = struct {
     params: std.StringHashMap([]const u8) = undefined,
 
     /// Active OpenTelemetry span for this request (set by the `tracz` middleware
-    /// before dispatch). Null when OTEL_EXPERIMENTAL is off or outside a request.
+    /// before dispatch). Null when OTel is disabled (no endpoint) or outside a request.
     otel_span: ?otel.ActiveSpan = null,
 
     /// W3C Baggage parsed from the inbound `baggage` header. Handlers read and
@@ -117,7 +117,7 @@ pub const Context = struct {
             c.MQ = pb;
         }
 
-        if (container.Kakfa) |k| {
+        if (container.Kafka) |k| {
             c.KF = k;
         }
 
@@ -181,7 +181,7 @@ pub const Context = struct {
         if (container.mqtt) |pb| {
             c.MQ = pb;
         }
-        if (container.Kakfa) |k| {
+        if (container.Kafka) |k| {
             c.KF = k;
         }
         if (container.Nats) |n| {
@@ -295,7 +295,7 @@ pub const Context = struct {
     }
 
     /// Returns the active OpenTelemetry span handle for this request, or null when
-    /// OTEL_EXPERIMENTAL is off or outside a request context.
+    /// OTel is disabled (no endpoint) or outside a request context.
     pub fn span(self: *Context) ?otel.ActiveSpan {
         return self.otel_span;
     }
@@ -361,6 +361,20 @@ pub const Context = struct {
     /// available as `ctx.FileStore`.
     pub fn GetFileStore(self: *Context, name: []const u8) ?*root.FileStore {
         return self.container.fileStores.get(name);
+    }
+
+    /// Look up a named SQL datasource registered via `App.addSQL`. The default
+    /// datasource (wired from `DB_*`/`SQL_*` config) is also available as
+    /// `ctx.SQL` and under the `"default"` key.
+    pub fn GetSQL(self: *Context, name: []const u8) ?root.Datasource {
+        return self.container.sqlStores.get(name);
+    }
+
+    /// Look up a named pub/sub backend registered via `App.addPubSub`. The default
+    /// backend (wired from `PUBSUB_BACKEND`) is also available as `ctx.PubSub` and
+    /// under the `"default"` key.
+    pub fn GetPubSub(self: *Context, name: []const u8) ?*root.PubSub {
+        return self.container.pubSubBackends.get(name);
     }
 
     /// Returns an uploaded file from a `multipart/form-data` request, or `null`
