@@ -1,0 +1,14 @@
+.{
+    .name = .zeroratelimit,
+    .version = "0.0.1",
+    .fingerprint = 0x8232cd2d86c595c2,
+    .minimum_zig_version = "0.16.0",
+    .dependencies = .{
+        .zero = .{ .path = "../../." },
+    },
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "src",
+    },
+}

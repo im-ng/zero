@@ -287,7 +287,7 @@ pub fn addRestHandlers(self: *App, comptime T: type, comptime opts: AutoCrudOpti
 
 const Sample = struct { id: i64, name: []const u8, email: []const u8 };
 
-test "AutoCrud listHandler routes through ctx.SQL interface (argon T19)" {
+test "AutoCrud listHandler routes through ctx.SQL interface" {
     // Before the fix the CRUD handlers switched over every dialect and called the
     // concrete backend directly, bypassing `ctx.SQL`'s circuit breaker + metrics.
     // Now `listHandler` goes through `ctx.SQL.queryRows`, so the type-erased

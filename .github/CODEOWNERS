@@ -1,0 +1,5 @@
+# CODEOWNERS — who can approve merges and cut releases for Zero.
+#
+# Replace the placeholder team handle below with the real maintainer or team
+# (e.g. a GitHub team with merge + release rights). Until then, the repo owner
+# is the default owner of every path.

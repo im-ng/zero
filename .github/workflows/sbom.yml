@@ -2,7 +2,7 @@ name: SBOM
 
 # Produce a merged CycloneDX SBOM (source deps + compiled binary) on every push
 # and PR, and on manual trigger. The artifact is `final-sbom.json`, ready for
-# Dependency-Track / Grype or to attach to a release. See sbom-integration.md.
+# Dependency-Track / Grype or to attach to a release.
 on:
   push:
     branches: [ main, master ]

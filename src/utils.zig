@@ -30,6 +30,15 @@ pub fn elapsedMs(start: std.Io.Timestamp) f32 {
     return @floatFromInt(@as(u64, @intCast(@divFloor(elapsedNanos(start), 1_000_000))));
 }
 
+/// Age of a monotonic timestamp in whole milliseconds. Clamps to 0 when the
+/// timestamp is in the future (or at right now), so freshness comparisons never
+/// see a negative age.
+pub fn ageMs(t: std.Io.Timestamp) u64 {
+    const nanos = std.Io.Timestamp.durationTo(t, nowMonotonic()).nanoseconds;
+    if (nanos <= 0) return 0;
+    return @intCast(@divFloor(nanos, 1_000_000));
+}
+
 /// Elapsed time in seconds as a float with nanosecond precision. The HTTP and
 /// service latency histograms are documented in seconds; `elapsedMs` truncates
 /// to integer milliseconds, which zeroes sub-ms requests (collapsing `_sum` to

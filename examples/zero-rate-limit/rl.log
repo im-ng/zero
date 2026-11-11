@@ -1,0 +1,12 @@
+[38;5;6m INFO[0m [20:48:07] Loaded config from file: ./configs/.env
+[38;5;6m INFO[0m [20:48:07] config overriden ./configs/.dev.env file not found.
+[38;5;6m INFO[0m [20:48:07] container is created
+[38;5;6m INFO[0m [20:48:07] zero-rate-limit app pid 86774
+[38;5;6m INFO[0m [20:48:07] no authentication mode found and disabled.
+[38;5;6m INFO[0m [20:48:07] registered static files from directory ./static
+[38;5;6m INFO[0m [20:48:07] Starting server on port: 18093
+[38;5;6m INFO[0m [20:48:09] 472b92fcacea405696238af24697e60c	 200 0ms GET /heavy
+[38;5;6m INFO[0m [20:48:09] 2f5cf05920604b39b744f7f238210ef0	 200 0ms GET /heavy
+[38;5;6m INFO[0m [20:48:09] e394b9d526ed4e5eb7ff01407ca182e2	 200 0ms GET /heavy
+[38;5;6m INFO[0m [20:48:09] e83120883f364a5083d9d363d41ca041	 200 0ms GET /heavy
+[38;5;6m INFO[0m [20:48:09] 22d19aadfb654990931e44aaa94f152f	 200 0ms GET /heavy

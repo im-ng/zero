@@ -136,7 +136,7 @@ pub fn CapHistogram(comptime Vec: type) type {
     return Cap(Vec, false);
 }
 
-test "hashLabels does not collide across field boundaries (argon T16)" {
+test "hashLabels does not collide across field boundaries" {
     const Labels = struct { a: []const u8, b: []const u8 };
     const x = Labels{ .a = "ab", .b = "c" };
     const y = Labels{ .a = "a", .b = "bc" };

@@ -600,7 +600,7 @@ test "parseSchedule accepts valid 6-field schedule with seconds" {
     try std.testing.expectEqual(@as(usize, 60), j.min.count());
 }
 
-test "parseSchedule 5-field maps tokens to minute/hour/day/month/weekday (argon T12)" {
+test "parseSchedule 5-field maps tokens to minute/hour/day/month/weekday" {
     const allocator = std.testing.allocator;
     var map_jobs = std.array_list.Managed(job).init(allocator);
     defer map_jobs.deinit();
@@ -631,7 +631,7 @@ test "parseSchedule 5-field maps tokens to minute/hour/day/month/weekday (argon 
     try std.testing.expect(j.dayOfWeek.contains(3));
 }
 
-test "parseSchedule range-with-step expands correctly (argon T12)" {
+test "parseSchedule range-with-step expands correctly" {
     const allocator = std.testing.allocator;
     var map_jobs = std.array_list.Managed(job).init(allocator);
     defer map_jobs.deinit();
@@ -657,7 +657,7 @@ test "parseSchedule range-with-step expands correctly (argon T12)" {
     try std.testing.expect(!j.sec.contains(12));
 }
 
-test "parseSchedule rejects out-of-bounds, inverted, and zero-step (argon T12)" {
+test "parseSchedule rejects out-of-bounds, inverted, and zero-step" {
     const allocator = std.testing.allocator;
     var map_jobs = std.array_list.Managed(job).init(allocator);
     defer map_jobs.deinit();

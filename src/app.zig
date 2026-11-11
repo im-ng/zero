@@ -632,6 +632,11 @@ pub fn run(self: *Self) !void {
     // try self.startMetricsServer();
     try self.startMetricsServer();
 
+    // Health snapshot refresher. Runs the registered checks on its
+    // own thread and publishes them for `GET /.well-known/health` so a hung
+    // dependency can't wedge the probe. No-op when HEALTH_SNAPSHOT_REFRESH_MS=0.
+    self.container.startHealthRefresher();
+
     const http_thread = try self.prepareHttpServer();
 
     // HTTP server is now listening — signal the startup probe as ready.
@@ -976,22 +981,47 @@ pub fn health(ctx: *Context) !void {
     var components = std.json.ObjectMap.empty;
     defer components.deinit(ctx.allocator);
 
-    // Run user-registered health checks; any failure flips the overall status.
-    // NOTE: checks run synchronously and are not timeout-bounded (crouton #11) —
-    // a hung dependency blocks this probe until the check returns.
-    for (ctx.container.healthChecks.items) |*hc| {
-        if (ctx.container.runHealthCheck(hc)) {
-            try components.put(ctx.allocator, hc.name, std.json.Value{ .string = up });
-        } else {
-            all_up = false;
-            try components.put(ctx.allocator, hc.name, std.json.Value{ .string = down });
+    // A background refresher runs the registered checks off the request path and
+    // publishes them under the guard, so a hung dependency wedges only the
+    // refresher while this probe keeps answering from the last known state.
+    // Before the first cycle (or when the snapshot went stale) the checks are
+    // run inline once and republished, so the probe never serves a fake state.
+    const refresh_ms = ctx.container.health_refresh_ms;
+    if (refresh_ms > 0 and !ctx.container.healthSnapshotFresh(refresh_ms)) {
+        ctx.container.runAndPublishHealthChecks();
+    }
+    if (refresh_ms > 0) {
+        // A failed lock means a broken mutex, not contention; erroring out beats
+        // reading the slice unsynchronized.
+        ctx.container.health_snapshot_mu.lock(ctx.io) catch return;
+        defer ctx.container.health_snapshot_mu.unlock(ctx.io);
+        if (ctx.container.health_snapshot) |rows| {
+            for (rows) |row| {
+                if (row.up) {
+                    try components.put(ctx.allocator, row.name, std.json.Value{ .string = up });
+                } else {
+                    all_up = false;
+                    try components.put(ctx.allocator, row.name, std.json.Value{ .string = down });
+                }
+            }
+        }
+    } else {
+        // Snapshot mode disabled: run checks synchronously on this probe, as
+        // before. A hung check blocks this request (documented limitation).
+        for (ctx.container.healthChecks.items) |*hc| {
+            if (ctx.container.runHealthCheck(hc)) {
+                try components.put(ctx.allocator, hc.name, std.json.Value{ .string = up });
+            } else {
+                all_up = false;
+                try components.put(ctx.allocator, hc.name, std.json.Value{ .string = down });
+            }
         }
     }
 
     // Aggregate registered downstream HTTP services so the readiness probe also
     // reflects their health. Each is probed via its client; a failed probe
-    // (non-2xx or error) flips the overall status. Like the datasource checks,
-    // this runs synchronously and is not timeout-bounded (crouton #11).
+    // (non-2xx or error) flips the overall status. These service pings still run
+    // synchronously and are not timeout-bounded.
     if (ctx.container.services) |svcs| {
         const svc_path = ctx.container.config.getOrDefault("HEALTH_CHECK_SERVICE_PATH", constants.HEALTH_PATH);
         var svc_iter = svcs.iterator();
@@ -1040,7 +1070,7 @@ pub fn startup(ctx: *Context) !void {
 /// `check` must return normally when the component is healthy and error
 /// otherwise; it receives the app `container` so it can probe datasources.
 pub fn addHealthCheck(self: Self, name: []const u8, check: *const fn (*root.container) anyerror!void) !void {
-    try self.container.healthChecks.append(.{ .name = name, .check = check });
+    try self.container.addHealthCheckEntry(name, check);
 }
 
 /// Loads RBAC rules from the `RBAC_CONFIG` env var, parsed as JSON in the

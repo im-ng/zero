@@ -309,7 +309,7 @@ pub fn build(b: *std.Build) void {
     // HTTP load/benchmark harness: starts the real zero App (framework-only,
     // no DB/Redis) and drives it with the in-repo zul.http.Client across a
     // concurrency ramp, reporting req/s + latency percentiles. Run the built
-    // binary directly (./zig-out/bin/bench) — not via `zig build run` — to
+    // binary directly (./zig-out/bin/bench) not via `zig build run` to
     // avoid the --listen=- stdout protocol.
     const bench_module = b.createModule(.{
         .root_source_file = b.path("src/bench/main.zig"),

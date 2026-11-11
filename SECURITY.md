@@ -7,7 +7,7 @@ Older lines are unsupported once a newer `0.5.x` is published. See
 `docs/PUBLIC_API.md` for the current API freeze and compatibility window.
 
 | Version | Supported |
-|---------|-----------|
+| ------- | --------- |
 | 0.5.x   | ✅        |
 | < 0.5.0 | ❌        |
 
@@ -22,6 +22,7 @@ Please report privately so we can ship a fix before public disclosure:
 - Use GitHub's private vulnerability reporting on the repository.
 
 Include:
+
 - A description of the vulnerability and impact.
 - Steps or a minimal PoC to reproduce.
 - The affected Zero version(s) and Zig version.
