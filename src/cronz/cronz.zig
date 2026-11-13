@@ -84,6 +84,11 @@ pub fn runSchedules(self: *Self, _: i128) void {
     while (self.running.load(.monotonic)) {
         std.Io.sleep(self.container.io, std.Io.Duration.fromSeconds(1), .awake) catch {};
         const now = dateTime.nowUTC(self.container.io);
+        // Hold the job list lock while iterating. `addCron` locks the same mutex
+        // before appending (which may reallocate `self.jobs.items`); without this,
+        // the loop reads a slice that a concurrent append has moved or freed
+        // (use-after-free / torn read —
+        self.mu.lock(self.container.io) catch {};
         for (self.jobs.items) |*j| {
             if (j.compare(now)) {
                 // Serialize runs of the same job so an overrunning tick can't stack
@@ -132,14 +137,19 @@ pub fn runSchedules(self: *Self, _: i128) void {
                 }
             }
         }
+        self.mu.unlock(self.container.io);
     }
 }
 
 fn expandOccurance(_: *Self, map: *std.AutoHashMap(u8, bool), max: u8, min: u8, step: u8) !void {
-    var i = min;
-    while (i <= max) {
-        try map.put(i, true);
-        i += step;
+    // Reject zero steps (infinite loop) and inverted ranges; widen the counter to
+    // u16 so `i + step` can't overflow a u8
+    if (step == 0 or min > max) {
+        return Error.CronError.BadScheduleFormat;
+    }
+    var i: u16 = min;
+    while (i <= max) : (i += step) {
+        try map.put(@intCast(i), true);
     }
 }
 
@@ -152,19 +162,19 @@ fn expandRanges(self: *Self, value: []const u8, map: *std.AutoHashMap(u8, bool),
         const rangeMatches = try RegExp.captures(&r, item);
 
         if (rangeMatches) |ranges| {
-            const _min = try std.fmt.parseInt(u8, ranges.sliceAt(1).?, 10);
-            const _max = try std.fmt.parseInt(u8, ranges.sliceAt(2).?, 10);
+            var mut_ranges = ranges;
+            defer mut_ranges.deinit();
+            const _min = try std.fmt.parseInt(u8, mut_ranges.sliceAt(1).?, 10);
+            const _max = try std.fmt.parseInt(u8, mut_ranges.sliceAt(2).?, 10);
 
-            if (_min < min and _max > max) {
+            if (_min < min or _max > max or _min > _max) {
                 return Error.CronError.BadScheduleFormat;
             }
 
             try self.expandOccurance(map, _max, _min, step);
-            var mut_ranges = ranges;
-            mut_ranges.deinit();
         } else {
             const _item = try std.fmt.parseInt(u8, item, 10);
-            if (_item < min and _item > max) {
+            if (_item < min or _item > max) {
                 return Error.CronError.BadScheduleFormat;
             }
 
@@ -184,19 +194,19 @@ fn expandSteps(self: *Self, prefix: []const u8, suffix: []const u8, map: *std.Au
     {
         var r = try RegExp.compile(self.container.allocator, constants.REGEXP_RANGES);
         defer r.deinit();
-        const rangeMatches = try RegExp.captures(&r, suffix);
+        const rangeMatches = try RegExp.captures(&r, prefix);
         if (rangeMatches == null) {
             return Error.CronError.BadScheduleFormat;
         }
         if (rangeMatches) |ranges| {
-            _min = try std.fmt.parseInt(u8, ranges.sliceAt(1).?, 10);
-            _max = try std.fmt.parseInt(u8, ranges.sliceAt(2).?, 10);
+            var mut_ranges = ranges;
+            defer mut_ranges.deinit();
+            _min = try std.fmt.parseInt(u8, mut_ranges.sliceAt(1).?, 10);
+            _max = try std.fmt.parseInt(u8, mut_ranges.sliceAt(2).?, 10);
 
-            if (_min < min and _max > max) {
+            if (_min < min or _max > max or _min > _max) {
                 return Error.CronError.BadScheduleFormat;
             }
-            var mut_ranges = ranges;
-            mut_ranges.deinit();
         }
     }
 
@@ -233,64 +243,60 @@ fn expandOccurances(self: *Self, value: []const u8, map: *std.AutoHashMap(u8, bo
 }
 
 fn parseSchedule(self: *Self, schedule: []const u8) !job {
+    // Collect non-empty, space-separated tokens. A valid cron schedule is either
+    // 5 fields (minute hour day month weekday) or 6 fields (second minute hour
+    // day month weekday). Anything else is rejected
+    var parts: [6][]const u8 = undefined;
+    var count: usize = 0;
+    var iterator = std.mem.tokenizeAny(u8, schedule, " ");
+    while (iterator.next()) |part| {
+        if (count >= parts.len) {
+            return Error.CronError.BadScheduleFormat;
+        }
+        parts[count] = part;
+        count += 1;
+    }
+
+    if (count != 5 and count != 6) {
+        return Error.CronError.BadScheduleFormat;
+    }
+
     var seconds: []const u8 = "";
     var minutes: []const u8 = "";
     var hours: []const u8 = "";
     var days: []const u8 = "";
     var months: []const u8 = "";
     var weekDay: []const u8 = "";
-    var iterator = std.mem.splitAny(u8, schedule, " ");
 
-    var scheduleLength: usize = 0;
-    while (iterator.next()) |part| {
-        switch (scheduleLength) {
-            0 => seconds = part,
-            1 => minutes = part,
-            2 => hours = part,
-            3 => days = part,
-            4 => months = part,
-            5 => weekDay = part,
-            else => {},
-        }
-        scheduleLength += 1;
-    }
-
-    switch (scheduleLength) {
-        5...6 => {
-            // do nothing
-        },
-        else => {
-            return Error.CronError.BadScheduleFormat;
-        },
+    if (count == 5) {
+        // Standard 5-field schedule: run at second 0 of the matching minutes,
+        // NOT every second of every minute. Map tokens to minute/hour/day/month/weekday.
+        seconds = "0";
+        minutes = parts[0];
+        hours = parts[1];
+        days = parts[2];
+        months = parts[3];
+        weekDay = parts[4];
+    } else {
+        seconds = parts[0];
+        minutes = parts[1];
+        hours = parts[2];
+        days = parts[3];
+        months = parts[4];
+        weekDay = parts[5];
     }
 
     // create job for execution
     var j = try job.create(self.container.allocator);
 
-    var index: u8 = 0;
-    switch (scheduleLength) {
-        6 => {
-            try self.expandOccurances(seconds, &j.sec, totalSeconds, 0);
-            index += 1;
-        },
-        else => {
-            // Legacy 5-field: seconds field was never set, match every second
-            try self.expandOccurance(&j.sec, totalSeconds, 0, 1);
-        },
-    }
-
-    // expand job occurances
+    try self.expandOccurances(seconds, &j.sec, totalSeconds, 0);
     try self.expandOccurances(minutes, &j.min, totalMinutes, 0);
-
     try self.expandOccurances(hours, &j.hour, totalHours, 0);
-
     try self.expandOccurances(days, &j.day, totalDays, 0);
-
     try self.expandOccurances(months, &j.month, totalMonths, 0);
-
     try self.expandOccurances(weekDay, &j.dayOfWeek, totalDaysOfWeek, 0);
 
-    // Safety: if dayOfWeek is empty (legacy 5-field), match every day
+    // Safety: if dayOfWeek is empty, match every day
     if (j.dayOfWeek.count() == 0) {
         try self.expandOccurance(&j.dayOfWeek, totalDaysOfWeek, 0, 1);
     }
@@ -321,6 +327,7 @@ pub fn addCron(self: *Self, schedule: []const u8, name: []const u8, hook: *const
     };
 
     self.container.log.info(msg);
+    self.container.allocator.free(msg);
 }
 
 fn mockContainer(allocator: std.mem.Allocator) root.container {
@@ -338,7 +345,7 @@ fn mockContainer(allocator: std.mem.Allocator) root.container {
         .SQL = undefined,
         .services = undefined,
         .mqtt = null,
-        .Kakfa = null,
+        .Kafka = null,
         .Nats = null,
         .pubSub = null,
     };
@@ -591,4 +598,77 @@ test "parseSchedule accepts valid 6-field schedule with seconds" {
     try std.testing.expectEqual(@as(usize, 1), j.sec.count());
     try std.testing.expect(j.sec.contains(30));
     try std.testing.expectEqual(@as(usize, 60), j.min.count());
+}
+
+test "parseSchedule 5-field maps tokens to minute/hour/day/month/weekday" {
+    const allocator = std.testing.allocator;
+    var map_jobs = std.array_list.Managed(job).init(allocator);
+    defer map_jobs.deinit();
+
+    var mc = mockContainer(allocator);
+    var c = Cronz{
+        .container = &mc,
+        .jobs = map_jobs,
+    };
+
+    // "15 10 * * 3" => minute=15, hour=10, dayOfWeek=3, at second 0 (not 60x/min).
+    var j = try c.parseSchedule("15 10 * * 3");
+    defer {
+        j.sec.deinit();
+        j.min.deinit();
+        j.hour.deinit();
+        j.day.deinit();
+        j.month.deinit();
+        j.dayOfWeek.deinit();
+    }
+    try std.testing.expectEqual(@as(usize, 1), j.sec.count());
+    try std.testing.expect(j.sec.contains(0));
+    try std.testing.expectEqual(@as(usize, 1), j.min.count());
+    try std.testing.expect(j.min.contains(15));
+    try std.testing.expectEqual(@as(usize, 1), j.hour.count());
+    try std.testing.expect(j.hour.contains(10));
+    try std.testing.expectEqual(@as(usize, 1), j.dayOfWeek.count());
+    try std.testing.expect(j.dayOfWeek.contains(3));
+}
+
+test "parseSchedule range-with-step expands correctly" {
+    const allocator = std.testing.allocator;
+    var map_jobs = std.array_list.Managed(job).init(allocator);
+    defer map_jobs.deinit();
+
+    var mc = mockContainer(allocator);
+    var c = Cronz{
+        .container = &mc,
+        .jobs = map_jobs,
+    };
+
+    var j = try c.parseSchedule("10-20/5 * * * * *");
+    defer {
+        j.sec.deinit();
+        j.min.deinit();
+        j.hour.deinit();
+        j.day.deinit();
+        j.month.deinit();
+        j.dayOfWeek.deinit();
+    }
+    try std.testing.expect(j.sec.contains(10));
+    try std.testing.expect(j.sec.contains(15));
+    try std.testing.expect(j.sec.contains(20));
+    try std.testing.expect(!j.sec.contains(12));
+}
+
+test "parseSchedule rejects out-of-bounds, inverted, and zero-step" {
+    const allocator = std.testing.allocator;
+    var map_jobs = std.array_list.Managed(job).init(allocator);
+    defer map_jobs.deinit();
+
+    var mc = mockContainer(allocator);
+    var c = Cronz{
+        .container = &mc,
+        .jobs = map_jobs,
+    };
+
+    try std.testing.expectError(Error.CronError.BadScheduleFormat, c.parseSchedule("60 * * * * *"));
+    try std.testing.expectError(Error.CronError.BadScheduleFormat, c.parseSchedule("20-10 * * * * *"));
+    try std.testing.expectError(Error.CronError.BadScheduleFormat, c.parseSchedule("*/0 * * * * *"));
 }

@@ -1,6 +1,10 @@
 pub const std = @import("std");
 pub const constants = @import("constants.zig");
 
+// Comptime feature flags, emitted by `build.zig` (-Dkafka / -Dduckdb). Lets a
+// build drop a subsystem (and its native library) entirely. T22.
+pub const build_options = @import("build_options");
+
 // zero dependencies
 pub const zul = @import("zul");
 pub const pgz = @import("pg");
@@ -18,7 +22,9 @@ pub const natslib = @import("nats");
 pub const graphql = @import("graphql");
 pub const gql = @import("graphql.zig");
 
-pub const rdkafka = @import("cimport.zig").librdkafka;
+// C declarations are generated at build time (translate-c Translator) and
+// exposed directly at the module root, C names unwrapped.
+pub const rdkafka = if (build_options.kafka) @import("cimport") else struct {};
 pub const sqlitez = @import("sqlite");
 
 pub const protobuf = @import("protobuf");
@@ -45,6 +51,7 @@ pub const responder = @import("responder.zig");
 pub const tracz = @import("mw/tracz.zig");
 pub const baggage = @import("mw/baggage.zig");
 pub const otel = @import("otel.zig");
+pub const outbox = @import("outbox.zig");
 pub const rateLimiter = @import("mw/rateLimiter.zig");
 pub const kvstore = @import("kvstore/interface.zig");
 pub const KVStore = kvstore.KVStore;
@@ -66,7 +73,7 @@ pub const SQL = @import("datasource/sql/SQL.zig");
 
 pub const SQLite = @import("datasource/sql/sqlite.zig");
 
-pub const DuckDB = @import("datasource/sql/duckdb.zig").DuckDB;
+pub const DuckDB = if (build_options.duckdb) @import("datasource/sql/duckdb.zig").DuckDB else struct {};
 pub const DuckGres = @import("datasource/sql/duckgres.zig").DuckGres;
 pub const ClickHouse = @import("datasource/sql/clickhouse.zig").ClickHouse;
 pub const MySQL = @import("datasource/sql/mysql.zig").MySQL;
@@ -115,9 +122,9 @@ pub const mqSubscriber = @import("pubsub/mqtt/subscriber.zig");
 pub const mqMessage = @import("pubsub/mqtt/message.zig");
 pub const MQTT = @import("pubsub/mqtt/MQTT.zig");
 
-pub const kafka = @import("pubsub/kafka/kafka.zig");
-pub const kafkaSubscriber = @import("pubsub/kafka/subscriber.zig");
-pub const kafkaMessage = @import("pubsub/kafka/message.zig").Message;
+pub const kafka = if (build_options.kafka) @import("pubsub/kafka/kafka.zig") else struct {};
+pub const kafkaSubscriber = if (build_options.kafka) @import("pubsub/kafka/subscriber.zig") else struct {};
+pub const kafkaMessage = if (build_options.kafka) @import("pubsub/kafka/message.zig").Message else struct {};
 
 pub const natsConfig = @import("pubsub/nats/config.zig").natsConfig;
 pub const natsSubscriber = @import("pubsub/nats/subscriber.zig").natsSubscriber;

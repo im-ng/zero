@@ -1,5 +1,6 @@
 const std = @import("std");
 const root = @import("zero.zig");
+const build_options = @import("build_options");
 const container = @This();
 const Self = @This();
 
@@ -22,6 +23,41 @@ const utils = root.utils;
 pub const HealthCheck = struct {
     name: []const u8,
     check: *const fn (*container) anyerror!void,
+};
+
+/// One published health-check result. `name` borrows from the registered
+/// `HealthCheck` (whose strings live for the whole process), so the snapshot
+/// slice itself needs no per-entry allocations.
+pub const HealthStatus = struct {
+    name: []const u8,
+    up: bool,
+};
+
+/// Upper bound on health checks whose watchdog thread is still parked on a hung
+/// check. A check that never returns keeps exactly one thread for its lifetime;
+/// without this cap, every refresh cycle would spawn another one for the same
+/// check and thread usage would grow without limit.
+const MAX_HEALTH_PROBES: usize = 64;
+
+/// Watchdog state for a single health check running on its own thread. Allocated
+/// per probe from `container.allocator`; freed only once `done` flips true, so a
+/// detached thread can always finish writing to its box. The check's identity is
+/// copied by value because it points into `container.healthChecks`, whose backing
+/// array appends can reallocate while this probe runs.
+pub const ProbeBox = struct {
+    c: *container,
+    name: []const u8,
+    check: *const fn (*container) anyerror!void,
+    up: bool = false,
+    /// Release store on completion; readers poll with acquire semantics.
+    done: std.atomic.Value(bool) = .init(false),
+
+    fn run(bx: *ProbeBox) void {
+        // The check reports its own outcome; any error means DOWN. This is the
+        // same semantics as `runHealthCheck`, just off the request path.
+        bx.up = if (bx.check(bx.c)) true else |_| false;
+        bx.done.store(true, .release);
+    }
 };
 
 /// Probes SQL connectivity for the health endpoint. For Postgres it acquires and
@@ -61,19 +97,313 @@ fn clickhouseHealthCheck(c: *container) anyerror!void {
 /// Probes Redis connectivity for the health endpoint via a PING round-trip.
 fn redisHealthCheck(c: *container) anyerror!void {
     if (c.redis) |*r| {
-        const pong = try r.sendAlloc([]u8, c.allocator, .{"ping"});
+        // Serialize on the shared Redis socket so a concurrent KV/rate-limiter
+        // command can't interleave RESP frames
+        if (c.rdz) |rz| {
+            rz.mu.lock(utils.io) catch {};
+            defer rz.mu.unlock(utils.io);
+        }
+        const pong = r.sendAlloc([]u8, c.allocator, .{"ping"}) catch {
+            // The shared socket may have died in an outage. Rebuild it in place
+            // once before declaring Redis unavailable — this heals KV, the rate
+            // limiter, and the health probe at the same time (they all borrow the
+            // same `rdz` reader/writer interfaces).
+            if (c.rdz) |rz| {
+                rz.reconnect() catch return error.RedisUnavailable;
+                return;
+            }
+            return error.RedisUnavailable;
+        };
         c.allocator.free(pong);
         return;
     }
     return error.RedisUnavailable;
 }
 
-/// Runs a health check on a spawned thread and returns `true` only if it
-/// completes successfully within `timeout_ms`.
-pub fn runHealthCheckBounded(self: *container, hc: *HealthCheck, timeout_ms: u32) bool {
-    _ = timeout_ms;
-    hc.check(self) catch return false;
-    return true;
+/// Runs a single health check and returns `true` only if it succeeds.
+///
+/// The check is a synchronous `anyerror!void` dispatched on the caller's thread,
+/// so this returns the actual dependency status (`true` = UP, `false` = DOWN) and
+/// does NOT enforce a timeout. Prefer health-snapshot mode
+/// (`startHealthRefresher` / `HEALTH_SNAPSHOT_REFRESH_MS`), which runs checks off
+/// the request path; with snapshot mode on, a hung dependency wedges only the
+/// refresher while `GET /.well-known/health` keeps serving the last known state.
+pub fn runHealthCheck(self: *container, hc: *HealthCheck) bool {
+    return if (hc.check(self)) true else |_| false;
+}
+
+/// Appends a check under the snapshot guard so the background refresher can copy
+/// the check list each cycle without racing an append that reallocates the
+/// backing array (dangling slice / torn `HealthCheck` values).
+pub fn addHealthCheckEntry(self: *container, name: []const u8, check: *const fn (*container) anyerror!void) !void {
+    // Lock failure would mean a corrupted mutex (see publishHealthSnapshot);
+    // registration proceeds rather than losing the check.
+    self.health_snapshot_mu.lock(self.io) catch {};
+    defer self.health_snapshot_mu.unlock(self.io);
+    try self.healthChecks.append(.{ .name = name, .check = check });
+}
+
+/// Frees the previous snapshot (if any) and publishes `results`, which must be
+/// allocated from `self.allocator` by the caller and which this call takes
+/// ownership of (the next publish frees it). Timestamped on the monotonic clock
+/// for probe freshness checks.
+fn publishHealthSnapshot(self: *container, results: []HealthStatus, now: std.Io.Timestamp) void {
+    // `std.Io.Mutex.lock` cannot fail in normal operation (only a corrupted
+    // mutex reports an error); proceeding unlocked keeps the health endpoint
+    // answering, mirroring the scheduler's best-effort locking in cronz.
+    self.health_snapshot_mu.lock(self.io) catch {};
+    defer self.health_snapshot_mu.unlock(self.io);
+    if (self.health_snapshot) |old| {
+        self.allocator.free(old);
+    }
+    self.health_snapshot = results;
+    self.health_snapshot_at = now;
+}
+
+/// Releases watchdog boxes whose threads have finished (they can only finish
+/// after their `ProbeBox` writes are complete and `done` was store-released, so
+/// freeing here is safe). Slots live in `health_probe_slots`, guarded by the
+/// snapshot mutex; callers hold it. `pub` for `container_test.zig` cleanup.
+pub fn reapDoneProbes(self: *container) void {
+    for (&self.health_probe_slots) |*slot| {
+        const bx = slot.* orelse continue;
+        if (!bx.done.load(.acquire)) continue;
+        slot.* = null;
+        self.allocator.destroy(bx);
+    }
+}
+
+/// Synchronously runs every registered check on the current thread and publishes
+/// the results for the next probe. Used by the probe handler as a fallback
+/// (before the first refresher cycle, when the refresher is disabled, or when
+/// its snapshot has gone stale) so a cold probe still reports real state.
+pub fn runAndPublishHealthChecks(self: *container) void {
+    // Copy the check list while holding the guard, then release it before the
+    // checks run: `publishHealthSnapshot` re-locks the same mutex, and the check
+    // functions themselves take backend locks that must not nest inside it.
+    self.health_snapshot_mu.lock(self.io) catch return;
+    const checks = self.allocator.alloc(HealthCheck, self.healthChecks.items.len) catch {
+        self.health_snapshot_mu.unlock(self.io);
+        return;
+    };
+    @memcpy(checks, self.healthChecks.items);
+    self.health_snapshot_mu.unlock(self.io);
+    defer self.allocator.free(checks);
+
+    // Owned by the snapshot once `publishHealthSnapshot` takes it; the next
+    // publish frees this slice.
+    const results = self.allocator.alloc(HealthStatus, checks.len) catch return;
+    for (checks, 0..) |*hc, i| {
+        results[i] = .{ .name = hc.name, .up = self.runHealthCheck(hc) };
+    }
+    self.publishHealthSnapshot(results, utils.nowMonotonic());
+}
+
+/// A single snapshot refresh on the background refresher thread: reap finished
+/// probes, spawn one detached watchdog per check (capped at `MAX_HEALTH_PROBES`,
+/// skipping checks that still have a thread running), wait up to `deadline_ms`
+/// for the checks it started, and publish every decided result. A check that
+/// never returns keeps its one thread and stays `DOWN` in every snapshot until
+/// it completes; the refresh loop itself always advances.
+pub fn refreshHealthSnapshot(self: *container, deadline_ms: u64) void {
+    self.health_snapshot_mu.lock(self.io) catch return;
+    self.reapDoneProbes();
+
+    var spawned: usize = 0;
+    for (self.healthChecks.items) |*hc| {
+        // A check with a thread still parked on a hung dependency keeps its last
+        // published state; never spawn a second thread for it.
+        var in_flight = false;
+        for (self.health_probe_slots) |slot| {
+            if (slot != null and std.mem.eql(u8, slot.?.name, hc.name)) {
+                in_flight = true;
+                break;
+            }
+        }
+        if (in_flight) continue;
+        if (spawned >= MAX_HEALTH_PROBES) break; // slot cap; snapshot stays authoritative
+
+        const bx = self.allocator.create(ProbeBox) catch continue;
+        bx.* = .{ .c = self, .name = hc.name, .check = hc.check };
+
+        // Claim an empty slot under the same guard that protects the pollers.
+        var placed = false;
+        for (&self.health_probe_slots) |*slot| {
+            if (slot.* == null) {
+                slot.* = bx;
+                placed = true;
+                break;
+            }
+        }
+        if (!placed) {
+            self.allocator.destroy(bx);
+            continue;
+        }
+
+        const thread = std.Thread.spawn(.{}, ProbeBox.run, .{bx}) catch {
+            // Spawn failure is transient (thread/table pressure); give the slot
+            // back so the next cycle can retry instead of pinning a fake "in
+            // flight" entry until process exit.
+            for (&self.health_probe_slots) |*slot| {
+                if (slot.* == bx) {
+                    slot.* = null;
+                }
+            }
+            self.allocator.destroy(bx);
+            if (spawned == 0) {
+                self.log.err("health refresher could not spawn a watchdog thread");
+            }
+            continue;
+        };
+        spawned += 1;
+        thread.detach();
+    }
+    self.health_snapshot_mu.unlock(self.io);
+    if (spawned == 0) {
+        // Nothing new to wait for; republish the current state to refresh the
+        // freshness stamp cheaply.
+        self.republishCurrentState();
+        return;
+    }
+
+    // Poll until every probe we spawned completes or the deadline passes. The
+    // deadline bounds snapshot staleness; probes that miss it stay DOWN.
+    const deadline = utils.nowMonotonic();
+    while (utils.ageMs(deadline) < deadline_ms) {
+        // Sleep-forever is harmless here: the next poll iteration re-evaluates
+        // the deadline, matching the scheduler's sleep-until web (crontz).
+        std.Io.sleep(self.io, std.Io.Duration.fromMilliseconds(25), .awake) catch {};
+        var remaining = false;
+        // Broken-mutex tolerance as above; poll is read-only bookkeeping.
+        self.health_snapshot_mu.lock(self.io) catch {};
+        for (self.health_probe_slots) |slot| {
+            if (slot != null and !slot.?.done.load(.acquire)) {
+                remaining = true;
+                break;
+            }
+        }
+        self.health_snapshot_mu.unlock(self.io);
+        if (!remaining) break;
+    }
+
+    // Build the next snapshot under the guard: the probe results and the
+    // previous snapshot rows must be read together. Do NOT reap first — the
+    // finished boxes are the only home of the `up` values being published.
+    self.health_snapshot_mu.lock(self.io) catch return;
+
+    // Publish a result row per registered check: the probe result for finished
+    // watchdogs, else the previous snapshot value, else DOWN.
+    const results = self.allocator.alloc(HealthStatus, self.healthChecks.items.len) catch {
+        self.health_snapshot_mu.unlock(self.io);
+        return;
+    };
+    for (self.healthChecks.items, 0..) |*hc, i| {
+        var up = false;
+        var found = false;
+        for (self.health_probe_slots) |slot| {
+            const bx = slot orelse continue;
+            if (std.mem.eql(u8, bx.name, hc.name) and bx.done.load(.acquire)) {
+                up = bx.up;
+                found = true;
+                break;
+            }
+        }
+        if (!found) {
+            if (self.health_snapshot) |prev| {
+                for (prev) |row| {
+                    if (std.mem.eql(u8, row.name, hc.name)) {
+                        up = row.up;
+                        break;
+                    }
+                }
+            }
+        }
+        results[i] = .{ .name = hc.name, .up = up };
+    }
+    // Drop the guard before publishing: `publishHealthSnapshot` takes the same
+    // mutex, and `std.Io.Mutex` is not recursive (holding it across the call
+    // self-deadlocks the refresher on the first cycle that spawns a probe).
+    self.health_snapshot_mu.unlock(self.io);
+    self.publishHealthSnapshot(results, utils.nowMonotonic());
+
+    // Release the finished watchdog boxes now that their results are published.
+    self.health_snapshot_mu.lock(self.io) catch return;
+    self.reapDoneProbes();
+    self.health_snapshot_mu.unlock(self.io);
+}
+
+/// Re-stamps the published snapshot as just refreshed when a cycle observed no
+/// new probes (nothing got scheduled): the checks that ran hold their values.
+fn republishCurrentState(self: *container) void {
+    // Broken-mutex tolerance as in `publishHealthSnapshot`; the re-stamp is
+    // bookkeeping, not a decision path.
+    self.health_snapshot_mu.lock(self.io) catch return;
+    defer self.health_snapshot_mu.unlock(self.io);
+    // An empty check list still needs a valid "no components" snapshot so the
+    // probe has something fresh to serve.
+    if (self.health_snapshot == null) {
+        const results = self.allocator.alloc(HealthStatus, 0) catch return;
+        self.health_snapshot = results;
+    }
+    self.health_snapshot_at = utils.nowMonotonic();
+}
+
+/// True when snapshot mode is on (`health_refresh_ms > 0`) and the published
+/// snapshot is recent enough to serve. Freshness budget: two missed cycles
+/// (floored at 2s for very short intervals), so a dead or wedged refresher
+/// degrades to inline probing instead of freezing a stale status on the wire.
+pub fn healthSnapshotFresh(self: *container, interval_ms: u64) bool {
+    if (interval_ms == 0) return false;
+    self.health_snapshot_mu.lock(self.io) catch return false;
+    defer self.health_snapshot_mu.unlock(self.io);
+    if (self.health_snapshot == null) return false;
+    const budget = @max(3 * interval_ms, 2_000);
+    return utils.ageMs(self.health_snapshot_at) <= budget;
+}
+
+/// Runs one refresh cycle immediately, then loops at `health_refresh_ms`.
+/// Spawned detached; the OS reaps the thread at process exit.
+fn refresherLoop(self: *container) void {
+    const interval_ms = @max(self.health_refresh_ms, 1);
+
+    while (!self.health_refresh_stop.load(.acquire)) {
+        const deadline_ms = @max(interval_ms * 2, 10_000);
+        self.refreshHealthSnapshot(deadline_ms);
+        // Sleep in small steps so the stop flag is honored promptly. Sleep
+        // failure only means the sleep didn't complete; the loop re-checks the
+        // stop flag regardless.
+        var slept: u64 = 0;
+        while (slept < interval_ms and !self.health_refresh_stop.load(.acquire)) {
+            const step: u64 = if (interval_ms - slept < 100) interval_ms - slept else 100;
+            std.Io.sleep(self.io, std.Io.Duration.fromMilliseconds(@intCast(step)), .awake) catch {};
+            slept += step;
+        }
+    }
+}
+
+/// Starts the background health refresher. Spawns a joinable thread; spawn
+/// failure logs and leaves the endpoint on inline probing (correct, just not
+/// hung-check-proof). The handle is kept so `stopHealthRefresher` can join it
+/// before the container is freed — detaching would let the loop read freed
+/// container memory during shutdown.
+pub fn startHealthRefresher(self: *container) void {
+    if (self.health_refresh_ms == 0) return;
+    const thread = std.Thread.spawn(.{}, refresherLoop, .{self}) catch {
+        self.log.err("health refresher thread failed to start; falling back to inline probing");
+        return;
+    };
+    self.refresherThread = thread;
+}
+
+/// Stops the refresher loop and joins its thread. Safe to call once (no-op when
+/// the thread was never started). Must run while the container is still alive so
+/// the thread finishes reading its `health_refresh_stop` flag before we free it.
+pub fn stopHealthRefresher(self: *container) void {
+    self.health_refresh_stop.store(true, .release);
+    if (self.refresherThread) |thread| {
+        thread.join();
+        self.refresherThread = null;
+    }
 }
 
 /// A user-registered static-file mount: URL `prefix` → on-disk `dir`.
@@ -122,8 +452,10 @@ bootstrap: std.mem.Allocator = undefined,
 log: *root.logger = undefined,
 config: *root.config = undefined,
 metricz: *root.metricz = undefined,
-/// OpenTelemetry provider (inert unless OTEL_EXPERIMENTAL=true). Set by App.initBase.
+/// OpenTelemetry provider (inert unless an OTLP exporter endpoint is configured). Set by App.initBase.
 otel: *root.otel.Provider = undefined,
+/// Transactional-outbox configuration (null until App.addOutbox is called).
+outbox_options: ?root.outbox.Options = null,
 authProvider: *root.AuthProvider = undefined,
 
 /// optional role-based access control registry, wired into the rbac middleware
@@ -165,8 +497,13 @@ kvStores: std.StringHashMap(*root.KVStore) = undefined,
 defaultKV: ?*root.KVStore = null,
 fileStores: std.StringHashMap(*root.FileStore) = undefined,
 defaultFileStore: ?*root.FileStore = null,
+// Named SQL datasources (registered via App.addSQL) and named pub/sub
+// backends (registered via App.addPubSub). The single wired datasource /
+// pub/sub backend is also available under the "default" key.
+sqlStores: std.StringHashMap(root.Datasource) = undefined,
+pubSubBackends: std.StringHashMap(*root.PubSub) = undefined,
 mqtt: ?*root.MQTT = null,
-Kakfa: ?*root.kafka = null,
+Kafka: ?*root.kafka = null,
 Nats: ?*root.nats = null,
 Redis: ?*root.redisPubSub = null,
 Sqs: ?*root.sqs = null,
@@ -183,6 +520,25 @@ graphql_mutation: ?*const anyopaque = null,
 // user-registered health checks surfaced by GET /.well-known/health
 healthChecks: std.array_list.Managed(HealthCheck) = undefined,
 
+// The background refresher (`startHealthRefresher`)
+// runs the registered checks off the request path every `health_refresh_ms` and
+// publishes the results here, so a hung check wedges only the refresher while the
+// probe keeps answering from the last-known state. `0` disables the refresher and
+// restores fully synchronous probing.
+health_snapshot_mu: std.Io.Mutex = .init,
+health_snapshot: ?[]HealthStatus = null,
+health_snapshot_at: std.Io.Timestamp = undefined,
+health_refresh_ms: u64 = 0,
+/// Detached watchdog threads are capped at MAX_HEALTH_PROBES; a slot holds a box
+/// while its check thread is still running. Guarded by `health_snapshot_mu`.
+health_probe_slots: [MAX_HEALTH_PROBES]?*ProbeBox = @splat(null),
+health_refresh_stop: std.atomic.Value(bool) = .init(false),
+// Handle of the refresher thread started by `startHealthRefresher`. `null`
+// until started (or when HEALTH_SNAPSHOT_REFRESH_MS=0). Kept so shutdown can
+// `join` it before the container is freed; the thread reads `health_refresh_stop`
+// and other container fields, so detaching it would be a use-after-free.
+refresherThread: ?std.Thread = null,
+
 pub fn create(self: Self) anyerror!*container {
     const c = try self.allocator.create(container);
     errdefer self.allocator.destroy(c);
@@ -198,6 +554,21 @@ pub fn create(self: Self) anyerror!*container {
     c.appName = c.config.getOrDefault(constants.APP_NAME, "zero");
     c.appVersion = c.config.getOrDefault(constants.APP_VERSION, "dev");
 
+    // refresher and keeps health probing fully synchronous.
+    // 0 disables the background
+    const refresh_raw = c.config.getOrDefault("HEALTH_SNAPSHOT_REFRESH_MS", "5000");
+    c.health_refresh_ms = std.fmt.parseInt(u64, refresh_raw, 10) catch blk: {
+        // utils.combine returns a subslice of a fixed 256-byte buffer and is
+        // intentionally not freed (one-shot log line at startup).
+        const msg = utils.combine(
+            c.allocator,
+            "invalid HEALTH_SNAPSHOT_REFRESH_MS '{s}', using default 5000",
+            .{refresh_raw},
+        ) catch break :blk 5000;
+        c.log.err(msg);
+        break :blk 5000;
+    };
+
     // initialize service client handler maps
     c.services = std.StringHashMap(*zeroClient).init(c.bootstrap);
     c.wsClients = std.StringHashMap(*root.wsclient.Client).init(c.bootstrap);
@@ -208,17 +579,28 @@ pub fn create(self: Self) anyerror!*container {
     // initialize file stores (backends registered via App.addFileStore / loadFileStore)
     c.fileStores = std.StringHashMap(*root.FileStore).init(c.bootstrap);
 
+    // initialize named SQL datasources (registered via App.addSQL) and named
+    // pub/sub backends (registered via App.addPubSub)
+    c.sqlStores = std.StringHashMap(root.Datasource).init(c.bootstrap);
+    c.pubSubBackends = std.StringHashMap(*root.PubSub).init(c.bootstrap);
+
     // initialize user-registered health checks
     c.healthChecks = std.array_list.Managed(container.HealthCheck).init(c.bootstrap);
 
     // initialize user-registered static mounts
     c.staticMounts = std.array_list.Managed(container.StaticMount).init(c.bootstrap);
 
+    // Startup is fail-fast: a backend that is configured but fails to connect
+    // returns its error, propagated by the `try` calls below, so the process
+    // exits non-zero instead of calling std.process.exit mid-startup.
     // initialize metricz
     try c.loadMetricz();
 
     // initialize db
     try c.loadSQL();
+    if (c.SQL != null or c.MySQL != null or c.SQLite != null or c.DuckDB != null or c.ClickHouse != null or c.DuckGres != null) {
+        c.sqlStores.put("default", c.datasource) catch {};
+    }
 
     // initialize kv
     try c.loadRedis();
@@ -256,6 +638,9 @@ pub fn create(self: Self) anyerror!*container {
 
     // initilize message queues
     try c.loadPubSub();
+    if (c.pubSub != null) {
+        c.pubSubBackends.put("default", c.pubSub.?) catch {};
+    }
 
     c.log.info("container is created");
 
@@ -306,9 +691,11 @@ pub fn destroy(self: *Self) void {
     // structures (audit #12). The unified PubSub wrapper is heap-allocated in
     // loadPubSub and freed here too. Runs before config/log teardown because the
     // client destroy paths log through `container.log`.
-    if (self.Kakfa) |k| {
-        k.destroy();
-        allocator.destroy(k);
+    if (comptime build_options.kafka) {
+        if (self.Kafka) |k| {
+            k.destroy();
+            allocator.destroy(k);
+        }
     }
     if (self.mqtt) |m| {
         m.destroy();
@@ -325,7 +712,18 @@ pub fn destroy(self: *Self) void {
     if (self.pubSub) |ps| {
         allocator.destroy(ps);
     }
-    self.Kakfa = null;
+    // SQS / GCP consumer threads must be joined (and their state freed) before the
+    // allocator behind them is torn down. They are heap-allocated in loadSqsPubSub /
+    // loadGcpPubSub and owned here
+    if (self.Sqs) |s| {
+        s.deinit();
+        self.Sqs = null;
+    }
+    if (self.Gcp) |g| {
+        g.deinit();
+        self.Gcp = null;
+    }
+    self.Kafka = null;
     self.mqtt = null;
     self.Nats = null;
     self.Redis = null;
@@ -351,8 +749,10 @@ pub fn destroy(self: *Self) void {
 
     // In-process OLAP engine (DuckDB): closes the C database/connection and the
     // struct allocated by `create` / `addDuckDB`.
-    if (self.DuckDB) |db| {
-        db.deinit(allocator);
+    if (comptime build_options.duckdb) {
+        if (self.DuckDB) |db| {
+            db.deinit(allocator);
+        }
     }
 
     // Wired (network) DuckDB client: closes the pgz pool, then frees the struct
@@ -396,6 +796,14 @@ pub fn destroy(self: *Self) void {
         allocator.destroy(rdz);
     }
 
+    // The last published health snapshot is the only buffer `publishHealthSnapshot`
+    // never frees (it only releases the *previous* one), so release it here or the
+    // DebugAllocator reports it leaked at process exit.
+    if (self.health_snapshot) |snap| {
+        allocator.free(snap);
+        self.health_snapshot = null;
+    }
+
     allocator.destroy(self);
 }
 
@@ -429,6 +837,7 @@ fn loadPubSub(self: *Self) !void {
 }
 
 fn loadKafkaPubSub(self: *Self) !void {
+    if (comptime !build_options.kafka) return;
     var mode: c_uint = rdkafka.RD_KAFKA_PRODUCER;
 
     var buffer: []u8 = undefined;
@@ -455,7 +864,7 @@ fn loadKafkaPubSub(self: *Self) !void {
     const kafkaTlsCertFile = self.config.get("KAFKA_TLS_CERT_FILE");
     const kafkaTlsKeyFile = self.config.get("KAFKA_TLS_KEY_FILE");
     const kafkaTlsCACertFile = self.config.get("KAFKA_TLS_CA_CERT_FILE");
-    const kafkaTlsSkipVerify = self.config.getOrDefault("KAFKA_TLS_INSECURE_SKIP_VERIFY", "true");
+    const kafkaTlsSkipVerify = self.config.getOrDefault("KAFKA_TLS_INSECURE_SKIP_VERIFY", "false");
 
     const config: ?*rdkafka.struct_rd_kafka_conf_s = rdkafka.rd_kafka_conf_new();
 
@@ -515,7 +924,7 @@ fn loadKafkaPubSub(self: *Self) !void {
 
     self.log.info(try std.fmt.bufPrint(buffer, "connecting to kafka at '{s}'", .{servers}));
 
-    self.Kakfa = kafka.create(self, config, null, mode) catch |err| {
+    self.Kafka = kafka.create(self, config, null, mode) catch |err| {
         buffer = try self.bootstrap.alloc(u8, 1024);
         buffer = try std.fmt.bufPrint(buffer, "could not connect to kafka at '{s}'", .{servers});
         self.log.err(buffer);
@@ -539,7 +948,7 @@ fn loadKafkaPubSub(self: *Self) !void {
 
     // build the unified PubSub dispatcher
     const ps = try self.allocator.create(root.PubSub);
-    ps.* = .{ .ptr = @ptrCast(@alignCast(self.Kakfa)), .vtable = &root.kafka.vtable };
+    ps.* = .{ .ptr = @ptrCast(@alignCast(self.Kafka)), .vtable = &root.kafka.vtable };
     self.pubSub = ps;
 }
 
@@ -582,7 +991,7 @@ fn wireDatasource(self: *Self, ptr: anytype, dialect: anytype) void {
 
 /// Register the shared SQL health probe used by postgres/sqlite/duckdb.
 fn registerSqlHealth(self: *Self) !void {
-    try self.healthChecks.append(.{ .name = "sql", .check = sqlHealthCheck });
+    try self.addHealthCheckEntry("sql", sqlHealthCheck);
 }
 
 fn loadMqttPubSub(self: *Self) !void {
@@ -807,8 +1216,17 @@ pub fn natsPullWaitMs(self: *Self) u32 {
 }
 
 fn loadMetricz(self: *Self) !void {
+    // Resolve the per-metric label-cardinality cap from config (which honors
+    // `configs/.env`). Absent => default (initialize applies 4096); `0` => disabled;
+    // positive => that value. This replaces the old `std.c.environ` read so
+    // config-driven limits actually take effect. `0` must be passed through, not
+    // collapsed to null, or it becomes indistinguishable from "unset".
+    const card_present = !std.mem.eql(u8, self.config.get("METRICS_CARDINALITY_LIMIT"), "");
+    const card_raw = self.config.getAsInt("METRICS_CARDINALITY_LIMIT") catch 0;
+    const cap_override: ?usize = if (!card_present) null else card_raw;
+
     // initialize metrics
-    self.metricz = try Metricz.initialize(self.allocator, .{ .prefix = "", .exclude = null });
+    self.metricz = try Metricz.initialize(self.allocator, .{ .prefix = "", .exclude = null }, cap_override);
 
     // app metrics
     try self.metricz.info(.{ .app_name = self.appName, .app_version = self.appVersion, .zero_version = "0.0.1" });
@@ -941,6 +1359,13 @@ fn loadRedis(self: *Self) !void {
             return error.RedisConnectFailed;
         };
         self.allocator.free(ping);
+        // Mirror the connected client into `rdz` so every Redis consumer
+        // (KV, rate limiter, health probe) locks the same `rdz.mu` around the
+        // one shared socket
+        self.rdz.?.client = self.redis.?;
+        // Capture reconnect parameters so a dead socket can be rebuilt in place.
+        self.rdz.?.addr = addr;
+        self.rdz.?.pass = password;
         break;
     }
 
@@ -949,7 +1374,7 @@ fn loadRedis(self: *Self) !void {
 
     // Auto-register a Redis dependency health probe so /.well-known/health
     // reflects cache availability without a manual check.
-    try self.healthChecks.append(.{ .name = "redis", .check = redisHealthCheck });
+    try self.addHealthCheckEntry("redis", redisHealthCheck);
 
     // expose Redis through the unified KV store interface (default store)
     const redisStore = try root.kvstore.build(self, .redis, .{});
@@ -1125,7 +1550,7 @@ fn loadSQL(self: *Self) !void {
     self.SQL.?.sql = pgz.Pool.init(utils.io, self.allocator, options) catch |err| {
         buffer = try std.fmt.bufPrint(buffer, "Failed to connect: {}", .{err});
         self.log.err(buffer);
-        std.process.exit(1);
+        return err;
     };
     // reference metricz
     self.SQL.?.metricz = self.metricz;
@@ -1195,6 +1620,7 @@ fn loadSQLite(self: *Self) !void {
 // Defaults to an in-memory database when the path is empty. The shared library
 // (`libs/libduckdb.so`) is linked at build time, so this adds no runtime dep.
 fn loadDuckDB(self: *Self) !void {
+    if (comptime !build_options.duckdb) return;
     if (self.DuckDB != null) return;
     const path = self.config.get("DUCKDB_PATH");
     if (path.len == 0) return;
@@ -1295,7 +1721,7 @@ fn loadDuckGres(self: *Self) !void {
     const dg = root.DuckGres.create(self.allocator, options, self.log, self.metricz) catch |err| {
         buffer = try std.fmt.bufPrint(buffer, "Failed to connect: {}", .{err});
         self.log.err(buffer);
-        std.process.exit(1);
+        return err;
     };
     self.DuckGres = dg;
     self.wireDatasource(dg, .duckgres);
@@ -1375,7 +1801,7 @@ fn loadMySQL(self: *Self) !void {
     buffer = try std.fmt.bufPrint(buffer, "configured mysql pool (size {d}) for user '{s}' at '{s}:{s}'", .{ pool_size, user, hostname, port });
     self.log.info(buffer);
 
-    try self.healthChecks.append(.{ .name = "mysql", .check = mysqlHealthCheck });
+    try self.addHealthCheckEntry("mysql", mysqlHealthCheck);
 }
 
 // Resolve the `MYSQL_SSL_MODE` env value to the client's `SslMode`. Unknown
@@ -1423,7 +1849,7 @@ fn loadClickhouse(self: *Self) !void {
     self.log.info(msg);
 
     // Auto-register a SQL (clickhouse) dependency health probe.
-    try self.healthChecks.append(.{ .name = "sql", .check = clickhouseHealthCheck });
+    try self.addHealthCheckEntry("sql", clickhouseHealthCheck);
 }
 
 // Auto-wire the time-series datasource when INFLUXDB_URL is set. The database

@@ -34,13 +34,13 @@ pub const Client = struct {
     /// Reset the last-failure state at the start of each call.
     fn resetLast(self: *Client) void {
         self.last_status.store(0, .monotonic);
-        self.last_kind.store(@intFromEnum(root.Error.ErrorKind.none), .monotonic);
+        self.last_kind.store(@backingInt(root.Error.ErrorKind.none), .monotonic);
     }
 
     /// Record a failure into the atomic last-error fields.
     fn setLast(self: *Client, status: u16) void {
         self.last_status.store(status, .monotonic);
-        self.last_kind.store(@intFromEnum(root.Error.classifyHttpStatus(status)), .monotonic);
+        self.last_kind.store(@backingInt(root.Error.classifyHttpStatus(status)), .monotonic);
     }
 
     fn applyAuth(self: *Client, req: anytype) !void {
@@ -105,7 +105,7 @@ pub const Client = struct {
 
     /// Thread-safe last-failure accessor. Returns `null` on recent success.
     pub fn lastError(self: *Client) ?root.Error.DataSourceError {
-        const kind = @as(root.Error.ErrorKind, @enumFromInt(self.last_kind.load(.monotonic)));
+        const kind = @as(root.Error.ErrorKind, @fromBackingInt(@intCast(self.last_kind.load(.monotonic))));
         if (kind == .none) return null;
         return .{
             .status = self.last_status.load(.monotonic),

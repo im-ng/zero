@@ -55,13 +55,13 @@ pub const MongoDB = struct {
 
     fn clearErr(self: *MongoDB) void {
         self.last_status.store(0, .monotonic);
-        self.last_kind.store(@intFromEnum(root.Error.ErrorKind.none), .monotonic);
+        self.last_kind.store(@backingInt(root.Error.ErrorKind.none), .monotonic);
     }
 
     fn setErr(self: *MongoDB) !void {
         self.clearErr();
         self.last_status.store(0, .monotonic);
-        self.last_kind.store(@intFromEnum(root.Error.classifyAnyError()), .monotonic);
+        self.last_kind.store(@backingInt(root.Error.classifyAnyError()), .monotonic);
     }
 
     fn run(self: *MongoDB, ctx: *root.Context, statement: []const u8) ![]const u8 {
@@ -103,7 +103,7 @@ pub const MongoDB = struct {
     /// and `status` is always 0 for this non-HTTP backend. The returned struct
     /// is a copy with no shared heap buffer, so it is safe to read.
     pub fn lastError(self: *MongoDB) ?root.Error.DataSourceError {
-        const kind = @as(root.Error.ErrorKind, @enumFromInt(self.last_kind.load(.monotonic)));
+        const kind = @as(root.Error.ErrorKind, @fromBackingInt(@intCast(self.last_kind.load(.monotonic))));
         if (kind == .none) return null;
         return .{
             .status = self.last_status.load(.monotonic),

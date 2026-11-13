@@ -30,7 +30,7 @@ fn mockContainer(allocator: std.mem.Allocator) root.container {
         .datasource = undefined,
         .services = null,
         .mqtt = null,
-        .Kakfa = null,
+        .Kafka = null,
         .Nats = null,
         .pubSub = null,
     };

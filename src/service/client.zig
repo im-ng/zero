@@ -308,6 +308,20 @@ fn retryBackoffMs(self: *Self, attempt: u32) i64 {
     return @as(i64, base) * @as(i64, attempt);
 }
 
+/// Backoff before the next retry attempt. Honors a `Retry-After` hint (integer
+/// seconds) on 429/503 so we back off as the upstream asks, capped at 60s;
+/// otherwise falls back to the linear `base * attempt` backoff.
+fn retryDelayMs(self: *Self, attempt: u32, res: zul.http.Response) i64 {
+    if (res.header("Retry-After")) |ra| {
+        const secs = std.fmt.parseUnsigned(u64, std.mem.trim(u8, ra, " \r\n"), 10) catch 0;
+        if (secs > 0) {
+            const capped: u64 = if (secs > 60) 60 else secs;
+            return @as(i64, @intCast(capped)) * 1000;
+        }
+    }
+    return self.retryBackoffMs(attempt);
+}
+
 pub fn get(
     self: *Self,
     ctx: *Context,
@@ -334,10 +348,11 @@ pub fn get(
 pub fn ping(self: *Self, ctx: *Context, path: []const u8) !u16 {
     var url: []const u8 = undefined;
     url = try utils.combine(ctx.allocator, "{s}{s}", .{ self.url.?, path });
+    defer ctx.allocator.free(url);
 
-    var client = zul.http.Client.init(self.container.io, self.container.allocator);
-    defer client.deinit();
-    var req = try client.allocRequest(ctx.allocator, url);
+    // Reuse the persistent client created in `createWithConfig`
+    // instead of spinning up a fresh TCP/TLS connection per ping.
+    var req = try self.client.allocRequest(ctx.allocator, url);
     defer req.deinit();
     req.method = .GET;
 
@@ -465,6 +480,9 @@ fn createAndSendRequest(
             .{ self.url.?, path },
         );
     }
+    // Free the combined URL only when we allocated it; the `self.url.?` fallthrough
+    // case points at container-owned memory and must not be freed.
+    defer if (path.len > 0) ctx.allocator.free(absoluteURL);
 
     var req: zul.http.Request = undefined;
     var req_owned = false;
@@ -477,14 +495,12 @@ fn createAndSendRequest(
     const max_attempts = self.max_retries orelse 0;
     var conn_retry: u8 = 0;
 
-    // A fresh HTTP client per logical request. std.http's connection pool hands
-    // back a dead idle socket without any liveness check, so a single stale
-    // connection would poison every request that reuses it. A per-request client
-    // starts with an empty pool, so the first connection is always freshly
-    // established rather than a reused, possibly-reset one.
-    var call_client = zul.http.Client.init(self.container.io, self.container.allocator);
-    defer call_client.deinit();
-    // `req` must be released back to the pool before `call_client` is torn down.
+    // Reuse the persistent client created in `createWithConfig`
+    // so keep-alive sockets are reused across requests instead of opening a new
+    // TCP/TLS connection every call. A stale idle keep-alive socket that resets on
+    // the first write is handled by `req.deinit()` in the retry path below, which
+    // evicts the dead connection from this client's pool before the next attempt.
+    // `req` must be released back to the pool before the function returns.
     defer if (req_owned) req.deinit();
 
     // Circuit breaker: consulted once per logical request, before the retry loop,
@@ -502,7 +518,7 @@ fn createAndSendRequest(
             req.deinit();
         }
         req_owned = false;
-        req = try call_client.allocRequest(ctx.allocator, absoluteURL);
+        req = try self.client.allocRequest(ctx.allocator, absoluteURL);
         req_owned = true;
 
         req.method = method;
@@ -561,15 +577,13 @@ fn createAndSendRequest(
             // fault: reconnect once and retry without counting it as a failure.
             if (isConnectionError(e) and conn_retry < 1) {
                 conn_retry += 1;
-                // The dead socket is still sitting in this client's pool. Tear the
-                // client down and open a new one so the retry gets a live connection
-                // instead of reusing the same reset one.
+                // The dead socket is still sitting in this client's pool. `req.deinit()`
+                // evicts it so the next `allocRequest` on the shared `self.client`
+                // opens a fresh connection instead of reusing the same reset one.
                 if (req_owned) {
                     req.deinit();
                     req_owned = false;
                 }
-                call_client.deinit();
-                call_client = zul.http.Client.init(self.container.io, self.container.allocator);
                 continue;
             }
             if (self.breaker) |*b| {
@@ -598,10 +612,25 @@ fn createAndSendRequest(
                 }
                 return ClientError.EntityNotFound;
             },
+            429 => {
+                // Too Many Requests: a backpressure signal, not an outage. Retry
+                // honoring `Retry-After` so we pace ourselves to the upstream's
+                // ask instead of hammering it.
+                if (attempt < max_attempts) {
+                    attempt += 1;
+                    const backoff = self.retryDelayMs(attempt, res);
+                    std.Io.sleep(self.container.io, std.Io.Duration.fromMilliseconds(backoff), .awake) catch {};
+                    continue;
+                }
+                if (self.breaker) |*b| {
+                    b.recordFailure();
+                }
+                return ClientError.ServiceNotReachable;
+            },
             500...600 => {
                 if (attempt < max_attempts) {
                     attempt += 1;
-                    const backoff = self.retryBackoffMs(attempt);
+                    const backoff = self.retryDelayMs(attempt, res);
                     std.Io.sleep(self.container.io, std.Io.Duration.fromMilliseconds(backoff), .awake) catch {};
                     continue;
                 }

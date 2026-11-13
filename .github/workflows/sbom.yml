@@ -1,0 +1,45 @@
+name: SBOM
+
+# Produce a merged CycloneDX SBOM (source deps + compiled binary) on every push
+# and PR, and on manual trigger. The artifact is `final-sbom.json`, ready for
+# Dependency-Track / Grype or to attach to a release.
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  sbom:
+    runs-on: ubuntu-latest
+    container:
+      image: imng/zero-kcov:0.3.5
+      options: --security-opt seccomp=unconfined
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js (for cdxgen + cyclonedx-cli)
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install tooling (cdxgen, cyclonedx-cli, syft)
+        run: |
+          npm install -g @cyclonedx/cdxgen @cyclonedx/cyclonedx-cli
+          curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh | sh -s -- -b /usr/local/bin
+
+      - name: Generate merged SBOM
+        run: ./scripts/gen-sbom.sh
+
+      - name: Upload SBOM artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: zig-application-sbom
+          path: final-sbom.json
+          retention-days: 14

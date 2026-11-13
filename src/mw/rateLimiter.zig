@@ -41,6 +41,10 @@ pub const Config = struct {
     /// Borrowed Redis client used only when `store == .redis`. Copied (not
     /// owned) — `container.redis` owns the connection and outlives the limiter.
     redis: ?rediz.Client = null,
+    /// Shared Redis socket+lock. When `store == .redis`, INCR/PEXPIRE are sent
+    /// under `rdz.mu` so they can't interleave with KV/health commands on the
+    /// single shared socket
+    rdz: ?*root.rdz = null,
 };
 
 const Window = struct {
@@ -60,6 +64,7 @@ trusted_proxies: []const []const u8,
 fail_closed: bool,
 store: Store,
 redis: ?rediz.Client,
+rdz: ?*root.rdz,
 mu: std.Io.Mutex,
 buckets: std.AutoHashMap(u64, Window),
 
@@ -75,6 +80,7 @@ pub fn init(c: Config) !rateLimiter {
         .fail_closed = c.fail_closed,
         .store = c.store,
         .redis = c.redis,
+        .rdz = c.rdz,
         .mu = .init,
         .buckets = std.AutoHashMap(u64, Window).init(c.allocator),
     };
@@ -94,11 +100,17 @@ pub fn execute(self: *rateLimiter, req: *httpz.Request, res: *httpz.Response, ex
     // enough to enforce a fixed window across replicas; the expiry race only
     // lets the counter persist a little past the window (still rate-limited).
     if (self.store == .redis) {
+        if (self.redis == null or self.rdz == null) return executor.next();
         const kh = self.keyFor(req) orelse return executor.next();
         var key_buf: [32]u8 = undefined;
         const redis_key = std.fmt.bufPrint(&key_buf, "rl:{x}", .{kh}) catch return executor.next();
         const win_ms = @as(i64, @intCast(@divTrunc(self.window_ns, 1_000_000)));
 
+        // INCR + PEXPIRE are one critical section on the shared socket: lock the
+        // Redis mutex so concurrent requests can't interleave their RESP frames
+        // with KV/health commands
+        self.rdz.?.mu.lock(utils.io) catch {};
+        defer self.rdz.?.mu.unlock(utils.io);
         const count = self.redis.?.send(i64, .{ "INCR", redis_key }) catch {
             // Redis unreachable: by default fail open so a Redis outage does not
             // take down the whole service. `fail_closed` reverses this.
@@ -123,14 +135,30 @@ pub fn execute(self: *rateLimiter, req: *httpz.Request, res: *httpz.Response, ex
 
     self.mu.lockUncancelable(utils.io);
     if (self.buckets.count() >= max_entries) {
-        self.mu.unlock(utils.io);
-        // Map at capacity: fail open by default (availability); fail_closed
-        // rejects so a poisoned/overflowing map can't be bypassed.
-        if (self.fail_closed) {
-            reject(res);
-            return;
+        // Map at capacity: evict expired windows before giving up, otherwise a
+        // long-lived server permanently fills the map with stale keys and silently
+        // stops limiting new ones
+        var expired: std.ArrayList(u64) = .empty;
+        defer expired.deinit(self.allocator);
+        var sweep = self.buckets.iterator();
+        while (sweep.next()) |e| {
+            if ((now - e.value_ptr.*.reset_at) >= self.window_ns) {
+                try expired.append(self.allocator, e.key_ptr.*);
+            }
         }
-        return executor.next();
+        for (expired.items) |k| {
+            _ = self.buckets.remove(k);
+        }
+        if (self.buckets.count() >= max_entries) {
+            self.mu.unlock(utils.io);
+            // Still at capacity: fail open by default (availability); fail_closed
+            // rejects so a poisoned/overflowing map can't be bypassed.
+            if (self.fail_closed) {
+                reject(res);
+                return;
+            }
+            return executor.next();
+        }
     }
 
     const gop = self.buckets.getOrPut(key) catch {
@@ -146,13 +174,16 @@ pub fn execute(self: *rateLimiter, req: *httpz.Request, res: *httpz.Response, ex
     }
     gop.value_ptr.*.count += 1;
     const over = gop.value_ptr.*.count > self.limit;
-    // Seconds remaining in the window, for the Retry-After header.
-    const retry_after: i64 = @intCast(@max(1, @divTrunc(gop.value_ptr.*.reset_at - now + 999_999_999, 1_000_000_000)));
+    // Seconds remaining in the window, for the Retry-After header. The window
+    // resets at `reset_at + window_ns`; the old code used `reset_at - now` (<= 0)
+    // and always reported 1s regardless of the configured window.
+    const remaining_ns: i128 = (gop.value_ptr.*.reset_at + self.window_ns) - now;
+    const retry_after: i64 = @intCast(@max(1, @divTrunc(remaining_ns + 999_999_999, 1_000_000_000)));
     self.mu.unlock(utils.io);
 
     if (over) {
         reject(res);
-        setRetryAfter(res, retry_after);
+        try setRetryAfter(req.arena, res, retry_after);
         return;
     }
 
@@ -167,9 +198,11 @@ fn reject(res: *httpz.Response) void {
     res.body = "rate limit exceeded";
 }
 
-fn setRetryAfter(res: *httpz.Response, seconds: i64) void {
-    var buf: [16]u8 = undefined;
-    const s = std.fmt.bufPrint(&buf, "{d}", .{seconds}) catch "1";
+fn setRetryAfter(allocator: std.mem.Allocator, res: *httpz.Response, seconds: i64) !void {
+    // Allocate the value in the request arena: `httpz.Response.header` stores the
+    // slice by reference without copying, so a stack buffer would dangle once this
+    // function returns and the header is serialized later
+    const s = try std.fmt.allocPrint(allocator, "{d}", .{seconds});
     res.header("Retry-After", s);
 }
 

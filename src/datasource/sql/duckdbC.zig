@@ -62,5 +62,5 @@ pub extern fn duckdb_bind_null(stmt: duckdb_prepared_statement, idx: idx_t) duck
 
 /// Allocate a null-terminated C string copy of `s` (caller frees with `allocator`).
 pub fn toCStr(allocator: std.mem.Allocator, s: []const u8) ![:0]const u8 {
-    return try allocator.dupeZ(u8, s);
+    return try allocator.dupeSentinel(u8, s, 0);
 }

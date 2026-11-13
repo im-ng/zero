@@ -122,7 +122,6 @@ pub fn execute(self: *const tracz, req: *httpz.Request, res: *httpz.Response, ex
 }
 
 // ===================== Async trace propagation =====================
-//
 // A pub/sub message crosses an async boundary, so the in-flight request span
 // does not automatically cover the consumer. We bridge it the W3C way: the
 // publisher injects the active span's `traceparent` as a message header, and the

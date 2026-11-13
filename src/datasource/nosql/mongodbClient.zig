@@ -359,7 +359,7 @@ pub const Connection = struct {
         std.mem.writeInt(u32, header[12..16], 2013, .little); // OP_MSG
         try writer.writeAll(&header);
 
-        var flag_bits: [4]u8 = .{0} ** 4; // flagBits = 0, no checksum
+        var flag_bits: [4]u8 = @splat(0); // flagBits = 0, no checksum
         try writer.writeAll(&flag_bits);
         var kind: [1]u8 = .{0}; // section kind 0 (body)
         try writer.writeAll(&kind);
@@ -856,7 +856,6 @@ fn buildSaslContinue(alloc: std.mem.Allocator, conversation_id: i32, client_fina
 
 // ===================== Tests =====================
 // These tests breaks the kcov coverage, investigate further
-//
 // test "mongodb bson<->json roundtrip and field lookup" {
 //     const a = std.testing.allocator;
 //     const bson = try jsonToBson(a, "{\"a\":1,\"big\":9223372036854775807,\"b\":\"hi\",\"flag\":true,\"arr\":[1,2,3],\"n\":null}");

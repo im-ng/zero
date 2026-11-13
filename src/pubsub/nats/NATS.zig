@@ -99,16 +99,19 @@ pub fn create(container: *root.container, config: *const natsConfig) !*NATS {
     };
 
     container.log.info(msg);
+    container.allocator.free(msg);
 
     return c;
 }
 
 pub fn destroy(self: *Self) void {
+    // Stop the consumer loop, join it, then free the client it was using. The old
+    // order freed `client` while the thread was still reading it (use-after-free,
     self.signal.store(false, .release);
-    self.client.deinit();
     if (self.subscriber.items.len > 0) {
         self.thread.join();
     }
+    self.client.deinit();
 }
 
 pub fn Publish(self: *Self, subject: []const u8, payload: []const u8) !void {
@@ -274,6 +277,7 @@ pub fn addSubscriber(self: *Self, topic: []const u8, hook: *const fn (*root.Cont
     };
 
     self.container.log.info(msg);
+    self.container.allocator.free(msg);
 }
 
 /// Type-erased VTable conforming to `pubsubInterface.Interface.VTable`.

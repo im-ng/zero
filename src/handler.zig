@@ -143,7 +143,7 @@ pub const Handler = struct {
         }
 
         var ctx = try Context.init(req.arena, self.container, req, res);
-        defer req.arena.destroy(&ctx);
+        defer ctx.cleanup();
 
         const start = utils.nowMonotonic();
 
@@ -153,9 +153,20 @@ pub const Handler = struct {
         // (A true Zig `@panic` is still unrecoverable by design — the mitigation
         // is to return errors from handlers rather than panic; see ZIG_LEARNINGS.)
         action(&ctx) catch |err| {
-            res.setStatus(.internal_server_error);
+            // Map the error to its HTTP status class instead of always 500, so 4xx
+            // client errors (bad/missing params, not-found, conflict, timeout) are
+            // reported correctly. The body stays generic so internal failure detail
+            // is never leaked to the client
+            const status = root.Error.statusForError(err);
+            res.setStatus(status);
             res.content_type = .JSON;
-            res.body = "{\"error\":\"internal server error\"}";
+            res.body = switch (status) {
+                .bad_request => "{\"error\":\"bad request\"}",
+                .not_found => "{\"error\":\"not found\"}",
+                .conflict => "{\"error\":\"conflict\"}",
+                .request_timeout => "{\"error\":\"request timeout\"}",
+                else => "{\"error\":\"internal server error\"}",
+            };
             const cid = req.headers.get("X-Correlation-ID");
             self.container.log.err(try std.fmt.allocPrint(
                 req.arena,
@@ -186,11 +197,13 @@ pub const Handler = struct {
     pub fn unauthorized(self: *Handler, req: *httpz.Request, res: *httpz.Response) !void {
         const start = utils.nowMonotonic();
         var ctx = try Context.init(req.arena, self.container, req, res);
-        defer req.arena.destroy(&ctx);
+        defer ctx.cleanup();
 
         try res.json(.{ .message = "unauthorizated request!" }, .{});
 
-        try self.metric(utils.elapsedSeconds(start), @tagName(req.method), res.status, req.url.path);
+        // Collapse the path label so a scanner hammering random URLs can't create
+        // unbounded Prometheus series
+        try self.metric(utils.elapsedSeconds(start), @tagName(req.method), res.status, "/_unauthorized");
 
         const access_log = try std.fmt.allocPrint(
             req.arena,
@@ -203,13 +216,15 @@ pub const Handler = struct {
     pub fn notFound(self: *Handler, req: *httpz.Request, res: *httpz.Response) !void {
         const start = utils.nowMonotonic();
         var ctx = try Context.init(req.arena, self.container, req, res);
-        defer req.arena.destroy(&ctx);
+        defer ctx.cleanup();
 
         res.setStatus(.not_found);
 
         try res.json(.{ .err = "route is not registered!" }, .{});
 
-        try self.metric(utils.elapsedSeconds(start), @tagName(req.method), res.status, req.url.path);
+        // Collapse the path label so a scanner hammering random URLs can't create
+        // unbounded Prometheus series
+        try self.metric(utils.elapsedSeconds(start), @tagName(req.method), res.status, "/_not_found");
 
         const access_log = try std.fmt.allocPrint(
             req.arena,
@@ -227,7 +242,7 @@ pub const Handler = struct {
             std.debug.print("context init failed: {}\n", .{init_err});
             return;
         };
-        defer req.arena.destroy(&ctx);
+        defer ctx.cleanup();
 
         // Report the error with a status that matches its class instead of
         // always 500 (audit #28). The body stays generic so internal failure

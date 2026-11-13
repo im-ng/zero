@@ -135,6 +135,11 @@ fn skipToken(src: []const u8, i: usize, o: *usize, out: []u8) usize {
         j += 1;
     }
     o.* = append(out, o.*, "***");
+    // Drop a single trailing space so a masked credential does not leave a
+    // dangling separator (e.g. "x-api-key: secret done" -> "x-api-key:***done").
+    if (j < src.len and src[j] == ' ') {
+        j += 1;
+    }
     return j;
 }
 
@@ -242,7 +247,7 @@ pub fn custom(
         }
     }
 
-    // Parallel OpenTelemetry log export (no-op when otel_experimental is off).
+    // Parallel OpenTelemetry log export (no-op when OTel is disabled / no endpoint).
     // Runs OUTSIDE the global logger mutex: the SDK clones the body into its own
     // arena, so these stack slices are safe after the lock is released, and we
     // avoid serializing every log line through the OTel enqueue. Default body is
@@ -443,7 +448,7 @@ test "redactInto masks credential tokens and secret key=value pairs" {
         redactInto("token=abc123&user=bob", &buf),
     );
     try std.testing.expectEqualStrings(
-        "x-api-key:*** done",
+        "x-api-key:***done",
         redactInto("x-api-key: secret-key done", &buf),
     );
 }

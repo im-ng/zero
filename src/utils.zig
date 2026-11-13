@@ -30,6 +30,15 @@ pub fn elapsedMs(start: std.Io.Timestamp) f32 {
     return @floatFromInt(@as(u64, @intCast(@divFloor(elapsedNanos(start), 1_000_000))));
 }
 
+/// Age of a monotonic timestamp in whole milliseconds. Clamps to 0 when the
+/// timestamp is in the future (or at right now), so freshness comparisons never
+/// see a negative age.
+pub fn ageMs(t: std.Io.Timestamp) u64 {
+    const nanos = std.Io.Timestamp.durationTo(t, nowMonotonic()).nanoseconds;
+    if (nanos <= 0) return 0;
+    return @intCast(@divFloor(nanos, 1_000_000));
+}
+
 /// Elapsed time in seconds as a float with nanosecond precision. The HTTP and
 /// service latency histograms are documented in seconds; `elapsedMs` truncates
 /// to integer milliseconds, which zeroes sub-ms requests (collapsing `_sum` to
@@ -38,25 +47,21 @@ pub fn elapsedSeconds(start: std.Io.Timestamp) f64 {
     return @as(f64, @floatFromInt(elapsedNanos(start))) / 1_000_000_000.0;
 }
 
+// Returns an exact-sized, caller-owned slice. Callers must `allocator.free` it
+// unless the allocator is an arena (freed at scope exit). The previous
+// implementation allocated a fixed 256-byte buffer and returned a subslice, so
+// the result could neither be freed (size mismatch → UB) nor exceed 256 bytes
+// `allocPrint` returns an exact slice with no ceiling.
 pub fn combine(allocator: std.mem.Allocator, comptime format: []const u8, value: anytype) ![]const u8 {
-    var buffer: []u8 = undefined;
-    buffer = try allocator.alloc(u8, 256);
-    buffer = try std.fmt.bufPrint(buffer, format, value);
-    return buffer;
+    return try std.fmt.allocPrint(allocator, format, value);
 }
 
 pub fn toString(allocator: std.mem.Allocator, comptime format: []const u8, value: []const u8) ![]const u8 {
-    var buffer: []u8 = undefined;
-    buffer = try allocator.alloc(u8, 256);
-    buffer = try std.fmt.bufPrint(buffer, format, .{value});
-    return buffer;
+    return try std.fmt.allocPrint(allocator, format, .{value});
 }
 
 pub fn toStringFromInt(allocator: std.mem.Allocator, comptime format: []const u8, value: i64) ![]const u8 {
-    var buffer: []u8 = undefined;
-    buffer = try allocator.alloc(u8, 256);
-    buffer = try std.fmt.bufPrint(buffer, format, .{value});
-    return buffer;
+    return try std.fmt.allocPrint(allocator, format, .{value});
 }
 
 var log_tz: ?root.zdt.Timezone = null;
@@ -137,24 +142,28 @@ pub fn toCString(allocator: std.mem.Allocator, value: []const u8) [*c]const u8 {
 test "combine produces correct output" {
     const allocator = std.heap.page_allocator;
     const result = try combine(allocator, "hello {s}", .{"world"});
+    defer allocator.free(result);
     try std.testing.expectEqualStrings("hello world", result[0..11]);
 }
 
 test "combine formats integer" {
     const allocator = std.heap.page_allocator;
     const result = try combine(allocator, "count: {d}", .{42});
+    defer allocator.free(result);
     try std.testing.expectEqualStrings("count: 42", result[0..9]);
 }
 
 test "toString wraps string in format" {
     const allocator = std.heap.page_allocator;
     const result = try toString(allocator, "item: {s}", "test");
+    defer allocator.free(result);
     try std.testing.expectEqualStrings("item: test", result[0..10]);
 }
 
 test "toStringFromInt formats integer" {
     const allocator = std.heap.page_allocator;
     const result = try toStringFromInt(allocator, "val: {d}", 99);
+    defer allocator.free(result);
     try std.testing.expectEqualStrings("val: 99", result[0..7]);
 }
 

@@ -2,7 +2,12 @@ const std = @import("std");
 
 // Update this version on every tagged release
 // TODO: Inject this through build step
-pub const FRAMEWORK_VERSION = "0.5.3";
+pub const FRAMEWORK_VERSION = "0.5.4";
+
+// Safe default ceiling on distinct label sets per Prometheus metric. A runaway
+// label cardinality (e.g. a scanner hitting random 404 URLs) would otherwise
+// allocate unbounded series 0 disables the cap via config.
+pub const DEFAULT_METRICS_CARDINALITY_LIMIT: usize = 4096;
 
 pub const APP_ENVIRONMENT = "APP_ENV";
 pub const APP_NAME = "APP_NAME";
@@ -11,7 +16,7 @@ pub const APP_VERSION = "APP_VERSION";
 pub const METRICZ_PORT: u16 = 2121;
 pub const HTTP_PORT: u16 = 8080;
 
-pub const WELL_KNOWN = "./well-known/";
+pub const WELL_KNOWN = "/.well-known/";
 pub const LIVE_PATH = "/.well-known/live";
 pub const HEALTH_PATH = "/.well-known/health";
 pub const STARTUP_PATH = "/.well-known/startup";
@@ -53,7 +58,7 @@ pub const DEFAULT_HTTP_MAX_BODY_SIZE_BYTES: usize = 8 * 1024 * 1024;
 pub const DEFAULT_HTTP_LARGE_BUFFER_COUNT: u16 = 8;
 pub const DEFAULT_HTTP_THREAD_POOL_COUNT: u16 = 32;
 pub const DEFAULT_REQUEST_TIMEOUT_MS: u32 = 30000;
-pub const DEFAULT_KEEPALIVE_TIMEOUT_MS: u32 = 60;
+pub const DEFAULT_KEEPALIVE_TIMEOUT_MS: u32 = 60_000;
 pub const DEFAULT_RATE_LIMIT_MAX: u64 = 100;
 pub const DEFAULT_RATE_LIMIT_WINDOW_MS: i64 = 60_000;
 pub const DEFAULT_INBOUND_MAX_CONCURRENT: u32 = 1024;
@@ -154,7 +159,7 @@ test "default runtime values" {
     try std.testing.expectEqual(@as(u16, 8), DEFAULT_HTTP_LARGE_BUFFER_COUNT);
     try std.testing.expectEqual(@as(u16, 32), DEFAULT_HTTP_THREAD_POOL_COUNT);
     try std.testing.expectEqual(@as(u32, 30000), DEFAULT_REQUEST_TIMEOUT_MS);
-    try std.testing.expectEqual(@as(u32, 60), DEFAULT_KEEPALIVE_TIMEOUT_MS);
+    try std.testing.expectEqual(@as(u32, 60_000), DEFAULT_KEEPALIVE_TIMEOUT_MS);
     try std.testing.expectEqual(@as(u64, 100), DEFAULT_RATE_LIMIT_MAX);
     try std.testing.expectEqual(@as(i64, 60_000), DEFAULT_RATE_LIMIT_WINDOW_MS);
     try std.testing.expectEqual(@as(u32, 1024), DEFAULT_INBOUND_MAX_CONCURRENT);

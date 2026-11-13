@@ -32,15 +32,18 @@
 - **Observable by default** — structured JSON logs, Prometheus metrics, distributed tracing and health endpoints from the first request.
 - **Fast and small** — tens of thousands of requests/sec at ~50 MiB RSS, no GC pauses, no JIT warm-up.
 
-> [!caution]
-> I am actively refining the core concepts, integrations, and overall specifications for the stable release. Please be cautious, and likely to introduce breaking changes as I do weekly release.
+> [!note]
+> Zero is pre-1.0 and releases often as the core API settles. For production today,
+> pin the `stable-*` branch or a tagged release; `0.5.5` is the target where the
+> public API is considered stable enough for production load.
 
-| Branch            | Zero Version         | Zig Support |
-| ----------------- | -------------------- | ----------- |
-| **main**          | 0.5.2 (experimental) | 0.16.0      |
-| **stable-0.15.2** | 0.0.3                | 0.15.2      |
+| Branch            | Zero Version | Zig Support | Use it for      |
+| ----------------- | ------------ | ----------- | --------------- |
+| **main**          | 0.5.4        | 0.17.0      | latest features |
+| **stable-0.16.0** | 0.5.3        | 0.16.0      | stable features |
+| **stable-0.15.2** | 0.0.3        | 0.15.2      | older toolchain |
 
-I am expecting, _0.5.5_ will be stable enough to serve any production load.
+See [`CHANGELOG.md`](./CHANGELOG.md) for what changed in each release.
 
 ---
 
@@ -291,9 +294,12 @@ Per-service logs, RSS samples and the exact thresholds are in the report.
 Prometheus metrics are exposed at `/metrics` and a health endpoint at `/.well-known/health` (liveness/status). Distributed tracing via TraceID is attached to every request.
 
 ```bash
-curl localhost:8080/metrics   # http_requests_total, app_sql_response, ...
-curl localhost:8080/.well-known/health
+curl 127.0.0.1:8080/metrics   # http_requests_total, app_sql_response, ...
+curl 127.0.0.1:8080/.well-known/health
 ```
+
+The endpoints listen on the loopback/`HTTP_PORT` (default `8080`); `Address.all`
+binds every interface, so `127.0.0.1` and the host's LAN address both work.
 
 See [Observability](https://zerofmk.in/observability)
 
@@ -430,12 +436,13 @@ ENTRYPOINT ["/app"]
 
 ## Zig Version Compatibility
 
-| Branch            | Version               |
-| ----------------- | --------------------- |
-| **main**          | 0.16.0 (experimental) |
-| **stable-0.15.2** | 0.15.2                |
+| Branch            | Version               | Remarks            |
+| ----------------- | --------------------- | ------------------ |
+| **main**          | 0.5.4+ (experimental) | Zig 0.17.0         |
+| **v0.5.3**        | Stable (experimental) | Zig 0.16.0         |
+| **stable-0.15.2** | 0.15.2                | Legacy/Handwritten |
 
-For stable work prefer the `stable-0.15.2` branch; `main` tracks the 0.16 experimental baseline (including the `std.Io` injection described above). See [Migrating to 0.16](https://zerofmk.in/migrating-0.16).
+For stable work prefer the `v0.5.3` tag; `main` tracks the 0.17 experimental baseline.
 
 ## Project Structure
 
@@ -458,9 +465,18 @@ build.zig             build wiring (test / integration / validation / bench)
 - **DuckDB** needs `libduckdb.so`/`duckdb.h` on the library path (see
   [DuckDB](https://zerofmk.in/duckdb)).
 
-- The `kafka` build option is commented out; rdkafka is always linked.
+- Zero links `librdkafka` (Kafka) and `libduckdb` (DuckDB) weakly, and both are enabled by default. Build a minimal binary without them: `zig build -Dkafka=false -Dduckdb=false`. Each example forwards the same flags, so `zig build -Dkafka=false -Dduckdb=false` works there too.
 
-- Auth modes: `Basic`, `APIKey`, `OAuth`.
+## Built with zero
+
+Shipped something on zero? Open a **Showcase** issue (template: `Showcase.md`) —
+we link accepted showcases here.
+
+- _Your project here._
+
+## Contributing
+
+See [`CONTRIBUTING.md`](./CONTRIBUTING.md).
 
 ## Attributions
 

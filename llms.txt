@@ -1,0 +1,44 @@
+# LLM context index for zero
+
+Zero is a batteries-included web framework for the Zig language. It wires REST,
+SQL, NoSQL, cache, pub/sub, auth, GraphQL, Protobuf, search, metrics and tracing
+into one static binary, configured mostly through `.env`.
+
+- Documentation: https://zerofmk.in
+- Getting started: https://zerofmk.in/started
+- Examples: https://zerofmk.in/examples
+- Feature parity: https://zerofmk.in/parity
+- Source: https://github.com/im-ng/zero
+
+## Docs
+
+- [Why Zero](https://zerofmk.in) — Go ergonomics without its runtime, Node speed without its footprint
+- [Configuration](https://zerofmk.in/configuration) — `.env` with per-environment overrides
+- [SQLite](https://zerofmk.in/sqlite) — embedded SQL backend
+- [DuckDB](https://zerofmk.in/duckdb) — in-process OLAP
+- [PostgreSQL](https://zerofmk.in) — primary SQL backend
+- [Pub/Sub](https://zerofmk.in/pubsub) — MQTT, NATS, Kafka, Redis, SQS, GCP
+- [Authentication](https://zerofmk.in/authentication) — Basic, API Key, OAuth 2.0
+- [GraphQL](https://zerofmk.in/graphql) — schema-less resolvers over HTTP
+- [Protobuf](https://zerofmk.in/protobuf) — proto3 bind/decode/encode
+- [Cron](https://zerofmk.in/cronz) — second-level cron jobs
+- [WebSocket](https://zerofmk.in/websocket) — inbound + outbound clients
+- [Observability](https://zerofmk.in/observability) — Prometheus, tracing, structured logs
+- [Rate Limiter](https://zerofmk.in/rate-limiter) — memory or Redis-backed
+- [Resilience](https://zerofmk.in/resilience) — circuit breakers, timeouts, bulkheads
+- [Migrations](https://zerofmk.in/migrations) — DB migrations + seed on startup
+- [Kubernetes](https://zerofmk.in/kubernetes) — image build + manifests
+- [Benchmark](https://zerofmk.in/benchmark) — reproducible throughput/latency/RSS runs
+
+## Repo layout
+
+- `src/` — framework source (datasources, pubsub, filestore, mw, service, cronz, migration)
+- `examples/` — 30 runnable example apps (zero-basic, zero-sql, zero-auth, zero-kafka, ...)
+- `AGENTS.md` — contributor + AI-agent guide (style, toolchain, verify gates)
+- `.opencode/skills/zero-feature-runbook` — change runbook
+
+## Install
+
+```bash
+zig fetch --save https://github.com/im-ng/zero/archive/refs/tags/v0.5.4.tar.gz
+```

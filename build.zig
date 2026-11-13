@@ -5,12 +5,42 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
+    // Feature flags: keep a subsystem out of the build when its native library
+    // (librdkafka / libduckdb) is unavailable. Both default to on so the build
+    // is unchanged unless explicitly disabled (T22).
+    const kafka_enabled = b.option(bool, "kafka", "Build with Apache Kafka (librdkafka) support") orelse true;
+    const duckdb_enabled = b.option(bool, "duckdb", "Build with DuckDB (in-process OLAP SQL) support") orelse true;
+
+    // macOS Homebrew installs rdkafka into a versioned Cellar directory. Resolve
+    // it at configure time instead of hardcoding a version; on non-macOS (or when
+    // the Cellar is absent) we rely on pkg-config via linkSystemLibrary below.
+    const rdkafka_prefix: ?[]const u8 = blk: {
+        if (!kafka_enabled or builtin.os.tag != .macos) break :blk null;
+        var dir = std.Io.Dir.openDirAbsolute(b.graph.io, "/usr/local/Cellar/librdkafka", .{ .iterate = true }) catch break :blk null;
+        defer dir.close(b.graph.io);
+        var it = std.Io.Dir.iterate(dir);
+        while (it.next(b.graph.io) catch break :blk null) |entry| {
+            if (entry.kind == .directory) {
+                break :blk std.fmt.allocPrint(b.allocator, "/usr/local/Cellar/librdkafka/{s}", .{entry.name}) catch break :blk null;
+            }
+        }
+        break :blk null;
+    };
+    const rdkafka_include: ?[]const u8 = if (rdkafka_prefix) |p| std.fmt.allocPrint(b.allocator, "{s}/include", .{p}) catch null else null;
+    const rdkafka_lib: ?[]const u8 = if (rdkafka_prefix) |p| std.fmt.allocPrint(b.allocator, "{s}/lib", .{p}) catch null else null;
+
+    const build_options = b.addOptions();
+    build_options.addOption(bool, "kafka", kafka_enabled);
+    build_options.addOption(bool, "duckdb", duckdb_enabled);
+    const build_options_mod = build_options.createModule();
+
     const module = b.addModule("zero", .{
         .root_source_file = b.path("src/zero.zig"),
         .target = target,
         .optimize = optimize,
         .link_libc = true,
     });
+    module.addImport("build_options", build_options_mod);
 
     // OpenTelemetry SDK (alpha). The `sdk` module links libc itself; we also set
     // link_libc on the zero module so every consumer artifact links libc too.
@@ -30,8 +60,8 @@ pub fn build(b: *std.Build) void {
     const pgz = if (builtin.os.tag == .macos)
         b.dependency("pg", .{
             .openssl = true,
-            .openssl_include_path = std.Build.LazyPath{ .cwd_relative = "/usr/local/opt/openssl@3/include" },
-            .openssl_lib_path = std.Build.LazyPath{ .cwd_relative = "/usr/local/opt/openssl@3/lib" },
+            .openssl_include_path = std.Build.LazyPath{ .cwd_relative = "/opt/homebrew/Cellar/openssl@4/4.1.0/include" },
+            .openssl_lib_path = std.Build.LazyPath{ .cwd_relative = "/opt/homebrew/Cellar/openssl@4/4.1.0/lib" },
             .openssl_lib_name = "ssl",
         })
     else
@@ -60,7 +90,7 @@ pub fn build(b: *std.Build) void {
     const mqttz = b.dependency("mqttz", .{});
     module.addImport("mqttz", mqttz.module("mqttz"));
 
-    const jwt = b.dependency("jwt", .{});
+    const jwt = b.dependency("zig_jwt", .{});
     module.addImport("jwt", jwt.module("zig-jwt"));
 
     const sqlite = b.dependency("sqlite", .{});
@@ -72,15 +102,17 @@ pub fn build(b: *std.Build) void {
     const graphql = b.dependency("graphql", .{});
     module.addImport("graphql", graphql.module("graphql"));
 
-    if (builtin.os.tag == .macos) {
-        module.addIncludePath(.{ .cwd_relative = "/usr/local/Cellar/librdkafka/2.15.1/include" });
-        module.addLibraryPath(.{ .cwd_relative = "/usr/local/Cellar/librdkafka/2.15.1/lib" });
+    if (kafka_enabled) {
+        if (rdkafka_include) |p| module.addIncludePath(.{ .cwd_relative = p });
+        if (rdkafka_lib) |p| module.addLibraryPath(.{ .cwd_relative = p });
+        module.linkSystemLibrary("rdkafka", .{ .weak = true });
     }
-    module.linkSystemLibrary("rdkafka", .{ .weak = true });
 
     module.addLibraryPath(.{ .cwd_relative = "/usr/local/lib" });
     module.addRPath(.{ .cwd_relative = "/usr/local/lib" });
-    module.linkSystemLibrary("duckdb", .{ .weak = true });
+    if (duckdb_enabled) {
+        module.linkSystemLibrary("duckdb", .{ .weak = true });
+    }
 
     // System OpenSSL-backed TLS for the MongoDB/Cassandra datasources.
     const openssl_translator = @import("translate_c").Translator;
@@ -100,7 +132,24 @@ pub fn build(b: *std.Build) void {
     module.linkSystemLibrary("ssl", .{});
     module.linkSystemLibrary("crypto", .{});
     if (builtin.os.tag == .macos) {
-        module.addLibraryPath(.{ .cwd_relative = "/usr/local/opt/openssl@3/lib" });
+        module.addLibraryPath(.{ .cwd_relative = "/opt/homebrew/Cellar/openssl@4/4.1.0/lib" });
+    }
+
+    // 0.17 dropped `@cImport`, so the librdkafka bindings are generated with
+    // the vendored translate-c Translator just like the OpenSSL ones above.
+    var rdkafka_mod: ?*std.Build.Module = null;
+    if (kafka_enabled) {
+        rdkafka_mod = blk: {
+            var t = openssl_translator.init(openssl_dep, .{
+                .name = "rdkafka",
+                .c_source_file = b.path("src/cimport/rdkafka.h"),
+                .target = target,
+                .optimize = optimize,
+            });
+            if (rdkafka_include) |p| t.addIncludePath(.{ .cwd_relative = p });
+            break :blk t.mod;
+        };
+        module.addImport("cimport", rdkafka_mod.?);
     }
 
     const test_module = b.createModule(.{
@@ -125,22 +174,26 @@ pub fn build(b: *std.Build) void {
     test_module.addImport("opentelemetry-sdk", opentelemetry.module("sdk"));
     test_module.addImport("zf", zf.module("zf"));
     test_module.addImport("zero", module);
+    test_module.addImport("build_options", build_options_mod);
 
-    if (builtin.os.tag == .macos) {
-        test_module.addIncludePath(.{ .cwd_relative = "/usr/local/Cellar/librdkafka/2.15.1/include" });
-        test_module.addLibraryPath(.{ .cwd_relative = "/usr/local/Cellar/librdkafka/2.15.1/lib" });
+    if (kafka_enabled) {
+        if (rdkafka_include) |p| test_module.addIncludePath(.{ .cwd_relative = p });
+        if (rdkafka_lib) |p| test_module.addLibraryPath(.{ .cwd_relative = p });
+        test_module.linkSystemLibrary("rdkafka", .{ .weak = true });
+        test_module.addImport("cimport", rdkafka_mod.?);
     }
-    test_module.linkSystemLibrary("rdkafka", .{ .weak = true });
 
     test_module.addLibraryPath(.{ .cwd_relative = "/usr/local/lib" });
     test_module.addRPath(.{ .cwd_relative = "/usr/local/lib" });
-    test_module.linkSystemLibrary("duckdb", .{ .weak = true });
+    if (duckdb_enabled) {
+        test_module.linkSystemLibrary("duckdb", .{ .weak = true });
+    }
 
     test_module.addImport("openssl", openssl_mod);
     test_module.linkSystemLibrary("ssl", .{});
     test_module.linkSystemLibrary("crypto", .{});
     if (builtin.os.tag == .macos) {
-        test_module.addLibraryPath(.{ .cwd_relative = "/usr/local/opt/openssl@3/lib" });
+        test_module.addLibraryPath(.{ .cwd_relative = "/opt/homebrew/Cellar/openssl@4/4.1.0/lib" });
     }
 
     const unit_tests = b.addTest(.{
@@ -177,22 +230,26 @@ pub fn build(b: *std.Build) void {
     integration_module.addImport("opentelemetry-sdk", opentelemetry.module("sdk"));
     integration_module.addImport("zf", zf.module("zf"));
     integration_module.addImport("zero", module);
+    integration_module.addImport("build_options", build_options_mod);
 
-    if (builtin.os.tag == .macos) {
-        integration_module.addIncludePath(.{ .cwd_relative = "/usr/local/Cellar/librdkafka/2.15.1/include" });
-        integration_module.addLibraryPath(.{ .cwd_relative = "/usr/local/Cellar/librdkafka/2.15.1/lib" });
+    if (kafka_enabled) {
+        if (rdkafka_include) |p| integration_module.addIncludePath(.{ .cwd_relative = p });
+        if (rdkafka_lib) |p| integration_module.addLibraryPath(.{ .cwd_relative = p });
+        integration_module.linkSystemLibrary("rdkafka", .{ .weak = true });
+        integration_module.addImport("cimport", rdkafka_mod.?);
     }
-    integration_module.linkSystemLibrary("rdkafka", .{ .weak = true });
 
     integration_module.addLibraryPath(.{ .cwd_relative = "/usr/local/lib" });
     integration_module.addRPath(.{ .cwd_relative = "/usr/local/lib" });
-    integration_module.linkSystemLibrary("duckdb", .{ .weak = true });
+    if (duckdb_enabled) {
+        integration_module.linkSystemLibrary("duckdb", .{ .weak = true });
+    }
 
     integration_module.addImport("openssl", openssl_mod);
     integration_module.linkSystemLibrary("ssl", .{});
     integration_module.linkSystemLibrary("crypto", .{});
     if (builtin.os.tag == .macos) {
-        integration_module.addLibraryPath(.{ .cwd_relative = "/usr/local/opt/openssl@3/lib" });
+        integration_module.addLibraryPath(.{ .cwd_relative = "/opt/homebrew/Cellar/openssl@4/4.1.0/lib" });
     }
 
     const integration_tests = b.addTest(.{
@@ -228,18 +285,19 @@ pub fn build(b: *std.Build) void {
     validation_module.addImport("opentelemetry-sdk", opentelemetry.module("sdk"));
     validation_module.addImport("zf", zf.module("zf"));
     validation_module.addImport("zero", module);
+    validation_module.addImport("build_options", build_options_mod);
 
-    if (builtin.os.tag == .macos) {
-        validation_module.addIncludePath(.{ .cwd_relative = "/usr/local/Cellar/librdkafka/2.15.1/include" });
-        validation_module.addIncludePath(.{ .cwd_relative = "/usr/local/Cellar/librdkafka/2.15.1/lib" });
+    if (kafka_enabled) {
+        if (rdkafka_include) |p| validation_module.addIncludePath(.{ .cwd_relative = p });
+        if (rdkafka_lib) |p| validation_module.addLibraryPath(.{ .cwd_relative = p });
+        validation_module.linkSystemLibrary("rdkafka", .{ .weak = true });
     }
-    validation_module.linkSystemLibrary("rdkafka", .{
-        .weak = true,
-    });
 
     validation_module.addLibraryPath(.{ .cwd_relative = "/usr/local/lib" });
     validation_module.addRPath(.{ .cwd_relative = "/usr/local/lib" });
-    validation_module.linkSystemLibrary("duckdb", .{ .weak = true });
+    if (duckdb_enabled) {
+        validation_module.linkSystemLibrary("duckdb", .{ .weak = true });
+    }
 
     const validation_tests = b.addTest(.{
         .root_module = validation_module,
@@ -251,7 +309,7 @@ pub fn build(b: *std.Build) void {
     // HTTP load/benchmark harness: starts the real zero App (framework-only,
     // no DB/Redis) and drives it with the in-repo zul.http.Client across a
     // concurrency ramp, reporting req/s + latency percentiles. Run the built
-    // binary directly (./zig-out/bin/bench) — not via `zig build run` — to
+    // binary directly (./zig-out/bin/bench) not via `zig build run` to
     // avoid the --listen=- stdout protocol.
     const bench_module = b.createModule(.{
         .root_source_file = b.path("src/bench/main.zig"),
@@ -274,18 +332,20 @@ pub fn build(b: *std.Build) void {
     bench_module.addImport("opentelemetry-sdk", opentelemetry.module("sdk"));
     bench_module.addImport("zf", zf.module("zf"));
     bench_module.addImport("zero", module);
+    bench_module.addImport("build_options", build_options_mod);
 
-    if (builtin.os.tag == .macos) {
-        bench_module.addIncludePath(.{ .cwd_relative = "/usr/local/Cellar/librdkafka/2.15.1/include" });
-        bench_module.addLibraryPath(.{ .cwd_relative = "/usr/local/Cellar/librdkafka/2.15.1/lib" });
+    if (kafka_enabled) {
+        if (rdkafka_include) |p| bench_module.addIncludePath(.{ .cwd_relative = p });
+        if (rdkafka_lib) |p| bench_module.addLibraryPath(.{ .cwd_relative = p });
+        bench_module.linkSystemLibrary("rdkafka", .{ .weak = true });
+        bench_module.addImport("cimport", rdkafka_mod.?);
     }
-    bench_module.linkSystemLibrary("rdkafka", .{
-        .weak = true,
-    });
 
     bench_module.addLibraryPath(.{ .cwd_relative = "/usr/local/lib" });
     bench_module.addRPath(.{ .cwd_relative = "/usr/local/lib" });
-    bench_module.linkSystemLibrary("duckdb", .{ .weak = true });
+    if (duckdb_enabled) {
+        bench_module.linkSystemLibrary("duckdb", .{ .weak = true });
+    }
 
     const bench_exe = b.addExecutable(.{
         .name = "bench",
@@ -339,5 +399,5 @@ pub fn build(b: *std.Build) void {
             b.path("."),
         },
     });
-    gen_proto.dependOn(&protoc_step.step);
+    gen_proto.dependOn(protoc_step.step);
 }

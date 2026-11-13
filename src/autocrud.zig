@@ -3,14 +3,6 @@ const root = @import("zero.zig");
 
 const App = root.App;
 const Context = root.Context;
-const SQL = root.SQL;
-const SQLite = root.SQLite;
-const DuckDB = root.DuckDB;
-const ClickHouse = root.ClickHouse;
-const DuckGres = root.DuckGres;
-const MySQL = root.MySQL;
-const Datasource = root.Datasource;
-const MockBackend = root.datasourceInterface.MockBackend;
 
 /// Comptime identifier quoting for trusted schema names used inside the
 /// generated CRUD queries. `dq` wraps in double-quotes (Postgres/SQLite/DuckDB
@@ -34,30 +26,30 @@ pub const AutoCrudOptions = struct {
 };
 
 fn tupleTypes(comptime T: type, comptime skip_id: ?usize) []const type {
-    const fields = @typeInfo(T).@"struct".fields;
-    comptime var arr: [fields.len]type = undefined;
+    const fields = .{ .names = @typeInfo(T).@"struct".field_names, .types = @typeInfo(T).@"struct".field_types, .attrs = @typeInfo(T).@"struct".field_attrs };
+    comptime var arr: [fields.names.len]type = undefined;
     comptime var k: usize = 0;
-    inline for (fields, 0..) |f, i| {
+    inline for (fields.names, fields.types, fields.attrs, 0..) |_, f_type, _, i| {
         if (skip_id) |s| if (i == s) continue;
-        arr[k] = f.type;
+        arr[k] = f_type;
         k += 1;
     }
     if (skip_id) |s| {
-        arr[k] = fields[s].type;
+        arr[k] = fields.types[s];
     }
     return &arr;
 }
 
-fn toTuple(comptime T: type, obj: T, comptime skip_id: ?usize) std.meta.Tuple(tupleTypes(T, skip_id)) {
-    var r: std.meta.Tuple(tupleTypes(T, skip_id)) = undefined;
+fn toTuple(comptime T: type, obj: T, comptime skip_id: ?usize) @Tuple(tupleTypes(T, skip_id)) {
+    var r: @Tuple(tupleTypes(T, skip_id)) = undefined;
     comptime var dst: usize = 0;
-    inline for (@typeInfo(T).@"struct".fields, 0..) |f, i| {
+    inline for (@typeInfo(T).@"struct".field_names, @typeInfo(T).@"struct".field_types, @typeInfo(T).@"struct".field_attrs, 0..) |f_name, _, _, i| {
         if (skip_id) |s| if (i == s) continue;
-        r[dst] = @field(obj, f.name);
+        r[dst] = @field(obj, f_name);
         dst += 1;
     }
     if (skip_id) |s| {
-        r[dst] = @field(obj, @typeInfo(T).@"struct".fields[s].name);
+        r[dst] = @field(obj, @typeInfo(T).@"struct".field_names[s]);
     }
     return r;
 }
@@ -83,15 +75,15 @@ const Stmts = struct {
 };
 
 fn buildStmts(comptime T: type, comptime table: []const u8, comptime id_field: []const u8, id_idx: usize) Stmts {
-    const fields = @typeInfo(T).@"struct".fields;
-    const n = fields.len;
+    const fields = .{ .names = @typeInfo(T).@"struct".field_names, .types = @typeInfo(T).@"struct".field_types, .attrs = @typeInfo(T).@"struct".field_attrs };
+    const n = fields.names.len;
 
     comptime var c: []const u8 = "";
-    inline for (fields, 0..) |f, i| {
+    inline for (fields.names, fields.types, fields.attrs, 0..) |f_name, _, _, i| {
         if (i > 0) {
             c = c ++ ",";
         }
-        c = c ++ f.name;
+        c = c ++ f_name;
     }
 
     comptime var pgph: []const u8 = "";
@@ -113,15 +105,15 @@ fn buildStmts(comptime T: type, comptime table: []const u8, comptime id_field: [
     comptime var set_pg: []const u8 = "";
     comptime var set_q: []const u8 = "";
     var p: usize = 0;
-    inline for (fields, 0..) |f, i| {
+    inline for (fields.names, fields.types, fields.attrs, 0..) |f_name, _, _, i| {
         if (i == id_idx) continue;
         p += 1;
         if (p > 1) {
             set_pg = set_pg ++ ",";
             set_q = set_q ++ ",";
         }
-        set_pg = set_pg ++ f.name ++ std.fmt.comptimePrint("=${d}", .{p});
-        set_q = set_q ++ f.name ++ "=?";
+        set_pg = set_pg ++ f_name ++ std.fmt.comptimePrint("=${d}", .{p});
+        set_q = set_q ++ f_name ++ "=?";
     }
 
     const non_id = n - 1;
@@ -138,70 +130,25 @@ fn buildStmts(comptime T: type, comptime table: []const u8, comptime id_field: [
     };
 }
 
-fn backendPg(ctx: *Context) *SQL {
-    return @as(*SQL, @ptrCast(@alignCast(ctx.SQL.ptr)));
-}
-
-fn backendSqlite(ctx: *Context) *SQLite {
-    return @as(*SQLite, @ptrCast(@alignCast(ctx.SQL.ptr)));
-}
-
-fn backendDuckDB(ctx: *Context) *DuckDB {
-    return @as(*DuckDB, @ptrCast(@alignCast(ctx.SQL.ptr)));
-}
-
-fn backendClickHouse(ctx: *Context) *ClickHouse {
-    return @as(*ClickHouse, @ptrCast(@alignCast(ctx.SQL.ptr)));
-}
-
-fn backendDuckGres(ctx: *Context) *DuckGres {
-    return @as(*DuckGres, @ptrCast(@alignCast(ctx.SQL.ptr)));
-}
-
-fn backendMysql(ctx: *Context) *MySQL {
-    return @as(*MySQL, @ptrCast(@alignCast(ctx.SQL.ptr)));
+// Postgres/DuckGres use `$N` placeholders; every other dialect uses `?`.
+// The `ctx.SQL` interface routes to the right backend and applies the circuit
+// breaker + datasource metrics, which the old 7-way dialect switch bypassed
+fn useDollarPlaceholders(ctx: *Context) bool {
+    return ctx.SQL.dialect == .postgres or ctx.SQL.dialect == .duckgres;
 }
 
 fn listHandler(comptime T: type, comptime st: Stmts) *const fn (*Context) anyerror!void {
     const impl = struct {
         fn call(ctx: *Context) anyerror!void {
-            switch (ctx.SQL.dialect) {
-                .postgres => {
-                    const rows = try backendPg(ctx).queryRows(ctx, T, st.list, .{});
-                    try ctx.json(rows);
-                },
-                .duckgres => {
-                    const rows = try backendDuckGres(ctx).queryRows(ctx, T, st.list, .{});
-                    try ctx.json(rows);
-                },
-                .sqlite => {
-                    const rows = try backendSqlite(ctx).queryRows(ctx, T, st.list, .{});
-                    try ctx.json(rows);
-                },
-                .duckdb => {
-                    const rows = try backendDuckDB(ctx).queryRows(ctx, T, st.list, .{});
-                    try ctx.json(rows);
-                },
-                .clickhouse => {
-                    const rows = try backendClickHouse(ctx).queryRows(ctx, T, st.list, .{});
-                    try ctx.json(rows);
-                },
-                .mysql => {
-                    const rows = try backendMysql(ctx).queryRows(ctx, T, st.list, .{});
-                    try ctx.json(rows);
-                },
-                .mock => {
-                    const rows = try @as(*MockBackend, @ptrCast(@alignCast(ctx.SQL.ptr))).queryRows(ctx, T, st.list, .{});
-                    try ctx.json(rows);
-                },
-            }
+            const rows = try ctx.SQL.queryRows(ctx, T, st.list, .{});
+            try ctx.json(rows);
         }
     };
     return &impl.call;
 }
 
 fn getHandler(comptime T: type, comptime st: Stmts, comptime id_idx: usize) *const fn (*Context) anyerror!void {
-    const IdType = @typeInfo(T).@"struct".fields[id_idx].type;
+    const IdType = @typeInfo(T).@"struct".field_types[id_idx];
     const impl = struct {
         fn call(ctx: *Context) anyerror!void {
             const raw = ctx.param("id");
@@ -210,15 +157,8 @@ fn getHandler(comptime T: type, comptime st: Stmts, comptime id_idx: usize) *con
                 try ctx.json(.{ .err = "invalid id" });
                 return;
             };
-            const row = switch (ctx.SQL.dialect) {
-                .postgres => try backendPg(ctx).queryRow(ctx, T, st.get_pg, .{idv}),
-                .duckgres => try backendDuckGres(ctx).queryRow(ctx, T, st.get_pg, .{idv}),
-                .sqlite => try backendSqlite(ctx).queryRow(ctx, T, st.get_q, .{idv}),
-                .duckdb => try backendDuckDB(ctx).queryRow(ctx, T, st.get_q, .{idv}),
-                .clickhouse => try backendClickHouse(ctx).queryRow(ctx, T, st.get_q, .{idv}),
-                .mysql => try backendMysql(ctx).queryRow(ctx, T, st.get_q, .{idv}),
-                .mock => try @as(*MockBackend, @ptrCast(@alignCast(ctx.SQL.ptr))).queryRow(ctx, T, st.get_q, .{idv}),
-            };
+            const stmt = if (useDollarPlaceholders(ctx)) st.get_pg else st.get_q;
+            const row = try ctx.SQL.queryRow(ctx, T, stmt, .{idv});
             if (row) |r| {
                 try ctx.json(r);
             } else {
@@ -244,15 +184,8 @@ fn createHandler(comptime T: type, comptime st: Stmts) *const fn (*Context) anye
                 return;
             };
             const args = toTuple(T, o, null);
-            switch (ctx.SQL.dialect) {
-                .postgres => _ = try backendPg(ctx).execWithContext(ctx, st.insert_pg, args),
-                .duckgres => _ = try backendDuckGres(ctx).execWithContext(ctx, st.insert_pg, args),
-                .sqlite => _ = try backendSqlite(ctx).execWithContext(ctx, st.insert_q, args),
-                .duckdb => _ = try backendDuckDB(ctx).execWithContext(ctx, st.insert_q, args),
-                .clickhouse => _ = try backendClickHouse(ctx).execWithContext(ctx, st.insert_q, args),
-                .mysql => _ = try backendMysql(ctx).execWithContext(ctx, st.insert_q, args),
-                .mock => _ = try @as(*MockBackend, @ptrCast(@alignCast(ctx.SQL.ptr))).execWithContext(ctx, st.insert_q, args),
-            }
+            const stmt = if (useDollarPlaceholders(ctx)) st.insert_pg else st.insert_q;
+            _ = try ctx.SQL.exec(ctx, stmt, args);
             try ctx.json(o);
             ctx.response.setStatus(.created);
         }
@@ -261,7 +194,7 @@ fn createHandler(comptime T: type, comptime st: Stmts) *const fn (*Context) anye
 }
 
 fn updateHandler(comptime T: type, comptime st: Stmts, comptime id_idx: usize) *const fn (*Context) anyerror!void {
-    const IdType = @typeInfo(T).@"struct".fields[id_idx].type;
+    const IdType = @typeInfo(T).@"struct".field_types[id_idx];
     const impl = struct {
         fn call(ctx: *Context) anyerror!void {
             const raw = ctx.param("id");
@@ -281,29 +214,15 @@ fn updateHandler(comptime T: type, comptime st: Stmts, comptime id_idx: usize) *
                 return;
             };
             const args = toTuple(T, o, id_idx);
-            const updated = switch (ctx.SQL.dialect) {
-                .postgres => (try backendPg(ctx).execWithContext(ctx, st.update_pg, args)) > 0,
-                .duckgres => (try backendDuckGres(ctx).execWithContext(ctx, st.update_pg, args)) > 0,
-                .sqlite => (try backendSqlite(ctx).execWithContext(ctx, st.update_q, args)) > 0,
-                .duckdb => (try backendDuckDB(ctx).execWithContext(ctx, st.update_q, args)) > 0,
-                .clickhouse => (try backendClickHouse(ctx).execWithContext(ctx, st.update_q, args)) > 0,
-                .mysql => (try backendMysql(ctx).execWithContext(ctx, st.update_q, args)) > 0,
-                .mock => (try @as(*MockBackend, @ptrCast(@alignCast(ctx.SQL.ptr))).execWithContext(ctx, st.update_q, args)) > 0,
-            };
+            const stmt = if (useDollarPlaceholders(ctx)) st.update_pg else st.update_q;
+            const updated = (try ctx.SQL.exec(ctx, stmt, args)) > 0;
             if (!updated) {
                 ctx.response.setStatus(.not_found);
                 try ctx.json(.{ .err = "not found" });
                 return;
             }
-            const row = switch (ctx.SQL.dialect) {
-                .postgres => try backendPg(ctx).queryRow(ctx, T, st.get_pg, .{idv}),
-                .duckgres => try backendDuckGres(ctx).queryRow(ctx, T, st.get_pg, .{idv}),
-                .sqlite => try backendSqlite(ctx).queryRow(ctx, T, st.get_q, .{idv}),
-                .duckdb => try backendDuckDB(ctx).queryRow(ctx, T, st.get_q, .{idv}),
-                .clickhouse => try backendClickHouse(ctx).queryRow(ctx, T, st.get_q, .{idv}),
-                .mysql => try backendMysql(ctx).queryRow(ctx, T, st.get_q, .{idv}),
-                .mock => try @as(*MockBackend, @ptrCast(@alignCast(ctx.SQL.ptr))).queryRow(ctx, T, st.get_q, .{idv}),
-            };
+            const get_stmt = if (useDollarPlaceholders(ctx)) st.get_pg else st.get_q;
+            const row = try ctx.SQL.queryRow(ctx, T, get_stmt, .{idv});
             if (row) |r| {
                 try ctx.json(r);
             } else {
@@ -316,7 +235,7 @@ fn updateHandler(comptime T: type, comptime st: Stmts, comptime id_idx: usize) *
 }
 
 fn deleteHandler(comptime T: type, comptime st: Stmts, comptime id_idx: usize) *const fn (*Context) anyerror!void {
-    const IdType = @typeInfo(T).@"struct".fields[id_idx].type;
+    const IdType = @typeInfo(T).@"struct".field_types[id_idx];
     const impl = struct {
         fn call(ctx: *Context) anyerror!void {
             const raw = ctx.param("id");
@@ -325,36 +244,9 @@ fn deleteHandler(comptime T: type, comptime st: Stmts, comptime id_idx: usize) *
                 try ctx.json(.{ .err = "invalid id" });
                 return;
             };
-            const affected = switch (ctx.SQL.dialect) {
-                .postgres => blk: {
-                    _ = try backendPg(ctx).execWithContext(ctx, st.delete_pg, .{idv});
-                    break :blk backendPg(ctx).rowsAffected();
-                },
-                .duckgres => blk: {
-                    _ = try backendDuckGres(ctx).execWithContext(ctx, st.delete_pg, .{idv});
-                    break :blk backendDuckGres(ctx).rowsAffected();
-                },
-                .sqlite => blk: {
-                    _ = try backendSqlite(ctx).execWithContext(ctx, st.delete_q, .{idv});
-                    break :blk backendSqlite(ctx).rowsAffected();
-                },
-                .duckdb => blk: {
-                    _ = try backendDuckDB(ctx).execWithContext(ctx, st.delete_q, .{idv});
-                    break :blk backendDuckDB(ctx).rowsAffected();
-                },
-                .clickhouse => blk: {
-                    _ = try backendClickHouse(ctx).execWithContext(ctx, st.delete_q, .{idv});
-                    break :blk backendClickHouse(ctx).rowsAffected();
-                },
-                .mysql => blk: {
-                    _ = try backendMysql(ctx).execWithContext(ctx, st.delete_q, .{idv});
-                    break :blk backendMysql(ctx).rowsAffected();
-                },
-                .mock => blk: {
-                    _ = try @as(*MockBackend, @ptrCast(@alignCast(ctx.SQL.ptr))).execWithContext(ctx, st.delete_q, .{idv});
-                    break :blk @as(*MockBackend, @ptrCast(@alignCast(ctx.SQL.ptr))).rowsAffected();
-                },
-            };
+            const stmt = if (useDollarPlaceholders(ctx)) st.delete_pg else st.delete_q;
+            _ = try ctx.SQL.exec(ctx, stmt, .{idv});
+            const affected = ctx.SQL.rowsAffected();
             if (affected == 0) {
                 ctx.response.setStatus(.not_found);
                 try ctx.json(.{ .err = "not found" });
@@ -373,10 +265,10 @@ pub fn addRestHandlers(self: *App, comptime T: type, comptime opts: AutoCrudOpti
     const table = if (opts.table.len > 0) opts.table else opts.resource;
     const id_field = opts.id_field;
 
-    const fields = @typeInfo(T).@"struct".fields;
+    const fields = .{ .names = @typeInfo(T).@"struct".field_names, .types = @typeInfo(T).@"struct".field_types, .attrs = @typeInfo(T).@"struct".field_attrs };
     comptime var id_idx: ?usize = null;
-    inline for (fields, 0..) |f, i| {
-        if (comptime std.mem.eql(u8, f.name, id_field)) id_idx = i;
+    inline for (fields.names, fields.types, fields.attrs, 0..) |f_name, _, _, i| {
+        if (comptime std.mem.eql(u8, f_name, id_field)) id_idx = i;
     }
     if (id_idx == null) {
         @compileError("AutoCrud: struct " ++ @typeName(T) ++ " has no field '" ++ id_field ++ "'");
@@ -394,6 +286,35 @@ pub fn addRestHandlers(self: *App, comptime T: type, comptime opts: AutoCrudOpti
 }
 
 const Sample = struct { id: i64, name: []const u8, email: []const u8 };
+
+test "AutoCrud listHandler routes through ctx.SQL interface" {
+    // Before the fix the CRUD handlers switched over every dialect and called the
+    // concrete backend directly, bypassing `ctx.SQL`'s circuit breaker + metrics.
+    // Now `listHandler` goes through `ctx.SQL.queryRows`, so the type-erased
+    // interface (and its breaker) is exercised end-to-end.
+    const t = root.httpz.testing;
+    var testing = t.init(.{});
+    defer testing.deinit();
+
+    var mb: root.datasourceInterface.MockBackend = .{};
+    const breaker = root.circuit_breaker.CircuitBreaker.init(root.circuit_breaker.CircuitBreakerConfig{});
+    const ds = root.datasourceInterface.Interface.init(&mb, .mock, breaker, null);
+
+    var ctx: Context = undefined;
+    ctx.allocator = testing.arena;
+    ctx.request = testing.req;
+    ctx.response = testing.res;
+    ctx.SQL = ds;
+
+    const st = comptime buildStmts(Sample, "users", "id", 0);
+    try listHandler(Sample, st)(&ctx);
+
+    try std.testing.expect(mb.query_rows_calls > 0);
+    // `query_rows_calls` only increments inside the type-erased `MockBackend`
+    // reached through `ctx.SQL.queryRows`, proving the handler routed through the
+    // interface (which now also consults the circuit breaker) instead of a dialect
+    // switch that bypassed it.
+}
 
 // ===================== Tests =====================
 
