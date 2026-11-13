@@ -381,20 +381,29 @@ fn refresherLoop(self: *container) void {
     }
 }
 
-/// Starts the background health refresher. Detached thread; spawn
+/// Starts the background health refresher. Spawns a joinable thread; spawn
 /// failure logs and leaves the endpoint on inline probing (correct, just not
-/// hung-check-proof).
+/// hung-check-proof). The handle is kept so `stopHealthRefresher` can join it
+/// before the container is freed — detaching would let the loop read freed
+/// container memory during shutdown.
 pub fn startHealthRefresher(self: *container) void {
     if (self.health_refresh_ms == 0) return;
     const thread = std.Thread.spawn(.{}, refresherLoop, .{self}) catch {
         self.log.err("health refresher thread failed to start; falling back to inline probing");
         return;
     };
-    thread.detach();
+    self.refresherThread = thread;
 }
 
+/// Stops the refresher loop and joins its thread. Safe to call once (no-op when
+/// the thread was never started). Must run while the container is still alive so
+/// the thread finishes reading its `health_refresh_stop` flag before we free it.
 pub fn stopHealthRefresher(self: *container) void {
     self.health_refresh_stop.store(true, .release);
+    if (self.refresherThread) |thread| {
+        thread.join();
+        self.refresherThread = null;
+    }
 }
 
 /// A user-registered static-file mount: URL `prefix` → on-disk `dir`.
@@ -524,6 +533,11 @@ health_refresh_ms: u64 = 0,
 /// while its check thread is still running. Guarded by `health_snapshot_mu`.
 health_probe_slots: [MAX_HEALTH_PROBES]?*ProbeBox = @splat(null),
 health_refresh_stop: std.atomic.Value(bool) = .init(false),
+// Handle of the refresher thread started by `startHealthRefresher`. `null`
+// until started (or when HEALTH_SNAPSHOT_REFRESH_MS=0). Kept so shutdown can
+// `join` it before the container is freed; the thread reads `health_refresh_stop`
+// and other container fields, so detaching it would be a use-after-free.
+refresherThread: ?std.Thread = null,
 
 pub fn create(self: Self) anyerror!*container {
     const c = try self.allocator.create(container);
@@ -780,6 +794,14 @@ pub fn destroy(self: *Self) void {
     if (self.rdz) |rdz| {
         rdz.close();
         allocator.destroy(rdz);
+    }
+
+    // The last published health snapshot is the only buffer `publishHealthSnapshot`
+    // never frees (it only releases the *previous* one), so release it here or the
+    // DebugAllocator reports it leaked at process exit.
+    if (self.health_snapshot) |snap| {
+        allocator.free(snap);
+        self.health_snapshot = null;
     }
 
     allocator.destroy(self);
@@ -1195,12 +1217,13 @@ pub fn natsPullWaitMs(self: *Self) u32 {
 
 fn loadMetricz(self: *Self) !void {
     // Resolve the per-metric label-cardinality cap from config (which honors
-    // `configs/.env`). Absent => default (initialize applies 4096); `0` => disabled
-    // (null); positive => that value. This replaces the old `std.c.environ` read so
-    // config-driven limits actually take effect
+    // `configs/.env`). Absent => default (initialize applies 4096); `0` => disabled;
+    // positive => that value. This replaces the old `std.c.environ` read so
+    // config-driven limits actually take effect. `0` must be passed through, not
+    // collapsed to null, or it becomes indistinguishable from "unset".
     const card_present = !std.mem.eql(u8, self.config.get("METRICS_CARDINALITY_LIMIT"), "");
     const card_raw = self.config.getAsInt("METRICS_CARDINALITY_LIMIT") catch 0;
-    const cap_override: ?usize = if (!card_present) null else if (card_raw == 0) null else card_raw;
+    const cap_override: ?usize = if (!card_present) null else card_raw;
 
     // initialize metrics
     self.metricz = try Metricz.initialize(self.allocator, .{ .prefix = "", .exclude = null }, cap_override);

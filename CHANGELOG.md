@@ -5,24 +5,23 @@ All notable changes are tracked here. The full, linkable detail lives at
 
 ## [0.5.4] — current main
 
-- **Zig 0.16 + `std.Io` injection** — `App.new(allocator, io, em)` routes the
-  process I/O reactor through `container`/`Context`; tests now live at the end
-  of each file. See [Migrating to 0.16](https://zerofmk.in/migrating-0.16).
-- **DuckDB in-process OLAP** — register an embedded SQL engine with
-  `app.addDuckDB(":memory:")`, no external service.
-- **AutoCRUD for DuckDB** — `app.addRestHandlers` now targets DuckDB too.
-- **CLI Application Mode** — build one-shot jobs or long-running migrations with
-  `App.newCmd` + `app.SubCommand`, no HTTP server.
-- **Kubernetes deployment** — sample image build + manifests.
-- **New data sources** — Cassandra, InfluxDB and Solr join the supported backends.
-- **Bootstrap arena** — pre-allocated memory for framework bootstrap (bounded RSS).
-- **Outbound rate limiting & REST handlers** — per-service rate limits and
-  struct-model REST handlers for external services.
-- **Resilience** — circuit breakers, request timeouts and bulkheads, and pub/sub
-  reconnect with dead-letter.
-- **Observability** — distributed tracing and structured metrics wired in from
-  the first request.
-- **Benchmarks in CI** — reproducible throughput/latency/RSS runs.
+Requires **Zig 0.17.0+** (hard cut; does not build on 0.16.x). Full detail in
+[RELEASE_NOTES_0.5.4.md](./RELEASE_NOTES_0.5.4.md).
+
+- **Zig 0.17 hard cut** — deps wired to 0.17-ready forks (httpz, protobuf,
+  opentelemetry, regexp, sqlite, zbench); `std.Build` port (`@Tuple`,
+  `@typeInfo` field arrays, `addPassthruArgs`).
+- **Breaking** — min Zig 0.17.0; dependency forks changed; example `build.zig`
+  must port `b.args` → `addPassthruArgs()`; vault overrides config removed.
+- **Security/audit remediation** — auth session UAF, rate-limiter `Retry-After`
+  math, safe Basic-auth decode, pub/sub arena leak, ordered teardown + thread
+  joins, context cleanup rollback, cronz schedule-parse hardening.
+- **OTel stable** — enabled by OTLP endpoint, not a flag.
+- **Outbound resilience** — retry 429/5xx honoring `Retry-After`; Kafka TLS on
+  by default; Redis `rdz.reconnect()` + health-probe rebuild.
+- **Architecture** — additive named SQL/pub-sub, transactional outbox
+  (`addOutbox`), fail-fast startup, `healthProbe`.
+- **SBOM** for tagged releases; platform hardening + deployment/community docs.
 
 ## [0.5.3]
 

@@ -16,19 +16,13 @@ permissions:
 jobs:
   sbom:
     runs-on: ubuntu-latest
+    container:
+      image: imng/zero-kcov:0.3.5
+      options: --security-opt seccomp=unconfined
+
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
-
-      - name: Setup Zig
-        uses: mlugg/setup-zig@v1
-        with:
-          version: "0.17.0"
-
-      - name: Install system libraries (Linux)
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y librdkafka-dev libssl-dev
 
       - name: Setup Node.js (for cdxgen + cyclonedx-cli)
         uses: actions/setup-node@v4

@@ -681,6 +681,10 @@ pub fn run(self: *Self) !void {
     self.httpServer.http.deinit();
     self.allocator.destroy(self.httpServer);
 
+    // Stop the health-refresher thread and join it before the container is freed;
+    // the loop reads container fields, so freeing first would be a use-after-free.
+    self.container.stopHealthRefresher();
+
     self.destroy();
 }
 

@@ -16,18 +16,18 @@ pub fn build(b: *std.Build) void {
     // the Cellar is absent) we rely on pkg-config via linkSystemLibrary below.
     const rdkafka_prefix: ?[]const u8 = blk: {
         if (!kafka_enabled or builtin.os.tag != .macos) break :blk null;
-        var dir = std.fs.openDirAbsolute("/usr/local/Cellar/librdkafka", .{ .iterate = true }) catch break :blk null;
-        defer dir.close();
-        var it = dir.iterate();
-        while (it.next() catch break :blk null) |entry| {
+        var dir = std.Io.Dir.openDirAbsolute(b.graph.io, "/usr/local/Cellar/librdkafka", .{ .iterate = true }) catch break :blk null;
+        defer dir.close(b.graph.io);
+        var it = std.Io.Dir.iterate(dir);
+        while (it.next(b.graph.io) catch break :blk null) |entry| {
             if (entry.kind == .directory) {
-                break :blk b.allocator.allocPrint(b.allocator, "/usr/local/Cellar/librdkafka/{s}", .{entry.name}) catch break :blk null;
+                break :blk std.fmt.allocPrint(b.allocator, "/usr/local/Cellar/librdkafka/{s}", .{entry.name}) catch break :blk null;
             }
         }
         break :blk null;
     };
-    const rdkafka_include: ?[]const u8 = if (rdkafka_prefix) |p| b.allocator.allocPrint(b.allocator, "{s}/include", .{p}) catch null else null;
-    const rdkafka_lib: ?[]const u8 = if (rdkafka_prefix) |p| b.allocator.allocPrint(b.allocator, "{s}/lib", .{p}) catch null else null;
+    const rdkafka_include: ?[]const u8 = if (rdkafka_prefix) |p| std.fmt.allocPrint(b.allocator, "{s}/include", .{p}) catch null else null;
+    const rdkafka_lib: ?[]const u8 = if (rdkafka_prefix) |p| std.fmt.allocPrint(b.allocator, "{s}/lib", .{p}) catch null else null;
 
     const build_options = b.addOptions();
     build_options.addOption(bool, "kafka", kafka_enabled);
@@ -60,8 +60,8 @@ pub fn build(b: *std.Build) void {
     const pgz = if (builtin.os.tag == .macos)
         b.dependency("pg", .{
             .openssl = true,
-            .openssl_include_path = std.Build.LazyPath{ .cwd_relative = "/usr/local/opt/openssl@3/include" },
-            .openssl_lib_path = std.Build.LazyPath{ .cwd_relative = "/usr/local/opt/openssl@3/lib" },
+            .openssl_include_path = std.Build.LazyPath{ .cwd_relative = "/opt/homebrew/Cellar/openssl@4/4.1.0/include" },
+            .openssl_lib_path = std.Build.LazyPath{ .cwd_relative = "/opt/homebrew/Cellar/openssl@4/4.1.0/lib" },
             .openssl_lib_name = "ssl",
         })
     else
@@ -132,7 +132,7 @@ pub fn build(b: *std.Build) void {
     module.linkSystemLibrary("ssl", .{});
     module.linkSystemLibrary("crypto", .{});
     if (builtin.os.tag == .macos) {
-        module.addLibraryPath(.{ .cwd_relative = "/usr/local/opt/openssl@3/lib" });
+        module.addLibraryPath(.{ .cwd_relative = "/opt/homebrew/Cellar/openssl@4/4.1.0/lib" });
     }
 
     // 0.17 dropped `@cImport`, so the librdkafka bindings are generated with
@@ -193,7 +193,7 @@ pub fn build(b: *std.Build) void {
     test_module.linkSystemLibrary("ssl", .{});
     test_module.linkSystemLibrary("crypto", .{});
     if (builtin.os.tag == .macos) {
-        test_module.addLibraryPath(.{ .cwd_relative = "/usr/local/opt/openssl@3/lib" });
+        test_module.addLibraryPath(.{ .cwd_relative = "/opt/homebrew/Cellar/openssl@4/4.1.0/lib" });
     }
 
     const unit_tests = b.addTest(.{
@@ -249,7 +249,7 @@ pub fn build(b: *std.Build) void {
     integration_module.linkSystemLibrary("ssl", .{});
     integration_module.linkSystemLibrary("crypto", .{});
     if (builtin.os.tag == .macos) {
-        integration_module.addLibraryPath(.{ .cwd_relative = "/usr/local/opt/openssl@3/lib" });
+        integration_module.addLibraryPath(.{ .cwd_relative = "/opt/homebrew/Cellar/openssl@4/4.1.0/lib" });
     }
 
     const integration_tests = b.addTest(.{

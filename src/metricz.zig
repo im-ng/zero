@@ -3,21 +3,6 @@ const root = @import("zero.zig");
 const metric_cap = @import("metric_cap.zig");
 const constants = root.constants;
 
-/// Reads a process environment variable by scanning `std.c.environ`. Zig 0.16
-/// dropped `std.process.getEnv`, and this project always links libc, so the C
-/// environ pointer is available. Returns a slice into environ memory (stable
-/// for the process lifetime) or null when unset.
-fn envGet(name: []const u8) ?[]const u8 {
-    const envp = std.c.environ;
-    var i: usize = 0;
-    while (envp[i] != null) : (i += 1) {
-        const entry = std.mem.span(envp[i].?);
-        if (entry.len > name.len and std.mem.eql(u8, entry[0..name.len], name) and entry[name.len] == '=') {
-            return entry[name.len + 1 ..];
-        }
-    }
-    return null;
-}
 const builtin = @import("builtin");
 const Allocator = std.mem.Allocator;
 const Self = @This();
@@ -357,15 +342,24 @@ fn addCustom(self: *Self, ptr: *anyopaque, write_fn: *const fn (*anyopaque, *std
     try self.custom.append(.{ .ptr = ptr, .write = write_fn, .deinit = deinit_fn });
 }
 
+/// Resolve the effective per-metric cardinality cap. An unset config
+/// (`null`) uses the safe default; an explicit `0` disables the cap; any
+/// positive value is used as-is. Keeping this tri-state explicit prevents the
+/// old bug where "unset" and "0" both became `null` and then fell back to the
+/// default, so there was no way to turn the cap off.
+pub fn resolveCap(cap_override: ?usize) ?usize {
+    return if (cap_override) |v| (if (v == 0) null else v) else constants.DEFAULT_METRICS_CARDINALITY_LIMIT;
+}
+
 pub fn initialize(allocator: Allocator, comptime _: metrics.RegistryOpts, cap_override: ?usize) !*metricz {
     metrics.setIo(utils.io);
 
     // Cap on distinct label sets per metric so a runaway cardinality can't OOM the
     // process. The caller (container.loadMetricz) resolves this from config (which
-    // honors `configs/.env`): `0` disables the cap (passes null), a positive value
-    // sets it, and an absent value defaults to a safe ceiling. Dropped series
-    // surface as the `otel_metric_overflow` series emitted by `writeRaw`.
-    const cap: ?usize = cap_override orelse constants.DEFAULT_METRICS_CARDINALITY_LIMIT;
+    // honors `configs/.env`): `0` disables the cap, a positive value sets it, and
+    // an absent value defaults to a safe ceiling. Dropped series surface as the
+    // `otel_metric_overflow` series emitted by `writeRaw`.
+    const cap: ?usize = resolveCap(cap_override);
 
     const m = try allocator.create(metricz);
     errdefer allocator.destroy(m);
@@ -694,4 +688,16 @@ test "metricz: cardinality cap drops new series and counts overflow" {
 
     try std.testing.expectEqual(@as(usize, 2), w.vec.values.count());
     try std.testing.expectEqual(@as(u64, before + 1), metric_cap.overflowCount());
+}
+
+test "metricz: cardinality cap resolution keeps unset and 0 distinct" {
+    // Unset means "use the safe default".
+    try std.testing.expectEqual(
+        @as(?usize, constants.DEFAULT_METRICS_CARDINALITY_LIMIT),
+        resolveCap(null),
+    );
+    // An explicit 0 disables the cap; it must not fall back to the default.
+    try std.testing.expectEqual(@as(?usize, null), resolveCap(0));
+    // A positive value is used as-is.
+    try std.testing.expectEqual(@as(?usize, 128), resolveCap(128));
 }
