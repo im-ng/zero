@@ -8,8 +8,10 @@
 # See sbom-integration.md for the rationale.
 #
 # Prerequisites: cdxgen, syft, cyclonedx-cli on PATH.
-#   npm install -g @cyclonedx/cdxgen @cyclonedx/cyclonedx-cli
+#   npm install -g @cyclonedx/cdxgen
 #   curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh | sh -s -- -b /usr/local/bin
+#   CycloneDX CLI has no npm package; grab the musl release binary:
+#   curl -sSfL https://github.com/CycloneDX/cyclonedx-cli/releases/download/v0.33.1/cyclonedx-linux-musl-x64 -o /usr/local/bin/cyclonedx-cli && chmod +x /usr/local/bin/cyclonedx-cli
 set -euo pipefail
 
 # Override with ZERO_BUILD_CMD to pass custom flags or a target triple.

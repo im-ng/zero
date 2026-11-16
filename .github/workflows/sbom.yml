@@ -16,23 +16,15 @@ permissions:
 jobs:
   sbom:
     runs-on: ubuntu-latest
+    # SBOM tooling (cdxgen, cyclonedx-cli, syft) and Zig 0.17.0 ship in the
+    # image — no runtime install steps needed.
     container:
-      image: imng/zero-kcov:0.3.5
+      image: imng/zero-kcov:0.3.6
       options: --security-opt seccomp=unconfined
 
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
-
-      - name: Setup Node.js (for cdxgen + cyclonedx-cli)
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-
-      - name: Install tooling (cdxgen, cyclonedx-cli, syft)
-        run: |
-          npm install -g @cyclonedx/cdxgen @cyclonedx/cyclonedx-cli
-          curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh | sh -s -- -b /usr/local/bin
 
       - name: Generate merged SBOM
         run: ./scripts/gen-sbom.sh

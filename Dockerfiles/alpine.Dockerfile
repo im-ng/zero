@@ -1,8 +1,8 @@
 # Image for github CI pipeline
 # Bump zig versions when needed and publish
-# docker build -f Dockerfiles/alpine.Dockerfile -t docker.io/imng/zero-kcov:0.3.5 .
-# docker push imng/zero-kcov:0.3.5
-FROM alpine:latest as builder
+# docker build -f Dockerfiles/alpine.Dockerfile -t docker.io/imng/zero-kcov:0.3.6 .
+# docker push imng/zero-kcov:0.3.6
+FROM alpine:latest AS builder
 
 LABEL maintainer="im-ng"
 LABEL description="Multi-version Zig CI container with kcov coverage support"
@@ -66,7 +66,7 @@ RUN wget -q https://install.duckdb.org/v1.5.5/libduckdb-linux-amd64.zip \
 FROM alpine:latest 
 LABEL maintainer="im-ng"
 LABEL description="Multi-version Zig CI container with kcov coverage support"
-LABEL version="0.3.5"
+LABEL version="0.3.6"
 
 # Update dependencies for zig, zero, kcov
 RUN apk add --no-cache \
@@ -78,7 +78,8 @@ RUN apk add --no-cache \
     musl-dev libc6-compat \
     ca-certificates \
     librdkafka librdkafka-dev \
-    binutils-dev curl-dev elfutils-dev
+    binutils-dev curl-dev elfutils-dev curl \
+    nodejs npm
 
 # Create working directories
 # RUN mkdir -p /usr/local/zig-0.15.2 /app
@@ -106,6 +107,31 @@ RUN ln -s /usr/local/zig-0.17.0/zig /usr/local/bin/zig
 # RUN chmod -R 777 /usr/local/zig-0.15.2
 # ENV PATH="${ZIG151}:${ZIG152}:${ZIG160}:${PATH}"
 # ENV PATH="${ZIG}:${PATH}"
+
+# SBOM tooling (see .github/workflows/sbom.yml + scripts/gen-sbom.sh).
+# cdxgen parses build.zig.zon for source deps; cyclonedx-cli merges the
+# source and binary CycloneDX fragments; syft scans the compiled binary.
+# CycloneDX CLI has no npm package — install the musl release binary directly.
+
+# cdxgen (npm)
+RUN npm install -g @cyclonedx/cdxgen
+
+# syft (official install script -> /usr/local/bin)
+RUN curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh \
+    | sh -s -- -b /usr/local/bin \
+    && syft version
+
+# cyclonedx-cli (musl release asset, correct for Alpine). The asset may be a
+# raw binary or a gzip tarball depending on release, so detect and handle both.
+RUN curl -sSfL -o /tmp/cyclonedx-cli \
+        https://github.com/CycloneDX/cyclonedx-cli/releases/download/v0.33.1/cyclonedx-linux-musl-x64 \
+    && if [ "$(head -c2 /tmp/cyclonedx-cli | od -An -tx1 | tr -d ' ')" = "1f8b" ]; then \
+           tar -xzf /tmp/cyclonedx-cli -C /usr/local/bin; \
+       else \
+           install /tmp/cyclonedx-cli /usr/local/bin/cyclonedx-cli; \
+       fi \
+    && chmod +x /usr/local/bin/cyclonedx-cli \
+    && cyclonedx-cli --version
 
 WORKDIR /app
 RUN ls -alth /usr/local/lib/
