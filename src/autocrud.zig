@@ -137,9 +137,15 @@ fn useDollarPlaceholders(ctx: *Context) bool {
     return ctx.SQL.dialect == .postgres or ctx.SQL.dialect == .duckgres;
 }
 
-fn listHandler(comptime T: type, comptime st: Stmts) *const fn (*Context) anyerror!void {
+// Each handler comes in two comptime-instantiated variants — one for `$N`
+// placeholders (Postgres/DuckGres) and one for `?` (SQLite/DuckDB/MySQL). The
+// `ctx.SQL` interface takes `comptime stmt`, so the dialect branch must be
+// resolved at comptime. `addRestHandlers` wraps them in a runtime dispatcher
+// that picks the variant from `ctx.SQL.dialect` per request.
+fn listHandler(comptime T: type, comptime st: Stmts, comptime pg: bool) *const fn (*Context) anyerror!void {
     const impl = struct {
         fn call(ctx: *Context) anyerror!void {
+            _ = pg;
             const rows = try ctx.SQL.queryRows(ctx, T, st.list, .{});
             try ctx.json(rows);
         }
@@ -147,7 +153,7 @@ fn listHandler(comptime T: type, comptime st: Stmts) *const fn (*Context) anyerr
     return &impl.call;
 }
 
-fn getHandler(comptime T: type, comptime st: Stmts, comptime id_idx: usize) *const fn (*Context) anyerror!void {
+fn getHandler(comptime T: type, comptime st: Stmts, comptime id_idx: usize, comptime pg: bool) *const fn (*Context) anyerror!void {
     const IdType = @typeInfo(T).@"struct".field_types[id_idx];
     const impl = struct {
         fn call(ctx: *Context) anyerror!void {
@@ -157,7 +163,7 @@ fn getHandler(comptime T: type, comptime st: Stmts, comptime id_idx: usize) *con
                 try ctx.json(.{ .err = "invalid id" });
                 return;
             };
-            const stmt = if (useDollarPlaceholders(ctx)) st.get_pg else st.get_q;
+            const stmt = if (pg) st.get_pg else st.get_q;
             const row = try ctx.SQL.queryRow(ctx, T, stmt, .{idv});
             if (row) |r| {
                 try ctx.json(r);
@@ -170,7 +176,7 @@ fn getHandler(comptime T: type, comptime st: Stmts, comptime id_idx: usize) *con
     return &impl.call;
 }
 
-fn createHandler(comptime T: type, comptime st: Stmts) *const fn (*Context) anyerror!void {
+fn createHandler(comptime T: type, comptime st: Stmts, comptime pg: bool) *const fn (*Context) anyerror!void {
     const impl = struct {
         fn call(ctx: *Context) anyerror!void {
             const parsed = ctx.bind(T) catch {
@@ -184,7 +190,7 @@ fn createHandler(comptime T: type, comptime st: Stmts) *const fn (*Context) anye
                 return;
             };
             const args = toTuple(T, o, null);
-            const stmt = if (useDollarPlaceholders(ctx)) st.insert_pg else st.insert_q;
+            const stmt = if (pg) st.insert_pg else st.insert_q;
             _ = try ctx.SQL.exec(ctx, stmt, args);
             try ctx.json(o);
             ctx.response.setStatus(.created);
@@ -193,7 +199,7 @@ fn createHandler(comptime T: type, comptime st: Stmts) *const fn (*Context) anye
     return &impl.call;
 }
 
-fn updateHandler(comptime T: type, comptime st: Stmts, comptime id_idx: usize) *const fn (*Context) anyerror!void {
+fn updateHandler(comptime T: type, comptime st: Stmts, comptime id_idx: usize, comptime pg: bool) *const fn (*Context) anyerror!void {
     const IdType = @typeInfo(T).@"struct".field_types[id_idx];
     const impl = struct {
         fn call(ctx: *Context) anyerror!void {
@@ -214,14 +220,14 @@ fn updateHandler(comptime T: type, comptime st: Stmts, comptime id_idx: usize) *
                 return;
             };
             const args = toTuple(T, o, id_idx);
-            const stmt = if (useDollarPlaceholders(ctx)) st.update_pg else st.update_q;
+            const stmt = if (pg) st.update_pg else st.update_q;
             const updated = (try ctx.SQL.exec(ctx, stmt, args)) > 0;
             if (!updated) {
                 ctx.response.setStatus(.not_found);
                 try ctx.json(.{ .err = "not found" });
                 return;
             }
-            const get_stmt = if (useDollarPlaceholders(ctx)) st.get_pg else st.get_q;
+            const get_stmt = if (pg) st.get_pg else st.get_q;
             const row = try ctx.SQL.queryRow(ctx, T, get_stmt, .{idv});
             if (row) |r| {
                 try ctx.json(r);
@@ -234,7 +240,7 @@ fn updateHandler(comptime T: type, comptime st: Stmts, comptime id_idx: usize) *
     return &impl.call;
 }
 
-fn deleteHandler(comptime T: type, comptime st: Stmts, comptime id_idx: usize) *const fn (*Context) anyerror!void {
+fn deleteHandler(comptime T: type, comptime st: Stmts, comptime id_idx: usize, comptime pg: bool) *const fn (*Context) anyerror!void {
     const IdType = @typeInfo(T).@"struct".field_types[id_idx];
     const impl = struct {
         fn call(ctx: *Context) anyerror!void {
@@ -244,7 +250,7 @@ fn deleteHandler(comptime T: type, comptime st: Stmts, comptime id_idx: usize) *
                 try ctx.json(.{ .err = "invalid id" });
                 return;
             };
-            const stmt = if (useDollarPlaceholders(ctx)) st.delete_pg else st.delete_q;
+            const stmt = if (pg) st.delete_pg else st.delete_q;
             _ = try ctx.SQL.exec(ctx, stmt, .{idv});
             const affected = ctx.SQL.rowsAffected();
             if (affected == 0) {
@@ -278,11 +284,26 @@ pub fn addRestHandlers(self: *App, comptime T: type, comptime opts: AutoCrudOpti
     const st = comptime buildStmts(T, table, id_field, IDX);
     const base = "/" ++ opts.resource;
 
-    try self.get(base, comptime listHandler(T, st));
-    try self.get(base ++ "/:id", comptime getHandler(T, st, IDX));
-    try self.post(base, comptime createHandler(T, st));
-    try self.put(base ++ "/:id", comptime updateHandler(T, st, IDX));
-    try self.delete(base ++ "/:id", comptime deleteHandler(T, st, IDX));
+    try self.get(base, dispatcher(listHandler(T, st, true), listHandler(T, st, false)));
+    try self.get(base ++ "/:id", dispatcher(getHandler(T, st, IDX, true), getHandler(T, st, IDX, false)));
+    try self.post(base, dispatcher(createHandler(T, st, true), createHandler(T, st, false)));
+    try self.put(base ++ "/:id", dispatcher(updateHandler(T, st, IDX, true), updateHandler(T, st, IDX, false)));
+    try self.delete(base ++ "/:id", dispatcher(deleteHandler(T, st, IDX, true), deleteHandler(T, st, IDX, false)));
+}
+
+// Wraps the `$N` and `?` variants of a handler in a runtime dispatcher that
+// selects the right one from `ctx.SQL.dialect` per request. The two pointers
+// are `comptime` parameters so they are reachable from the inner `call` fn.
+fn dispatcher(
+    comptime pg: *const fn (*Context) anyerror!void,
+    comptime q: *const fn (*Context) anyerror!void,
+) *const fn (*Context) anyerror!void {
+    const impl = struct {
+        fn call(ctx: *Context) anyerror!void {
+            if (useDollarPlaceholders(ctx)) try pg(ctx) else try q(ctx);
+        }
+    };
+    return &impl.call;
 }
 
 const Sample = struct { id: i64, name: []const u8, email: []const u8 };
@@ -307,7 +328,7 @@ test "AutoCrud listHandler routes through ctx.SQL interface" {
     ctx.SQL = ds;
 
     const st = comptime buildStmts(Sample, "users", "id", 0);
-    try listHandler(Sample, st)(&ctx);
+    try listHandler(Sample, st, false)(&ctx);
 
     try std.testing.expect(mb.query_rows_calls > 0);
     // `query_rows_calls` only increments inside the type-erased `MockBackend`
