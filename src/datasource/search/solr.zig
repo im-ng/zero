@@ -39,7 +39,7 @@ pub const Solr = struct {
 
     pub fn index(self: *Solr, ctx: *root.Context, collection: []const u8, doc_json: []const u8) !void {
         self.last_status.store(0, .monotonic);
-        self.last_kind.store(@intFromEnum(root.Error.ErrorKind.none), .monotonic);
+        self.last_kind.store(@backingInt(root.Error.ErrorKind.none), .monotonic);
         const coll_name = if (collection.len == 0) self.default_collection else collection;
 
         const url = try std.fmt.allocPrint(ctx.allocator, "{s}/solr/{s}/update?commit=true", .{ self.base_url, coll_name });
@@ -63,14 +63,14 @@ pub const Solr = struct {
             const sb = try res.allocBody(ctx.allocator, .{});
             defer sb.deinit();
             self.last_status.store(res.status, .monotonic);
-            self.last_kind.store(@intFromEnum(root.Error.classifyHttpStatus(res.status)), .monotonic);
+            self.last_kind.store(@backingInt(root.Error.classifyHttpStatus(res.status)), .monotonic);
             return error.SolrIndexFailed;
         }
     }
 
     pub fn query(self: *Solr, ctx: *root.Context, collection: []const u8, q: []const u8) ![]const u8 {
         self.last_status.store(0, .monotonic);
-        self.last_kind.store(@intFromEnum(root.Error.ErrorKind.none), .monotonic);
+        self.last_kind.store(@backingInt(root.Error.ErrorKind.none), .monotonic);
         const coll_name = if (collection.len == 0) self.default_collection else collection;
 
         const url = try std.fmt.allocPrint(ctx.allocator, "{s}/solr/{s}/select", .{ self.base_url, coll_name });
@@ -92,7 +92,7 @@ pub const Solr = struct {
             const sb = try res.allocBody(ctx.allocator, .{});
             defer sb.deinit();
             self.last_status.store(res.status, .monotonic);
-            self.last_kind.store(@intFromEnum(root.Error.classifyHttpStatus(res.status)), .monotonic);
+            self.last_kind.store(@backingInt(root.Error.classifyHttpStatus(res.status)), .monotonic);
             return error.SolrQueryFailed;
         }
 
@@ -117,7 +117,7 @@ pub const Solr = struct {
 
     pub fn delete(self: *Solr, ctx: *root.Context, collection: []const u8, id: []const u8) !void {
         self.last_status.store(0, .monotonic);
-        self.last_kind.store(@intFromEnum(root.Error.ErrorKind.none), .monotonic);
+        self.last_kind.store(@backingInt(root.Error.ErrorKind.none), .monotonic);
         const coll_name = if (collection.len == 0) self.default_collection else collection;
 
         const url = try std.fmt.allocPrint(ctx.allocator, "{s}/solr/{s}/update?commit=true", .{ self.base_url, coll_name });
@@ -139,7 +139,7 @@ pub const Solr = struct {
             const sb = try res.allocBody(ctx.allocator, .{});
             defer sb.deinit();
             self.last_status.store(res.status, .monotonic);
-            self.last_kind.store(@intFromEnum(root.Error.classifyHttpStatus(res.status)), .monotonic);
+            self.last_kind.store(@backingInt(root.Error.classifyHttpStatus(res.status)), .monotonic);
             return error.SolrDeleteFailed;
         }
     }
@@ -149,7 +149,7 @@ pub const Solr = struct {
     /// and `status` is the last HTTP status (0 for non-HTTP). The returned
     /// struct is a copy with no shared heap buffer, so it is safe to read.
     pub fn lastError(self: *Solr) ?root.Error.DataSourceError {
-        const kind = @as(root.Error.ErrorKind, @enumFromInt(self.last_kind.load(.monotonic)));
+        const kind = @as(root.Error.ErrorKind, @fromBackingInt(@intCast(self.last_kind.load(.monotonic))));
         if (kind == .none) return null;
         return .{
             .status = self.last_status.load(.monotonic),

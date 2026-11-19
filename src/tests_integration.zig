@@ -3,7 +3,6 @@ const std = @import("std");
 // Root module for integration tests that require a real database driver. These
 // are intentionally excluded from the kcov coverage step and run via
 // `zig build test-integration`.
-//
 // Also hosted here: the HTTP-mock-backed datasource tests (ClickHouse,
 // Couchbase, InfluxDB) and the `FakeServer` self-test. They drive the
 // `zul` client over loopback through `FakeServer`. Verified under kcov 43 with

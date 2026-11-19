@@ -111,7 +111,7 @@ pub const FileStoreLocal = struct {
     }
 
     pub fn list(self: *FileStoreLocal, ctx: *root.Context, prefix: []const u8) ![][]const u8 {
-        var out = std.ArrayList([]const u8).init(ctx.allocator);
+        var out = std.array_list.Managed([]const u8).init(ctx.allocator);
         errdefer {
             for (out.items) |k| {
                 ctx.allocator.free(k);
@@ -132,7 +132,7 @@ pub const FileStoreLocal = struct {
         limit: usize,
         offset: usize,
     ) ![][]const u8 {
-        var out = std.ArrayList([]const u8).init(ctx.allocator);
+        var out = std.array_list.Managed([]const u8).init(ctx.allocator);
         errdefer {
             for (out.items) |k| {
                 ctx.allocator.free(k);
@@ -166,7 +166,7 @@ pub const FileStoreLocal = struct {
         allocator: std.mem.Allocator,
         dir: []const u8,
         prefix: []const u8,
-        out: *std.ArrayList([]const u8),
+        out: *std.array_list.Managed([]const u8),
         depth: usize,
     ) !void {
         // Fail fast on an unexpectedly deep tree instead of recursing forever.
@@ -210,6 +210,7 @@ test "FileStoreLocal: create/get/delete/list + path-traversal guard" {
 
     var ctx: root.Context = undefined;
     ctx.allocator = ta.allocator;
+    ctx.io = std.testing.io;
 
     const store = try FileStoreLocal.open(ta.allocator, root_dir);
     defer ta.allocator.destroy(store);

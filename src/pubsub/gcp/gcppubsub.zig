@@ -33,6 +33,8 @@ pub const GCP = struct {
     subscription: []const u8,
     subscribers: std.array_list.Managed(Subscriber),
     running: std.atomic.Value(bool),
+    // Consumer thread handle; null until `subscribe` spawns it
+    thread: ?std.Thread = null,
 
     const Subscriber = struct {
         topic: []const u8,
@@ -94,6 +96,13 @@ pub const GCP = struct {
     }
 
     pub fn deinit(self: *GCP) void {
+        // Stop the polling loop and join its thread before freeing any state it
+        // touches
+        self.running.store(false, .release);
+        if (self.thread) |t| {
+            t.join();
+            self.thread = null;
+        }
         const a = self.allocator;
         a.free(self.project);
         a.free(self.endpoint);
@@ -115,7 +124,7 @@ pub const GCP = struct {
 
     fn ensureToken(self: *GCP) ![]const u8 {
         if (self.access_token_override.len > 0) return self.access_token_override;
-        self.token_mutex.lock(utils.io) catch {};
+        self.token_mutex.lockUncancelable(utils.io);
         defer self.token_mutex.unlock(utils.io);
         // Re-check after taking the lock: another thread may have refreshed.
         if (self.token) |t| {
@@ -174,7 +183,7 @@ pub const GCP = struct {
         try self.subscribers.append(.{ .topic = try self.allocator.dupe(u8, subject), .hook = hook });
         if (!self.running.load(.acquire)) {
             self.running.store(true, .release);
-            _ = std.Thread.spawn(.{}, run, .{self}) catch {
+            self.thread = std.Thread.spawn(.{}, run, .{self}) catch {
                 self.running.store(false, .release);
                 return error.GcpSubscriberSpawnFailed;
             };

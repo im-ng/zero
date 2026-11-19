@@ -40,7 +40,7 @@ pub const CircuitBreaker = struct {
     /// Call before issuing a request. Returns `error.CircuitOpen` when the
     /// breaker is open (and not within the half-open trial window).
     pub fn before(self: *Self) !void {
-        self.mutex.lock(utils.io) catch {};
+        self.mutex.lockUncancelable(utils.io);
         defer self.mutex.unlock(utils.io);
 
         const now = nowNs();
@@ -79,7 +79,7 @@ pub const CircuitBreaker = struct {
     }
 
     pub fn recordSuccess(self: *Self) void {
-        self.mutex.lock(utils.io) catch {};
+        self.mutex.lockUncancelable(utils.io);
         defer self.mutex.unlock(utils.io);
 
         switch (self.state) {
@@ -96,7 +96,7 @@ pub const CircuitBreaker = struct {
     }
 
     pub fn recordFailure(self: *Self) void {
-        self.mutex.lock(utils.io) catch {};
+        self.mutex.lockUncancelable(utils.io);
         defer self.mutex.unlock(utils.io);
 
         switch (self.state) {

@@ -280,7 +280,7 @@ test "Search mock backend failure arms record breaker failure and emit metrics" 
     defer arena.deinit();
     const alloc = arena.allocator();
 
-    const mz = try root.metricz.initialize(alloc, .{ .prefix = "", .exclude = null });
+    const mz = try root.metricz.initialize(alloc, .{ .prefix = "", .exclude = null }, null);
     defer alloc.destroy(mz);
 
     var mock: MockBackend = .{ .last_doc = "", .fail_all = true };

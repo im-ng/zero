@@ -22,7 +22,7 @@ pub fn init(
     l: *root.logger,
     m: *root.metricz,
 ) !*SQLite {
-    const db_path_z = try allocator.dupeZ(u8, db_path);
+    const db_path_z = try allocator.dupeSentinel(u8, db_path, 0);
 
     const source = try allocator.create(SQLite);
     errdefer allocator.destroy(source);

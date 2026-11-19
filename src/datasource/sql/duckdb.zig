@@ -50,7 +50,7 @@ pub const DuckDB = struct {
     /// executed directly. This lets callers pass runtime values safely.
     fn run(self: *DuckDB, comptime sql: []const u8, args: anytype, result: *c.duckdb_result) !void {
         const has_args = comptime @typeInfo(@TypeOf(args)) == .@"struct" and
-            @typeInfo(@TypeOf(args)).@"struct".fields.len > 0;
+            @typeInfo(@TypeOf(args)).@"struct".field_names.len > 0;
         if (!has_args) {
             const cstr = try c.toCStr(self.allocator, sql);
             defer self.allocator.free(cstr);
@@ -70,8 +70,8 @@ pub const DuckDB = struct {
         }
         defer c.duckdb_destroy_prepare(&ps);
 
-        inline for (@typeInfo(@TypeOf(args)).@"struct".fields, 0..) |f, i| {
-            try self.bindValue(&ps, @intCast(i + 1), @field(args, f.name));
+        inline for (@typeInfo(@TypeOf(args)).@"struct".field_names, @typeInfo(@TypeOf(args)).@"struct".field_types, @typeInfo(@TypeOf(args)).@"struct".field_attrs, 0..) |f_name, _, _, i| {
+            try self.bindValue(&ps, @intCast(i + 1), @field(args, f_name));
         }
 
         if (c.duckdb_execute_prepared(ps, result) != 0) {
@@ -243,16 +243,16 @@ fn mapRow(comptime Type: type, result: *c.duckdb_result, row: c.idx_t, alloc: st
 
     var value: Type = undefined;
     const col_count = c.duckdb_column_count(result);
-    inline for (ti.@"struct".fields) |field| {
-        const col = findColumn(result, col_count, field.name) orelse return error.ColumnNotFound;
+    inline for (ti.@"struct".field_names, ti.@"struct".field_types, ti.@"struct".field_attrs) |field_name, field_type, _| {
+        const col = findColumn(result, col_count, field_name) orelse return error.ColumnNotFound;
         if (c.duckdb_value_is_null(result, col, row)) {
-            if (@typeInfo(field.type) == .optional) {
-                @field(value, field.name) = null;
+            if (@typeInfo(field_type) == .optional) {
+                @field(value, field_name) = null;
             } else {
                 return error.NonNullColumnIsNull;
             }
         }
-        @field(value, field.name) = try readValue(field.type, result, col, row, alloc);
+        @field(value, field_name) = try readValue(field_type, result, col, row, alloc);
     }
     return value;
 }

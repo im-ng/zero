@@ -46,7 +46,7 @@ pub const InfluxDB = struct {
     /// Mirrors `query`, which also takes a raw statement (SQL/InfluxQL).
     pub fn write(self: *InfluxDB, ctx: *root.Context, statement: []const u8) !void {
         self.last_status.store(0, .monotonic);
-        self.last_kind.store(@intFromEnum(root.Error.ErrorKind.none), .monotonic);
+        self.last_kind.store(@backingInt(root.Error.ErrorKind.none), .monotonic);
 
         const url = try std.fmt.allocPrint(ctx.allocator, "{s}/api/v3/write_lp", .{self.base_url});
         defer ctx.allocator.free(url);
@@ -69,7 +69,7 @@ pub const InfluxDB = struct {
             const sb = try res.allocBody(ctx.allocator, .{});
             defer sb.deinit();
             self.last_status.store(res.status, .monotonic);
-            self.last_kind.store(@intFromEnum(root.Error.classifyHttpStatus(res.status)), .monotonic);
+            self.last_kind.store(@backingInt(root.Error.classifyHttpStatus(res.status)), .monotonic);
 
             return error.InfluxDBWriteFailed;
         }
@@ -79,7 +79,7 @@ pub const InfluxDB = struct {
     /// CSV (or JSON) response body, owned by `ctx.allocator`. Caller frees.
     pub fn query(self: *InfluxDB, ctx: *root.Context, q: []const u8) ![]const u8 {
         self.last_status.store(0, .monotonic);
-        self.last_kind.store(@intFromEnum(root.Error.ErrorKind.none), .monotonic);
+        self.last_kind.store(@backingInt(root.Error.ErrorKind.none), .monotonic);
 
         const url = try std.fmt.allocPrint(ctx.allocator, "{s}/api/v3/query_sql", .{self.base_url});
         defer ctx.allocator.free(url);
@@ -107,7 +107,7 @@ pub const InfluxDB = struct {
             const sb = try res.allocBody(ctx.allocator, .{});
             defer sb.deinit();
             self.last_status.store(res.status, .monotonic);
-            self.last_kind.store(@intFromEnum(root.Error.classifyHttpStatus(res.status)), .monotonic);
+            self.last_kind.store(@backingInt(root.Error.classifyHttpStatus(res.status)), .monotonic);
             return error.InfluxDBQueryFailed;
         }
 
@@ -122,7 +122,7 @@ pub const InfluxDB = struct {
     /// through the management endpoint `/api/v3/configure/database` (not SQL).
     pub fn createDatabase(self: *InfluxDB, ctx: *root.Context, name: []const u8) !void {
         self.last_status.store(0, .monotonic);
-        self.last_kind.store(@intFromEnum(root.Error.ErrorKind.none), .monotonic);
+        self.last_kind.store(@backingInt(root.Error.ErrorKind.none), .monotonic);
 
         const url = try std.fmt.allocPrint(ctx.allocator, "{s}/api/v3/configure/database", .{self.base_url});
         defer ctx.allocator.free(url);
@@ -147,7 +147,7 @@ pub const InfluxDB = struct {
             const sb = try res.allocBody(ctx.allocator, .{});
             defer sb.deinit();
             self.last_status.store(res.status, .monotonic);
-            self.last_kind.store(@intFromEnum(root.Error.classifyHttpStatus(res.status)), .monotonic);
+            self.last_kind.store(@backingInt(root.Error.classifyHttpStatus(res.status)), .monotonic);
             return error.InfluxDBQueryFailed;
         }
     }
@@ -157,7 +157,7 @@ pub const InfluxDB = struct {
     /// and `status` is the last HTTP status (0 for non-HTTP). The returned
     /// struct is a copy with no shared heap buffer, so it is safe to read.
     pub fn lastError(self: *InfluxDB) ?root.Error.DataSourceError {
-        const kind = @as(root.Error.ErrorKind, @enumFromInt(self.last_kind.load(.monotonic)));
+        const kind = @as(root.Error.ErrorKind, @fromBackingInt(@intCast(self.last_kind.load(.monotonic))));
         if (kind == .none) return null;
         return .{
             .status = self.last_status.load(.monotonic),

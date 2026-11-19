@@ -32,6 +32,9 @@ isPubSubSet: bool = false,
 // Connection config retained so the consumer can reconnect after a drop.
 config: *const mqConfig = undefined,
 mqtt_initialized: bool = false,
+// Set when `startSubscription` actually spawns the consumer thread, so `destroy`
+// only joins a thread that exists
+started: bool = false,
 
 pub fn create(container: *root.container, config: *const mqConfig) !*MQTT {
     const c = try container.allocator.create(MQTT);
@@ -77,21 +80,25 @@ fn connect(self: *Self) !void {
         .disconnect => |d| {
             const msg = try utils.combine(self.container.allocator, "MQTT disconnected with reason: {s}", .{@tagName(d.reason_code)});
             self.container.log.info(msg);
+            self.container.allocator.free(msg);
         },
         .connack => |cack| {
             var msg = try utils.combine(self.container.allocator, "MQTT server connected", .{});
             self.container.log.info(msg);
+            self.container.allocator.free(msg);
 
             self.mqttClient = cack.assigned_client_identifier;
 
             if (cack.assigned_client_identifier) |id| {
                 msg = try utils.combine(self.container.allocator, "MQTT client id {s}", .{id});
                 self.container.log.info(msg);
+                self.container.allocator.free(msg);
             }
         },
         else => {
             const msg = try utils.combine(self.container.allocator, "could not connect to MQTT at '{s}:{d}'", .{ config.hostname, config.port });
             self.container.log.info(msg);
+            self.container.allocator.free(msg);
         },
     };
 
@@ -99,16 +106,21 @@ fn connect(self: *Self) !void {
 }
 
 pub fn destroy(self: *Self) void {
+    // Stop the consumer loop first, then join it, then free the client it was
+    // using. The old order freed `mqtt` while the thread was still reading it
+    // (use-after-free). `started` guards the join so a client that never spawned
+    // a thread doesn't join an undefined handle
+    self.signal.store(false, .release);
+    if (self.started) {
+        self.thread.join();
+    }
     self.mqtt.disconnect(.{ .timeout = 1000 }, .{ .reason = .normal }) catch {};
     self.mqtt.deinit();
-
-    self.signal.store(false, .release);
-    self.thread.join();
 }
 
 pub fn Publish(self: *Self, topic: []const u8, payload: []const u8) !?u16 {
     // Serialize concurrent publishes from HTTP handlers / cron (audit #11).
-    self.mu.lock(self.container.io) catch {};
+    self.mu.lockUncancelable(self.container.io);
     defer self.mu.unlock(self.container.io);
     return try self.mqtt.publish(.{}, .{
         .topic = topic,
@@ -126,7 +138,7 @@ fn prepareChildAllocator(self: *Self) !*arena {
     return ca;
 }
 
-fn destroryChildAllocator(self: *Self, ca: *arena) void {
+fn destroyChildAllocator(self: *Self, ca: *arena) void {
     const caPtr: *arena = @ptrCast(@alignCast(ca.allocator().ptr));
     caPtr.deinit();
 
@@ -156,6 +168,7 @@ pub fn readPackets(self: *Self, subscriber: mqSubscriber) !void {
             .disconnect => |d| {
                 const msg = try utils.combine(self.container.allocator, "server disconnected us: {s}", .{@tagName(d.reason_code)});
                 self.container.log.info(msg);
+                self.container.allocator.free(msg);
                 self.mqtt_initialized = false;
                 std.Io.sleep(self.container.io, std.Io.Duration.fromSeconds(2), .awake) catch {};
                 continue;
@@ -163,6 +176,7 @@ pub fn readPackets(self: *Self, subscriber: mqSubscriber) !void {
             .suback => {
                 const msg = try utils.combine(self.container.allocator, "received packet identifier {d}", .{packet_identifier});
                 self.container.log.info(msg);
+                self.container.allocator.free(msg);
             },
             else => {},
         };
@@ -190,7 +204,7 @@ fn consume(self: *Self, subscriber: mqSubscriber) !void {
                     self.container.log.Any(self.container.allocator, err);
                     continue;
                 };
-                defer self.destroryChildAllocator(ca);
+                defer self.destroyChildAllocator(ca);
 
                 // A valid, non-socket response for the subscriber hook's Context
                 // (audit #15): `_res` is an undefined `*httpz.Response`.
@@ -273,6 +287,7 @@ pub fn startSubscription(self: *Self) !void {
         self.container.log.Any(self.container.allocator, err);
         return;
     };
+    self.started = true;
 }
 
 pub fn addSubscriber(self: *Self, topic: []const u8, hook: *const fn (*root.Context) anyerror!void) !void {
@@ -282,7 +297,7 @@ pub fn addSubscriber(self: *Self, topic: []const u8, hook: *const fn (*root.Cont
         .exec = hook,
     };
 
-    self.mu.lock(self.container.io) catch {};
+    self.mu.lockUncancelable(self.container.io);
     try self.subscriber.append(s);
     self.mu.unlock(self.container.io);
 
@@ -296,6 +311,7 @@ pub fn addSubscriber(self: *Self, topic: []const u8, hook: *const fn (*root.Cont
     };
 
     self.container.log.info(msg);
+    self.container.allocator.free(msg);
 }
 
 /// Type-erased VTable conforming to `pubsubInterface.Interface.VTable`.

@@ -68,6 +68,7 @@ pub fn create(
             .{c.err_message},
         );
         container.log.err(msg);
+        container.allocator.free(msg);
     }
 
     if (client != null) {
@@ -77,6 +78,7 @@ pub fn create(
             .{},
         );
         container.log.info(msg);
+        container.allocator.free(msg);
     }
 
     c.client = client;
@@ -109,6 +111,7 @@ pub fn getTopicHandler(self: *Self, ctx: *Context, name: []const u8) !*kafkaTopi
             .{rdkafka.rd_kafka_err2str(err_code)},
         );
         ctx.err(msg);
+        ctx.allocator.free(msg);
     }
 
     const topic = rdkafka.rd_kafka_topic_new(
@@ -123,6 +126,7 @@ pub fn getTopicHandler(self: *Self, ctx: *Context, name: []const u8) !*kafkaTopi
             .{rdkafka.rd_kafka_err2str(err_code)},
         );
         ctx.err(msg);
+        ctx.allocator.free(msg);
     }
 
     return topic.?;
@@ -159,7 +163,7 @@ pub fn publish(self: *Self, ctx: *Context, topic: *kafkaTopic, key: []const u8, 
     // Guard fan-in: Publish is called concurrently from HTTP handlers and cron
     // jobs (audit #11). Serialize on the shared client state via the per-client
     // mutex (also used by the subscriber dispatch path).
-    self.mu.lock(self.container.io) catch {};
+    self.mu.lockUncancelable(self.container.io);
     defer self.mu.unlock(self.container.io);
 
     const message_ptr: ?*anyopaque = @constCast(payload.ptr);
@@ -220,6 +224,7 @@ pub fn publish(self: *Self, ctx: *Context, topic: *kafkaTopic, key: []const u8, 
         );
 
         ctx.info(msg);
+        ctx.allocator.free(msg);
 
         self.container.metricz.publisherSuccess(.{ .topic = self.getTopicName(topic) }) catch |e| std.debug.print("kafka publisherSuccess metric failed: {}\n", .{e});
     } else {
@@ -230,6 +235,7 @@ pub fn publish(self: *Self, ctx: *Context, topic: *kafkaTopic, key: []const u8, 
         );
 
         ctx.err(msg);
+        ctx.allocator.free(msg);
     }
 
     self.container.metricz.publisherTotal(.{ .topic = self.getTopicName(topic) }) catch |e| std.debug.print("kafka publisherTotal metric failed: {}\n", .{e});
@@ -242,7 +248,7 @@ pub fn publishOnSubject(self: *Self, subject: []const u8, payload: []const u8) !
         self.container.log.any(err);
         return;
     };
-    defer self.destroryChildAllocator(ca);
+    defer self.destroyChildAllocator(ca);
 
     // A valid, non-socket response for the subscriber/handler Context (audit #15):
     // `_res` is an undefined `*httpz.Response` and a hook touching it is UB.
@@ -286,7 +292,7 @@ fn prepareChildAllocator(self: *Self) !*arena {
     return ca;
 }
 
-fn destroryChildAllocator(self: *Self, ca: *arena) void {
+fn destroyChildAllocator(self: *Self, ca: *arena) void {
     const caPtr: *arena = @ptrCast(@alignCast(ca.allocator().ptr));
     caPtr.deinit();
 
@@ -394,7 +400,7 @@ fn subscriptions(self: *Self) !void {
                 self.container.log.Any(self.container.allocator, err);
                 continue;
             };
-            defer self.destroryChildAllocator(ca);
+            defer self.destroyChildAllocator(ca);
 
             const res = root.context.makeSyntheticResponse(ca.allocator()) catch |err| {
                 self.container.log.Any(self.container.allocator, err);
@@ -471,6 +477,7 @@ pub fn addSubscriber(self: *Self, topic: []const u8, hook: *const fn (*root.Cont
             return;
         };
         self.container.log.info(msg);
+        self.container.allocator.free(msg);
     }
 
     for (topics) |topic_name| {
@@ -484,7 +491,7 @@ pub fn addSubscriber(self: *Self, topic: []const u8, hook: *const fn (*root.Cont
         .exec = hook,
     };
 
-    self.mu.lock(self.container.io) catch {};
+    self.mu.lockUncancelable(self.container.io);
     try self.subscriber.append(s);
     self.mu.unlock(self.container.io);
 
@@ -498,6 +505,7 @@ pub fn addSubscriber(self: *Self, topic: []const u8, hook: *const fn (*root.Cont
     };
 
     self.container.log.info(msg);
+    self.container.allocator.free(msg);
 }
 
 inline fn getTopicName(_: *Self, topic: *kafkaTopic) []const u8 {

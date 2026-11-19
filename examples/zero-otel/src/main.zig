@@ -5,7 +5,7 @@ const App = zero.App;
 const Context = zero.Context;
 
 // Route every std.log call through zero's custom sink, which mirrors each record
-// into OpenTelemetry logs when otel_experimental=true.
+// into OpenTelemetry logs when an OTLP exporter endpoint is configured.
 pub const std_options: std.Options = .{
     .logFn = zero.logger.custom,
 };

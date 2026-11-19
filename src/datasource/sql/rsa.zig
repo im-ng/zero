@@ -468,7 +468,7 @@ test "rsa: encryptOaep rejects oversized message" {
     const alloc = std.testing.allocator;
     const key = Key{ .n = &testN, .e = &testE };
     // k - 2h - 2 = 256 - 40 - 2 = 214 usable bytes
-    const too_big = [_]u8{0} ** 215;
+    const too_big = @as([215]u8, @splat(0));
     const seed: [hashLen]u8 = undefined;
     try std.testing.expectError(Error.MessageTooLong, encryptOaep(alloc, key, &too_big, seed));
 }

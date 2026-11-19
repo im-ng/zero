@@ -115,7 +115,7 @@ last_refresh_ok: bool = true,
 
 pub fn create(c: *root.container, m: AuthMode) anyerror!*AuthProvider {
     const auth = try c.allocator.create(AuthProvider);
-    errdefer c.allocator.destroy(c);
+    errdefer c.allocator.destroy(auth);
     auth.* = .{ .container = c, .mode = m };
     return auth;
 }
@@ -168,19 +168,13 @@ pub fn validateBasicAuth(self: *Self, allocator: std.mem.Allocator, authHeader: 
     defer allocator.free(decoded);
     try Decoder.decode(decoded, token);
 
-    var values = std.mem.splitAny(u8, decoded, ":");
-    var headerKey: []const u8 = undefined;
-    var headerPassword: []const u8 = undefined;
-
-    var index: i8 = 0;
-    while (values.next()) |value| {
-        if (index == 1) {
-            headerPassword = value;
-            break;
-        }
-        headerKey = value;
-        index += 1;
-    }
+    // Split on the FIRST colon only: everything after it is the password, so a
+    // password may itself contain colons. Without a colon the credential is
+    // malformed — reject instead of reading an undefined `headerPassword`.
+    const colon = std.mem.indexOfScalar(u8, decoded, ':') orelse
+        return AuthError.InvalidCredentials;
+    const headerKey = decoded[0..colon];
+    const headerPassword = decoded[colon + 1 ..];
 
     // Static (in-memory) keys map is the first authority.
     if (self.keys.contains(headerKey)) {
@@ -217,12 +211,21 @@ pub fn validateAPIKeyAuth(self: *Self, allocator: std.mem.Allocator, authHeader:
         return;
     }
 
-    // KV augmentation: a key absent from the static map is still valid if it
-    // exists in the configured KV store (e.g. Redis).
+    // KV augmentation: a key absent from the static map is valid only when the
+    // stored credential equals the presented token. Compare in constant time,
+    // as the Basic-auth path does, so a stored value that is merely present —
+    // but does not match — cannot authenticate. This keeps the KV contract
+    // consistent with static map: the credential itself authorizes, not an
+    // existence check.
     if (ctx) |c| {
         if (self.kvLookup(c, "auth:apikey:", token)) |stored| {
-            allocator.free(stored);
-            return;
+            defer allocator.free(stored);
+            if (constTimeEql(stored, token)) {
+                return;
+            }
+            // A present-but-mismatched value is an invalid key, same as an
+            // unknown one — do not distinguish them to the caller.
+            return AuthError.InvalidAuthAPIHeader;
         }
     }
 
@@ -405,8 +408,29 @@ pub fn retrieveClaims(_: *Self, allocator: std.mem.Allocator, authHeader: []cons
     };
     defer claims.deinit();
 
-    // return jwtClaims{ .aud = "", .exp = 0, .iat = 0, .iss = "", .jti = "", .nbf = 0, .sub = "" };
-    return claims.value;
+    // The claim strings live inside `jwtTokenizer`'s internal arena, which
+    // `jwtTokenizer.deinit()` frees. Returning `claims.value` directly would hand
+    // the caller slices into freed memory (use-after-free). Dup each present
+    // string field into `allocator` (the request arena in RBAC/request paths) so
+    // the returned struct stays valid after the arena is released. Callers own
+    // the duped slices.
+    var result: jwtClaims = .{};
+    if (claims.value.iss) |v| {
+        result.iss = try allocator.dupe(u8, v);
+    }
+    if (claims.value.aud) |v| {
+        result.aud = try allocator.dupe(u8, v);
+    }
+    if (claims.value.sub) |v| {
+        result.sub = try allocator.dupe(u8, v);
+    }
+    if (claims.value.jti) |v| {
+        result.jti = try allocator.dupe(u8, v);
+    }
+    if (claims.value.role.len > 0) {
+        result.role = try allocator.dupe(u8, claims.value.role);
+    }
+    return result;
 }
 
 pub fn refreshKeys(ctx: *Context) !void {
@@ -497,7 +521,7 @@ pub fn refreshKeys(ctx: *Context) !void {
                 return e;
             },
         };
-        ap.mutex.lock(ctx.io) catch {};
+        ap.mutex.lockUncancelable(ctx.io);
         // Replace any prior copy for this kid and free the old one to avoid leak.
         if (ap.pubKeys.fetchRemove(key.kid)) |old| {
             freePubKey(ctx.container.bootstrap, old.value);
@@ -585,7 +609,10 @@ test "validateBasicAuth rejects wrong password" {
     const header = try std.fmt.allocPrint(allocator, "Basic {s}", .{enc});
     defer allocator.free(header);
 
-    try std.testing.expectError(AuthError.InvalidCredentials, auth.validateBasicAuth(allocator, header, null));
+    try std.testing.expectError(
+        AuthError.InvalidCredentials,
+        auth.validateBasicAuth(allocator, header, null),
+    );
 }
 
 test "validateBasicAuth accepts correct password" {
@@ -606,6 +633,127 @@ test "validateBasicAuth accepts correct password" {
     defer allocator.free(header);
 
     try auth.validateBasicAuth(allocator, header, null);
+}
+
+test "validateBasicAuth accepts password containing colons" {
+    const allocator = std.testing.allocator;
+    var keys = std.StringHashMap([]const u8).init(allocator);
+    defer keys.deinit();
+    // The stored password itself contains colons; only the FIRST colon in the
+    // decoded credential separates user from password.
+    try keys.put("user", "pass:with:colons");
+
+    var auth = AuthProvider{
+        .mode = AuthMode.Basic,
+        .container = undefined,
+        .keys = keys,
+    };
+
+    var buf: [64]u8 = undefined;
+    const enc = std.base64.standard.Encoder.encode(&buf, "user:pass:with:colons");
+    const header = try std.fmt.allocPrint(allocator, "Basic {s}", .{enc});
+    defer allocator.free(header);
+
+    try auth.validateBasicAuth(allocator, header, null);
+}
+
+test "validateBasicAuth rejects credential without colon" {
+    const allocator = std.testing.allocator;
+    var keys = std.StringHashMap([]const u8).init(allocator);
+    defer keys.deinit();
+    try keys.put("user", "whatever");
+
+    var auth = AuthProvider{
+        .mode = AuthMode.Basic,
+        .container = undefined,
+        .keys = keys,
+    };
+
+    var buf: [64]u8 = undefined;
+    // No colon means there is no password segment at all. The old code left
+    // `headerPassword` undefined and compared against garbage; it must now
+    // fail cleanly instead of depending on undefined memory.
+    const enc = std.base64.standard.Encoder.encode(&buf, "user");
+    const header = try std.fmt.allocPrint(allocator, "Basic {s}", .{enc});
+    defer allocator.free(header);
+
+    try std.testing.expectError(
+        AuthError.InvalidCredentials,
+        auth.validateBasicAuth(allocator, header, null),
+    );
+}
+
+test "validateBasicAuth accepts empty password" {
+    const allocator = std.testing.allocator;
+    var keys = std.StringHashMap([]const u8).init(allocator);
+    defer keys.deinit();
+    // An empty stored password is a legitimate (if weak) credential; the
+    // trailing colon yields an empty password slice, not an undefined one.
+    try keys.put("user", "");
+
+    var auth = AuthProvider{
+        .mode = AuthMode.Basic,
+        .container = undefined,
+        .keys = keys,
+    };
+
+    var buf: [64]u8 = undefined;
+    const enc = std.base64.standard.Encoder.encode(&buf, "user:");
+    const header = try std.fmt.allocPrint(allocator, "Basic {s}", .{enc});
+    defer allocator.free(header);
+
+    try auth.validateBasicAuth(allocator, header, null);
+}
+
+test "validateAPIKeyAuth KV accepts matching stored value" {
+    const allocator = std.testing.allocator;
+    var c = root.container{ .allocator = allocator };
+    const mem = try root.kvstore.memory.KVMemory.create(allocator);
+    const kv = try allocator.create(root.KVStore);
+    kv.* = root.KVStore.init(mem, .memory, null);
+    c.defaultKV = kv;
+    defer kv.deinit(allocator); // frees the memory backend and the wrapper
+
+    var ctx: root.Context = .{ .allocator = allocator, .container = &c };
+    // The KV contract is that the stored credential equals the presented token.
+    try kv.set(&ctx, "auth:apikey:my-token", "my-token");
+
+    var keys = std.StringHashMap([]const u8).init(allocator);
+    defer keys.deinit();
+    var auth = AuthProvider{
+        .mode = AuthMode.APIKey,
+        .container = &c,
+        .keys = keys,
+    };
+
+    try auth.validateAPIKeyAuth(allocator, "my-token", &ctx);
+}
+
+test "validateAPIKeyAuth KV rejects mismatched stored value" {
+    const allocator = std.testing.allocator;
+    var c = root.container{ .allocator = allocator };
+    const mem = try root.kvstore.memory.KVMemory.create(allocator);
+    const kv = try allocator.create(root.KVStore);
+    kv.* = root.KVStore.init(mem, .memory, null);
+    c.defaultKV = kv;
+    defer kv.deinit(allocator);
+
+    var ctx: root.Context = .{ .allocator = allocator, .container = &c };
+    // A present key whose value does not match the token must NOT authenticate.
+    try kv.set(&ctx, "auth:apikey:my-token", "some-other-value");
+
+    var keys = std.StringHashMap([]const u8).init(allocator);
+    defer keys.deinit();
+    var auth = AuthProvider{
+        .mode = AuthMode.APIKey,
+        .container = &c,
+        .keys = keys,
+    };
+
+    try std.testing.expectError(
+        AuthError.InvalidAuthAPIHeader,
+        auth.validateAPIKeyAuth(allocator, "my-token", &ctx),
+    );
 }
 
 test "retrieveUserName strips Basic prefix and decodes user" {
@@ -677,7 +825,6 @@ test "validateAPIKeyAuth rejects unknown bare key" {
 }
 
 // --- OAuth `aud` / `iss` / expiry enforcement -------------------------------
-//
 // `validateOAuthToken` checks the `kid`, `exp`, `nbf`, `aud` and `iss` claims
 // but (by design) does not cryptographically verify the RSA signature — the
 // signature is trusted once the `kid` resolves to a configured JWKS key. So we

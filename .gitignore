@@ -13,9 +13,13 @@ zig-out
 zig-pkg/
 
 # custom
+*.db
+*.db.wal
 /tmp
 /helm
 /tls
+bench/k6/report.html
+bench/k6/report.json
 
 .vscode/
 .DS_Store
@@ -27,15 +31,8 @@ config.md
 introduction.md
 
 # AI assistance
-.zig-cache/
 spec/
-spec.md
-recommendation.md
-session*.md
 .opencode/
-hallucinations/
 sessions/
-soak/
-kcov-src/
 libs/
 guides/

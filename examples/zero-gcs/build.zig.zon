@@ -1,0 +1,14 @@
+.{
+    .name = .zerogcs,
+    .version = "0.0.1",
+    .fingerprint = 0x8232cd2dd1d0a1bb,
+    .minimum_zig_version = "0.16.0",
+    .dependencies = .{
+        .zero = .{ .path = "../../." },
+    },
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "src",
+    },
+}

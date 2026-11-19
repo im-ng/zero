@@ -31,7 +31,6 @@ transaction_conn: ?*pgz.Conn = null,
 /// Per-statement timeout (ms) applied to every query/exec. null = no timeout.
 statement_timeout_ms: ?u32 = constants.DEFAULT_STATEMENT_TIMEOUT_MS,
 
-// is this neccessary?
 pub const dbConfig = struct {
     databaseName: []const u8 = undefined,
     hostname: []const u8 = undefined,
@@ -87,14 +86,15 @@ pub fn Dialect(self: *Self) []const u8 {
 }
 
 pub fn recordMetrics(self: *Self, duration: f32, query: []const u8, queryType: []const u8) void {
+    // Raw SQL text is unbounded: one series per query shape. It is never a
+    // label. The operation is a small fixed set and is the useful dimension.
     _ = query;
-    _ = queryType;
-    self.*.metricz.sqlResponse(
+    self.metricz.sqlResponse(
         .{
             .hostname = "",
             .database = "",
             .query = "",
-            .operation = "",
+            .operation = queryType,
         },
         duration,
         // Metrics emission must never fail a request; a dropped sample is acceptable.

@@ -33,7 +33,7 @@ test "datasource sqlite backend integration" {
 
     const log = try root.logger.create(allocator);
     defer allocator.destroy(log);
-    const m = try root.metricz.initialize(allocator, .{ .prefix = "", .exclude = null });
+    const m = try root.metricz.initialize(allocator, .{ .prefix = "", .exclude = null }, null);
     defer allocator.destroy(m);
 
     const sqlite = try root.SQLite.init(allocator, ":memory:", true, true, root.sqlitez.ThreadingMode.MultiThread, log, m);
@@ -90,6 +90,56 @@ test "datasource sqlite backend integration" {
     try std.testing.expectEqual(@as(usize, 1), ds.rowsAffected());
 }
 
+// Cross-dialect parity baseline for pagination (LIMIT/OFFSET) and upsert. These
+// statements are valid on both SQLite and Postgres; MySQL's upsert spelling
+// (`INSERT ... ON DUPLICATE KEY UPDATE`) is a documented gap. Kept in the
+// integration build because it drives the real sqlite driver.
+test "datasource sql parity: limit/offset and upsert" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+
+    const log = try root.logger.create(allocator);
+    defer allocator.destroy(log);
+    const m = try root.metricz.initialize(allocator, .{ .prefix = "", .exclude = null }, null);
+    defer allocator.destroy(m);
+
+    const sqlite = try root.SQLite.init(allocator, ":memory:", true, true, root.sqlitez.ThreadingMode.MultiThread, log, m);
+    defer {
+        sqlite.db.deinit();
+        allocator.destroy(sqlite);
+    }
+
+    var ds = root.Datasource.init(sqlite, .sqlite, null, null);
+    var ctx_storage: root.Context = undefined;
+    ctx_storage.allocator = allocator;
+    const ctx = &ctx_storage;
+
+    _ = try ds.exec(ctx, "CREATE TABLE IF NOT EXISTS item (id INTEGER PRIMARY KEY, v INTEGER NOT NULL)", .{});
+    _ = try ds.exec(ctx, "INSERT INTO item (id, v) VALUES (?, ?)", .{ @as(i64, 1), @as(i64, 10) });
+    _ = try ds.exec(ctx, "INSERT INTO item (id, v) VALUES (?, ?)", .{ @as(i64, 2), @as(i64, 20) });
+    _ = try ds.exec(ctx, "INSERT INTO item (id, v) VALUES (?, ?)", .{ @as(i64, 3), @as(i64, 30) });
+
+    const Item = struct { id: i64, v: i64 };
+
+    // LIMIT / OFFSET pagination must behave identically across dialects.
+    const page1 = try ds.queryRows(ctx, Item, "SELECT id, v FROM item ORDER BY id LIMIT ? OFFSET ?", .{ @as(i64, 2), @as(i64, 0) });
+    defer allocator.free(page1);
+    try std.testing.expectEqual(@as(usize, 2), page1.len);
+    try std.testing.expectEqual(@as(i64, 1), page1[0].id);
+
+    const page2 = try ds.queryRows(ctx, Item, "SELECT id, v FROM item ORDER BY id LIMIT ? OFFSET ?", .{ @as(i64, 2), @as(i64, 2) });
+    defer allocator.free(page2);
+    try std.testing.expectEqual(@as(usize, 1), page2.len);
+    try std.testing.expectEqual(@as(i64, 3), page2[0].id);
+
+    // Upsert parity: `ON CONFLICT(id) DO UPDATE SET v = excluded.v` is SQLite
+    // and Postgres compatible (MySQL differs — see docs/DATASOURCE_PARITY.md).
+    _ = try ds.exec(ctx, "INSERT INTO item (id, v) VALUES (?, ?) ON CONFLICT(id) DO UPDATE SET v = excluded.v", .{ @as(i64, 2), @as(i64, 99) });
+    const updated = try ds.queryRow(ctx, Item, "SELECT id, v FROM item WHERE id = ?", .{@as(i64, 2)});
+    try std.testing.expectEqual(@as(i64, 99), updated.?.v);
+}
+
 test "datasource postgres backend integration" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
@@ -127,7 +177,7 @@ test "datasource postgres backend integration" {
 
     const log = try root.logger.create(allocator);
     defer allocator.destroy(log);
-    const m = try root.metricz.initialize(allocator, .{ .prefix = "", .exclude = null });
+    const m = try root.metricz.initialize(allocator, .{ .prefix = "", .exclude = null }, null);
     defer allocator.destroy(m);
 
     var cfg: root.SQL.dbConfig = .{};
@@ -171,7 +221,6 @@ test "datasource postgres backend integration" {
 // concurrent transactions no longer share a single `transaction_conn` /
 // `lastId`. If the sessions weren't isolated, concurrent `begin()` calls would
 // clobber each other's pinned connection and the final counter would be wrong.
-//
 // Gated on `DB_HOST`; skips cleanly when no Postgres is configured.
 test "datasource postgres concurrent transactions isolation" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
@@ -207,7 +256,7 @@ test "datasource postgres concurrent transactions isolation" {
 
     const log = try root.logger.create(allocator);
     defer allocator.destroy(log);
-    const m = try root.metricz.initialize(allocator, .{ .prefix = "", .exclude = null });
+    const m = try root.metricz.initialize(allocator, .{ .prefix = "", .exclude = null }, null);
     defer allocator.destroy(m);
 
     var cfg: root.SQL.dbConfig = .{};
@@ -302,10 +351,14 @@ test "redis kvstore concurrent set/get (mutex serialization)" {
         return;
     };
 
-    var kr: KVRedis = .{ .client = client };
+    // KVRedis now shares the container's `rdz` socket + mutex,
+    // so build a heap `rdz` wrapping the raw client and point KVRedis at it.
+    const rz = try root.rdz.create(allocator);
+    rz.client = client;
+    var kr: KVRedis = .{ .rdz = rz };
 
     // Verify reachability before spawning workers.
-    _ = kr.client.sendAlloc([]u8, allocator, .{"ping"}) catch {
+    _ = kr.rdz.client.sendAlloc([]u8, allocator, .{"ping"}) catch {
         std.debug.print("redis ping failed, skipping redis concurrency test\n", .{});
         return;
     };
@@ -432,4 +485,55 @@ test "mysql pool, ssl and transaction integration" {
     try std.testing.expect(pinned == first);
     _ = try pinned.exec("SELECT 1", .{});
     try pool.commit();
+}
+
+// Security regression: a value containing a backslash and a quote must round
+// trip exactly, and the trailing SQL in an injection attempt must stay inside
+// the string literal. The unit tests in mysql.zig cover the escaping function;
+// this drives the real server with the session mode it actually negotiated.
+test "mysql escaping round-trip with real server" {
+    if (envGet("MYSQL_TEST") == null) {
+        std.debug.print("MYSQL_TEST not set, skipping mysql escaping test\n", .{});
+        return;
+    }
+    const allocator = std.testing.allocator;
+
+    const host = envGet("MYSQL_HOST") orelse "127.0.0.1";
+    const port = std.fmt.parseInt(u16, envGet("MYSQL_PORT") orelse "3306", 10) catch 3306;
+    const user = envGet("MYSQL_USER") orelse "root";
+    const password = envGet("MYSQL_PASSWORD") orelse "";
+    const db = envGet("MYSQL_NAME") orelse "mysql";
+
+    const pool = try root.MySQL.create(allocator, root.utils.io, .{
+        .host = host,
+        .port = port,
+        .user = user,
+        .password = password,
+        .database = db,
+        .ssl_mode = .disabled,
+        .max = 2,
+    });
+    defer pool.deinit();
+
+    const conn = pool.acquireConn() catch {
+        std.debug.print("mysql not reachable, skipping mysql escaping test\n", .{});
+        return;
+    };
+    defer pool.releaseConn(conn);
+
+    _ = try conn.exec("DROP TABLE IF EXISTS zero_escape_probe", .{});
+    defer _ = conn.exec("DROP TABLE IF EXISTS zero_escape_probe", .{}) catch {};
+    _ = try conn.exec(
+        "CREATE TABLE zero_escape_probe (id INT PRIMARY KEY AUTO_INCREMENT, val VARCHAR(255))",
+        .{},
+    );
+
+    const payload = "a\\'; DROP TABLE zero_escape_probe; -- ";
+    _ = try conn.exec("INSERT INTO zero_escape_probe (val) VALUES (?)", .{payload});
+
+    const Row = struct { val: []const u8 };
+    const rows = try conn.queryRows(Row, "SELECT val FROM zero_escape_probe", .{});
+    defer allocator.free(rows);
+    try std.testing.expectEqual(@as(usize, 1), rows.len);
+    try std.testing.expectEqualStrings(payload, rows[0].val);
 }

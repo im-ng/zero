@@ -1,5 +1,6 @@
 const std = @import("std");
 const root = @import("zero.zig");
+const build_options = @import("build_options");
 const EnvMap = std.process.Environ.Map;
 
 const App = @This();
@@ -15,6 +16,7 @@ const Cronz = root.cronz;
 const AuthProvider = root.AuthProvider;
 const favoriteIcon = root.favIcon;
 const otel = root.otel;
+const outbox = root.outbox;
 const wsclient = @import("wsclient.zig");
 
 /// Signature for a CLI subcommand handler. The handler uses `ctx` to access
@@ -48,7 +50,8 @@ pub const swaggerUIJs = root.swaggerUIJs;
 
 envMap: *EnvMap = undefined,
 log: *root.logger = undefined,
-/// OpenTelemetry provider. Inert unless `OTEL_EXPERIMENTAL=true` is set in config.
+/// OpenTelemetry provider. Inert unless an OTLP exporter endpoint is configured
+/// (`OTEL_EXPORTER_OTLP_ENDPOINT` or a per-signal endpoint). See src/otel.zig.
 otelProvider: otel.Provider = .{ .enabled = false },
 config: *root.config = undefined,
 container: *root.container = undefined,
@@ -74,9 +77,10 @@ bootstrap_fba: std.heap.FixedBufferAllocator = undefined,
 bootstrap_allocator: std.mem.Allocator = undefined,
 bootstrap_backing: []u8 = undefined,
 
-var hServer: ?*root.httpServer = undefined;
-pub var shutdown_requested: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
-var AppInstance: *Self = undefined;
+/// Only the shutdown flag lives at module scope. A C signal handler cannot
+/// capture a context, so this atomic store is the sole operation it performs.
+/// All teardown runs on the main thread in `run()` after the flag is observed.
+var shutdown_requested: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
 
 /// Shared setup for both HTTP (`new`) and CLI (`newCmd`) applications: config,
 /// logging, the bootstrap arena, container/datasources, migrations, and
@@ -128,12 +132,16 @@ fn initBase(allocator: std.mem.Allocator, io: std.Io, em: *EnvMap) !*App {
     app.bootstrap_fba = std.heap.FixedBufferAllocator.init(backing);
     const bootstrap_alloc = app.bootstrap_fba.allocator();
 
-    // OpenTelemetry: opt-in via otel_experimental=true. When off, the provider is
-    // inert (no SDK objects, no background threads). See src/otel.zig. Accept both
-    // the lowercase config key and the uppercase OTEL_EXPERIMENTAL env convention.
+    // OpenTelemetry: enabled when an OTLP exporter endpoint is configured
+    // (OTEL_EXPORTER_OTLP_ENDPOINT, or the per-signal *_TRACES_ENDPOINT /
+    // *_LOGS_ENDPOINT). With no endpoint the provider is inert (no SDK objects,
+    // no background threads) — see src/otel.zig. Honors the OTEL_* env/`.env`
+    // conventions the SDK itself reads.
     const otel_enabled = blk: {
-        const a = config.getOrDefault("OTEL_EXPERIMENTAL", "false");
-        break :blk std.mem.eql(u8, a, "true");
+        if (config.getOrDefault("OTEL_EXPORTER_OTLP_ENDPOINT", "").len > 0) break :blk true;
+        if (config.getOrDefault("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT", "").len > 0) break :blk true;
+        if (config.getOrDefault("OTEL_EXPORTER_OTLP_LOGS_ENDPOINT", "").len > 0) break :blk true;
+        break :blk false;
     };
 
     // NOTE: the OTel provider deliberately uses the general `allocator`, NOT the
@@ -188,7 +196,9 @@ fn initBase(allocator: std.mem.Allocator, io: std.Io, em: *EnvMap) !*App {
     try checkRequiredConfigKeys(allocator, config, log);
 
     try app.printPid();
-    AppInstance = app;
+
+    // A second App in the same process must not inherit a previous shutdown.
+    shutdown_requested.store(false, .monotonic);
 
     return app;
 }
@@ -216,6 +226,7 @@ fn checkRequiredConfigKeys(allocator: std.mem.Allocator, config: *root.config, l
         if (trimmed.len == 0) continue;
         if (config.get(trimmed).len == 0) {
             const msg = try utils.combine(allocator, "required config key missing or empty: {s}", .{trimmed});
+            defer allocator.free(msg);
             log.err(msg);
             return error.MissingRequiredConfig;
         }
@@ -235,8 +246,6 @@ pub fn new(allocator: std.mem.Allocator, io: std.Io, em: *EnvMap) !*App {
         error.OutOfMemory => return error.BootstrapArenaExhausted,
         else => return e,
     };
-    hServer = app.httpServer;
-
     // register auth provider refresher job
     try app.addOAuthKeyRefresher();
 
@@ -274,22 +283,14 @@ pub fn destroy(self: *Self) void {
     if (self.cronz) |cronz| {
         cronz.destroy();
     }
-    if (self.container.Nats) |n| {
-        n.destroy();
-    }
-    if (self.container.mqtt) |pb| {
-        pb.destroy();
-    }
-    if (self.container.Kakfa) |k| {
-        k.destroy();
-    }
-
+    // Nats / mqtt / Kafka are torn down by `container.destroy()` below, which is
+    // their single owner. Destroying them here too double-frees the same structs
     self.migrations.deinit();
     self.subcommands.deinit();
     self.container.destroy();
 
     // Flush any in-flight OpenTelemetry spans/metrics and stop its background
-    // exporters before the process exits. No-op when OTEL_EXPERIMENTAL is off.
+    // exporters before the process exits. No-op when OTel is disabled (no endpoint).
     self.otelProvider.shutdown();
 
     // All framework subsystems are torn down; release the bootstrap arena.
@@ -632,16 +633,28 @@ pub fn run(self: *Self) !void {
     // try self.startMetricsServer();
     try self.startMetricsServer();
 
+    // Health snapshot refresher. Runs the registered checks on its
+    // own thread and publishes them for `GET /.well-known/health` so a hung
+    // dependency can't wedge the probe. No-op when HEALTH_SNAPSHOT_REFRESH_MS=0.
+    self.container.startHealthRefresher();
+
     const http_thread = try self.prepareHttpServer();
 
     // HTTP server is now listening — signal the startup probe as ready.
     self.container.started.store(true, .monotonic);
 
-    // Bounded graceful-shutdown drain: wait for a shutdown signal, then give
-    // in-flight requests up to SHUTDOWN_DRAIN_TIMEOUT_MS to finish before
-    // tearing the server down, so an in-progress request is not abruptly cut.
-    // (Worker-side draining of the connection is the remaining httpz fork
-    // patch; this bound guarantees shutdown can never hang.)
+    // Graceful shutdown (bounded drain):
+    //   1. The signal handler only sets `shutdown_requested`. On seeing it, this
+    //      thread stops the HTTP server and the cron scheduler. No teardown runs
+    //      in the signal handler itself: logging and thread joins are not
+    //      async-signal-safe.
+    //   2. In-flight requests (handler.in_flight) get up to
+    //      SHUTDOWN_DRAIN_TIMEOUT_MS to finish; default 10s. No new requests are
+    //      accepted in this window.
+    //   3. After the timeout any request still in flight is cut and the server
+    //      is torn down. Worker-side keep-alive connection draining is NOT
+    //      implemented in the bundled httpz fork, so idle keep-alive
+    //      connections are closed at teardown rather than flushed.
     const drain_timeout_ms: u64 = blk: {
         const v = self.container.config.getAsInt("SHUTDOWN_DRAIN_TIMEOUT_MS") catch 0;
         break :blk if (v == 0) 10_000 else @as(u64, v);
@@ -649,14 +662,26 @@ pub fn run(self: *Self) !void {
     while (!shutdown_requested.load(.monotonic)) {
         std.Io.sleep(utils.io, std.Io.Duration.fromMilliseconds(100), .awake) catch {};
     }
+
+    // Stop accepting and stop scheduling from the main thread. Both are atomic
+    // flag stores or ordinary joins; neither is safe from a C signal handler.
+    self.httpServer.shutdown();
+    if (self.cronz) |c| {
+        c.stop();
+    }
+
     var waited: u64 = 0;
-    while (hServer.?.handler.in_flight.load(.monotonic) > 0 and waited < drain_timeout_ms) {
+    while (self.httpServer.handler.in_flight.load(.monotonic) > 0 and waited < drain_timeout_ms) {
         std.Io.sleep(utils.io, std.Io.Duration.fromMilliseconds(50), .awake) catch {};
         waited += 50;
     }
-    if (hServer.?.handler.in_flight.load(.monotonic) > 0) {
+    if (self.httpServer.handler.in_flight.load(.monotonic) > 0) {
         var buf: [128]u8 = undefined;
-        const msg = std.fmt.bufPrint(&buf, "shutdown drain timed out after {d}ms with {d} in-flight requests; forcing close", .{ drain_timeout_ms, hServer.?.handler.in_flight.load(.monotonic) }) catch "shutdown drain timed out; forcing close";
+        const msg = std.fmt.bufPrint(
+            &buf,
+            "shutdown drain timed out after {d}ms with {d} in-flight requests; forcing close",
+            .{ drain_timeout_ms, self.httpServer.handler.in_flight.load(.monotonic) },
+        ) catch "shutdown drain timed out; forcing close";
         self.container.log.warn(msg);
     }
 
@@ -669,6 +694,10 @@ pub fn run(self: *Self) !void {
     self.httpServer.http.deinit();
     self.allocator.destroy(self.httpServer);
 
+    // Stop the health-refresher thread and join it before the container is freed;
+    // the loop reads container fields, so freeing first would be a use-after-free.
+    self.container.stopHealthRefresher();
+
     self.destroy();
 }
 
@@ -678,10 +707,12 @@ fn startPubSubSubscriptions(self: Self) !void {
         try pubsub.startSubscription();
     }
 
-    if (self.container.Kakfa) |k| {
-        if (k.kafkaMode == root.rdkafka.RD_KAFKA_CONSUMER) {
-            self.container.log.info("starting kafka subscriptions");
-            try k.startSubscription();
+    if (comptime build_options.kafka) {
+        if (self.container.Kafka) |k| {
+            if (k.kafkaMode == root.rdkafka.RD_KAFKA_CONSUMER) {
+                self.container.log.info("starting kafka subscriptions");
+                try k.startSubscription();
+            }
         }
     }
 
@@ -713,30 +744,19 @@ fn startShutdownHandler(_: Self) !void {
 }
 
 fn shutdown(_: std.c.SIG) callconv(.c) void {
-    // Signal shutdown only. Joining threads / tearing down from a signal
-    // handler is undefined behavior (can deadlock), so we just stop the
-    // scheduler loop and stop the http server. The actual thread join for
-    // cronz happens later in run() once the server thread exits.
+    // An atomic store is the only operation that is safe here. Logging,
+    // stopping the listener and joining threads all allocate or take locks;
+    // `run()` performs them once it observes this flag.
     shutdown_requested.store(true, .monotonic);
-
-    if (AppInstance.cronz) |cronz| {
-        cronz.stop();
-        AppInstance.log.info("cleaning running cronz");
-    }
-
-    if (hServer) |h| {
-        h.shutdown();
-    }
 }
 
-pub fn shutdownApp(_: Self) void {
-    if (AppInstance.cronz) |cronz| {
-        cronz.destroy();
-        AppInstance.log.info("cleaning running cronz");
-    }
-
-    if (hServer) |h| {
-        h.shutdown();
+/// Programmatic shutdown for an embedder. Runs on a normal thread, so ordinary
+/// teardown is allowed. If `run()` is active it observes the flag and stops the
+/// HTTP listener; a CLI app has no listener to stop.
+pub fn shutdownApp(self: *Self) void {
+    shutdown_requested.store(true, .monotonic);
+    if (self.cronz) |cronz| {
+        cronz.stop();
     }
 }
 
@@ -967,21 +987,47 @@ pub fn health(ctx: *Context) !void {
     var components = std.json.ObjectMap.empty;
     defer components.deinit(ctx.allocator);
 
-    // Run user-registered health checks; any failure flips the overall status.
-    // Each check is bounded so a hung dependency can't block the probe forever.
-    const check_timeout_ms: u32 = ctx.container.config.getAsInt("HEALTH_CHECK_TIMEOUT_MS") catch constants.DEFAULT_HEALTH_CHECK_TIMEOUT_MS;
-    for (ctx.container.healthChecks.items) |*hc| {
-        if (ctx.container.runHealthCheckBounded(hc, check_timeout_ms)) {
-            try components.put(ctx.allocator, hc.name, std.json.Value{ .string = up });
-        } else {
-            all_up = false;
-            try components.put(ctx.allocator, hc.name, std.json.Value{ .string = down });
+    // A background refresher runs the registered checks off the request path and
+    // publishes them under the guard, so a hung dependency wedges only the
+    // refresher while this probe keeps answering from the last known state.
+    // Before the first cycle (or when the snapshot went stale) the checks are
+    // run inline once and republished, so the probe never serves a fake state.
+    const refresh_ms = ctx.container.health_refresh_ms;
+    if (refresh_ms > 0 and !ctx.container.healthSnapshotFresh(refresh_ms)) {
+        ctx.container.runAndPublishHealthChecks();
+    }
+    if (refresh_ms > 0) {
+        // A failed lock means a broken mutex, not contention; erroring out beats
+        // reading the slice unsynchronized.
+        ctx.container.health_snapshot_mu.lock(ctx.io) catch return;
+        defer ctx.container.health_snapshot_mu.unlock(ctx.io);
+        if (ctx.container.health_snapshot) |rows| {
+            for (rows) |row| {
+                if (row.up) {
+                    try components.put(ctx.allocator, row.name, std.json.Value{ .string = up });
+                } else {
+                    all_up = false;
+                    try components.put(ctx.allocator, row.name, std.json.Value{ .string = down });
+                }
+            }
+        }
+    } else {
+        // Snapshot mode disabled: run checks synchronously on this probe, as
+        // before. A hung check blocks this request (documented limitation).
+        for (ctx.container.healthChecks.items) |*hc| {
+            if (ctx.container.runHealthCheck(hc)) {
+                try components.put(ctx.allocator, hc.name, std.json.Value{ .string = up });
+            } else {
+                all_up = false;
+                try components.put(ctx.allocator, hc.name, std.json.Value{ .string = down });
+            }
         }
     }
 
     // Aggregate registered downstream HTTP services so the readiness probe also
-    // reflects their health. Each is probed with a bounded timeout; a failed
-    // probe flips the overall status but can't hang the readiness endpoint.
+    // reflects their health. Each is probed via its client; a failed probe
+    // (non-2xx or error) flips the overall status. These service pings still run
+    // synchronously and are not timeout-bounded.
     if (ctx.container.services) |svcs| {
         const svc_path = ctx.container.config.getOrDefault("HEALTH_CHECK_SERVICE_PATH", constants.HEALTH_PATH);
         var svc_iter = svcs.iterator();
@@ -1030,7 +1076,7 @@ pub fn startup(ctx: *Context) !void {
 /// `check` must return normally when the component is healthy and error
 /// otherwise; it receives the app `container` so it can probe datasources.
 pub fn addHealthCheck(self: Self, name: []const u8, check: *const fn (*root.container) anyerror!void) !void {
-    try self.container.healthChecks.append(.{ .name = name, .check = check });
+    try self.container.addHealthCheckEntry(name, check);
 }
 
 /// Loads RBAC rules from the `RBAC_CONFIG` env var, parsed as JSON in the
@@ -1174,6 +1220,17 @@ pub fn addCronJob(self: *Self, schedule: []const u8, name: []const u8, hook: fn 
     try self.cronz.?.addCron(schedule, name, hook);
 }
 
+/// Register an opt-in transactional outbox. Creates the outbox table lazily and
+/// starts a background cron poller that publishes pending rows to the configured
+/// pub/sub backend. See `src/outbox.zig` for the pattern.
+pub fn addOutbox(self: *Self, opts: outbox.Options) !void {
+    self.container.outbox_options = opts;
+    const step = if (opts.poll_interval_minutes == 0) 1 else opts.poll_interval_minutes;
+    var buf: [32]u8 = undefined;
+    const schedule = std.fmt.bufPrint(&buf, "*/{d} * * * * *", .{step}) catch "* * * * * *";
+    try self.addCronJob(schedule, "outbox-poll", outbox.outboxPoll);
+}
+
 pub fn addSubscription(self: *Self, topic: []const u8, hook: fn (*root.Context) anyerror!void) !void {
     if (self.container.pubsub == null) {
         self.container.log.err("pubsub is disabled, topic subscription is not available.");
@@ -1203,6 +1260,22 @@ pub fn addFileStore(self: *Self, name: []const u8, backend: root.filestore.Backe
     if (self.container.defaultFileStore == null) {
         self.container.defaultFileStore = store;
     }
+}
+
+/// Register a named SQL datasource. The default datasource (wired from
+/// `DB_*`/`SQL_*` config) is always available as `ctx.SQL`; this adds an
+/// additional named one reachable via `ctx.GetSQL(name)` — for example a second
+/// Postgres cluster or a DuckDB analytics store alongside the primary.
+pub fn addSQL(self: *Self, name: []const u8, ds: root.Datasource) !void {
+    try self.container.sqlStores.put(name, ds);
+}
+
+/// Register a named pub/sub backend. The default backend (wired from
+/// `PUBSUB_BACKEND`) is always available as `ctx.PubSub`; this adds an
+/// additional named one reachable via `ctx.GetPubSub(name)` (e.g. a second
+/// Kafka cluster or an MQTT broker alongside the primary).
+pub fn addPubSub(self: *Self, name: []const u8, ps: *root.PubSub) !void {
+    try self.container.pubSubBackends.put(name, ps);
 }
 
 /// Register the time-series datasource backend (influxdb). Exposed on the request
@@ -1256,6 +1329,7 @@ pub fn addClickhouse(self: *Self, url: []const u8, database: []const u8, opts: s
 }
 
 pub fn addDuckDB(self: *Self, path: []const u8) !void {
+    if (comptime !build_options.duckdb) return error.FeatureDisabled;
     const db = try root.DuckDB.create(self.container.allocator, path);
     self.container.DuckDB = db;
     self.container.datasource = root.Datasource.init(
@@ -1307,12 +1381,12 @@ pub fn addRestHandlers(self: *Self, comptime T: type, comptime opts: root.AutoCr
 }
 
 pub fn addKafkaSubscription(self: *Self, topic: []const u8, hook: fn (*root.Context) anyerror!void) !void {
-    if (self.container.Kakfa == null) {
+    if (self.container.Kafka == null) {
         self.container.log.err("pubsub is disabled, topic subscription is not available.");
         return;
     }
 
-    try self.container.Kakfa.?.addSubscriber(topic, hook);
+    try self.container.Kafka.?.addSubscriber(topic, hook);
 }
 
 pub fn addNatsSubscription(self: *Self, topic: []const u8, hook: fn (*root.Context) anyerror!void) !void {
@@ -1352,15 +1426,24 @@ pub fn addOAuthKeyRefresher(self: *Self) anyerror!void {
     if (self.httpServer.provider) |provider| {
         switch (provider.mode) {
             .OAuth => {
+                // Build the refresh cron schedule. A refresh interval under a minute
+                // becomes "*/N * * * * *" (every N seconds); under an hour becomes
+                // "0 */N * * * *" (every N minutes at second 0); an hour or more
+                // becomes "0 0 */N * * *" (every N hours). The old code emitted
+                // "0 <refresh/60> * * * *" which ran the job once an hour instead of
+                // every interval, and produced an invalid minute (>59) for intervals
+                // >= 3600
                 var schedule: []u8 = undefined;
                 if (provider.refreshInterval < 60) {
-                    schedule = try self.container.allocator.alloc(u8, 100);
-                    schedule = try std.fmt.bufPrint(schedule, "*/{d} * * * * *", .{provider.refreshInterval});
-                } else {
+                    schedule = try std.fmt.allocPrint(self.container.allocator, "*/{d} * * * * *", .{provider.refreshInterval});
+                } else if (provider.refreshInterval < 3600) {
                     const occurance: u16 = @as(u16, @intCast(provider.refreshInterval)) / 60;
-                    schedule = try self.container.allocator.alloc(u8, 100);
-                    schedule = try std.fmt.bufPrint(schedule, "0 {d} * * * *", .{occurance});
+                    schedule = try std.fmt.allocPrint(self.container.allocator, "0 */{d} * * * *", .{occurance});
+                } else {
+                    const occurance: u16 = @as(u16, @intCast(provider.refreshInterval)) / 3600;
+                    schedule = try std.fmt.allocPrint(self.container.allocator, "0 0 */{d} * * *", .{occurance});
                 }
+                defer self.container.allocator.free(schedule);
                 self.container.log.info(schedule);
 
                 //register http client
