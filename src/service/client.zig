@@ -32,9 +32,10 @@ pub const ServiceOptions = struct {
     auth: ?OutboundAuth = null,
     circuitBreaker: ?CircuitBreakerConfig = null,
     rateLimiter: ?RateLimiterConfig = null,
-    /// Per-request connect timeout (ms) for this downstream. Bounds how long the
-    /// outbound call waits to establish the TCP/TLS connection before failing.
-    /// `null` (default) means no connect timeout.
+    /// Reserved per-request timeout (ms) for this downstream. NOT YET ENFORCED:
+    /// the pinned zul client has no request-deadline hook, so a non-null value
+    /// currently only emits a startup warning. A stalled downstream still needs
+    /// a bound at the caller (bulkhead / circuit breaker).
     timeout_ms: ?u64 = null,
     /// Maximum number of additional attempts for transient failures (network
     /// errors and 5xx). 0 (default) = no retry.
@@ -65,7 +66,7 @@ auth: ?OutboundAuth = null,
 breaker: ?CircuitBreaker = null,
 /// Per-service fixed-window rate limiter (null = disabled).
 limiter: ?RateLimiter = null,
-/// Optional connect timeout (ms) applied to outbound requests to this service.
+/// Reserved timeout (ms); not enforced by the pinned zul client. See ServiceOptions.
 timeout_ms: ?u64 = null,
 /// Max additional attempts for transient failures (network errors + 5xx).
 max_retries: ?u32 = null,
@@ -120,6 +121,17 @@ pub fn createWithConfig(
         .limiter = if (opts.rateLimiter) |rl| RateLimiter.init(rl) else null,
         .oauth_breaker = CircuitBreaker.init(CircuitBreakerConfig{}),
     };
+
+    if (opts.timeout_ms != null) {
+        const msg = try std.fmt.allocPrint(
+            ct.allocator,
+            "service '{s}': timeout_ms is configured but the pinned zul client " ++
+                "has no request deadline; the option is not enforced",
+            .{service_name},
+        );
+        defer ct.allocator.free(msg);
+        ct.log.warn(msg);
+    }
 
     return c;
 }
@@ -655,7 +667,7 @@ fn createAndSendRequest(
             // Clear the cached token under the oauth mutex so concurrent requests
             // reading `self.oauth_token` in `ensureOAuthToken` can't dereference a
             // token we're about to free (use-after-free, audit #8).
-            self.oauth_mutex.lock(self.container.io) catch {};
+            self.oauth_mutex.lockUncancelable(self.container.io);
             if (self.oauth_token) |old| {
                 self.container.allocator.free(old);
             }
@@ -923,7 +935,7 @@ fn ensureOAuthToken(self: *Self) ![]const u8 {
     // Fast path: return a still-valid cached token. The mutex is held only long
     // enough to read the cache, never across the network.
     {
-        self.oauth_mutex.lock(self.container.io) catch {};
+        self.oauth_mutex.lockUncancelable(self.container.io);
         const now = utils.nowMonotonic().nanoseconds;
         if (self.oauth_token) |token| {
             // 5s skew baked into expires_at so we refresh slightly early.
@@ -938,7 +950,7 @@ fn ensureOAuthToken(self: *Self) ![]const u8 {
     const fetched = self.fetchOAuthToken() catch |e| {
         // Refresh failed: a concurrent refresh may have produced a valid token,
         // or we may have a stale one worth reusing. Re-check under the lock.
-        self.oauth_mutex.lock(self.container.io) catch {};
+        self.oauth_mutex.lockUncancelable(self.container.io);
         defer self.oauth_mutex.unlock(self.container.io);
         if (self.oauth_token) |token| {
             const now2 = utils.nowMonotonic().nanoseconds;
@@ -947,7 +959,7 @@ fn ensureOAuthToken(self: *Self) ![]const u8 {
         return e;
     };
 
-    self.oauth_mutex.lock(self.container.io) catch {};
+    self.oauth_mutex.lockUncancelable(self.container.io);
     defer self.oauth_mutex.unlock(self.container.io);
     const now3 = utils.nowMonotonic().nanoseconds;
     // Prefer a newer token a concurrent refresh may have already stored, and free

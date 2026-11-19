@@ -151,6 +151,12 @@ pub const KVMemory = struct {
             self.allocator.free(kv.value_ptr.*);
         }
         self.map.deinit();
+        // `set` keeps a separate duped key in `exp` so the two indexes free
+        // independently. Free those keys too or every entry leaks at teardown.
+        var exp_it = self.exp.iterator();
+        while (exp_it.next()) |e| {
+            self.allocator.free(e.key_ptr.*);
+        }
         self.exp.deinit();
         self.allocator.destroy(self);
     }

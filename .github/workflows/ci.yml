@@ -71,11 +71,17 @@ jobs:
           kcov --version
           more /etc/os-release
 
+      - name: Check formatting
+        run: zig fmt --check src/
+
       - name: Run tests with coverage
         run: |
           ls -alth /usr/local/lib
           mkdir -p ~/.cache/zig/tmp
           zig build test -Dcoverage --summary all
+
+      - name: Validate Context memory release
+        run: zig build test-validation --summary all
 
       - name: Run integration tests (real database)
         env:
@@ -229,20 +235,16 @@ jobs:
           git commit -m "chore: update bench baseline" || echo "No changes to commit"
           git push
 
-  # helm_template:
-  #   runs-on: ubuntu-latest
-  #   container:
-  #     image: imng/zero-kcov:0.3.5
-  #     options: --security-opt seccomp=unconfined
-      
-  #   steps:
-  #     - name: Checkout code
-  #       uses: actions/checkout@v4
+  helm_template:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
 
-  #     - name: Install Helm
-  #       run: curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+      - name: Install Helm
+        run: curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
 
-  #     - name: Lint and template chart
-  #       run: |
-  #         helm lint charts/zero
-  #         helm template zero charts/zero > /dev/null
+      - name: Lint and template chart
+        run: |
+          helm lint charts/zero
+          helm template zero charts/zero > /dev/null

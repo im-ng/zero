@@ -238,7 +238,7 @@ pub fn custom(
     // don't interleave. The OTel enqueue runs AFTER the lock is released (below),
     // so logging no longer serializes on the export path under concurrency.
     {
-        mutex.lock(utils.io) catch {};
+        mutex.lockUncancelable(utils.io);
         defer mutex.unlock(utils.io);
         if (json_format) {
             out.writeStreamingAll(utils.io, json_slice) catch return;

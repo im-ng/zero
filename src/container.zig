@@ -100,7 +100,7 @@ fn redisHealthCheck(c: *container) anyerror!void {
         // Serialize on the shared Redis socket so a concurrent KV/rate-limiter
         // command can't interleave RESP frames
         if (c.rdz) |rz| {
-            rz.mu.lock(utils.io) catch {};
+            rz.mu.lockUncancelable(utils.io);
             defer rz.mu.unlock(utils.io);
         }
         const pong = r.sendAlloc([]u8, c.allocator, .{"ping"}) catch {
@@ -138,7 +138,7 @@ pub fn runHealthCheck(self: *container, hc: *HealthCheck) bool {
 pub fn addHealthCheckEntry(self: *container, name: []const u8, check: *const fn (*container) anyerror!void) !void {
     // Lock failure would mean a corrupted mutex (see publishHealthSnapshot);
     // registration proceeds rather than losing the check.
-    self.health_snapshot_mu.lock(self.io) catch {};
+    self.health_snapshot_mu.lockUncancelable(self.io);
     defer self.health_snapshot_mu.unlock(self.io);
     try self.healthChecks.append(.{ .name = name, .check = check });
 }
@@ -151,7 +151,7 @@ fn publishHealthSnapshot(self: *container, results: []HealthStatus, now: std.Io.
     // `std.Io.Mutex.lock` cannot fail in normal operation (only a corrupted
     // mutex reports an error); proceeding unlocked keeps the health endpoint
     // answering, mirroring the scheduler's best-effort locking in cronz.
-    self.health_snapshot_mu.lock(self.io) catch {};
+    self.health_snapshot_mu.lockUncancelable(self.io);
     defer self.health_snapshot_mu.unlock(self.io);
     if (self.health_snapshot) |old| {
         self.allocator.free(old);
@@ -275,7 +275,7 @@ pub fn refreshHealthSnapshot(self: *container, deadline_ms: u64) void {
         std.Io.sleep(self.io, std.Io.Duration.fromMilliseconds(25), .awake) catch {};
         var remaining = false;
         // Broken-mutex tolerance as above; poll is read-only bookkeeping.
-        self.health_snapshot_mu.lock(self.io) catch {};
+        self.health_snapshot_mu.lockUncancelable(self.io);
         for (self.health_probe_slots) |slot| {
             if (slot != null and !slot.?.done.load(.acquire)) {
                 remaining = true;
@@ -598,8 +598,12 @@ pub fn create(self: Self) anyerror!*container {
 
     // initialize db
     try c.loadSQL();
-    if (c.SQL != null or c.MySQL != null or c.SQLite != null or c.DuckDB != null or c.ClickHouse != null or c.DuckGres != null) {
-        c.sqlStores.put("default", c.datasource) catch {};
+    if (c.SQL != null or c.MySQL != null or c.SQLite != null or
+        c.DuckDB != null or c.ClickHouse != null or c.DuckGres != null)
+    {
+        // A failed registration would silently remove the default datasource
+        // from named lookup; fail startup instead of serving a broken app.
+        try c.sqlStores.put("default", c.datasource);
     }
 
     // initialize kv
@@ -639,7 +643,7 @@ pub fn create(self: Self) anyerror!*container {
     // initilize message queues
     try c.loadPubSub();
     if (c.pubSub != null) {
-        c.pubSubBackends.put("default", c.pubSub.?) catch {};
+        try c.pubSubBackends.put("default", c.pubSub.?);
     }
 
     c.log.info("container is created");

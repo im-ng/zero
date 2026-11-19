@@ -77,9 +77,10 @@ bootstrap_fba: std.heap.FixedBufferAllocator = undefined,
 bootstrap_allocator: std.mem.Allocator = undefined,
 bootstrap_backing: []u8 = undefined,
 
-var hServer: ?*root.httpServer = undefined;
-pub var shutdown_requested: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
-var AppInstance: *Self = undefined;
+/// Only the shutdown flag lives at module scope. A C signal handler cannot
+/// capture a context, so this atomic store is the sole operation it performs.
+/// All teardown runs on the main thread in `run()` after the flag is observed.
+var shutdown_requested: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
 
 /// Shared setup for both HTTP (`new`) and CLI (`newCmd`) applications: config,
 /// logging, the bootstrap arena, container/datasources, migrations, and
@@ -195,7 +196,9 @@ fn initBase(allocator: std.mem.Allocator, io: std.Io, em: *EnvMap) !*App {
     try checkRequiredConfigKeys(allocator, config, log);
 
     try app.printPid();
-    AppInstance = app;
+
+    // A second App in the same process must not inherit a previous shutdown.
+    shutdown_requested.store(false, .monotonic);
 
     return app;
 }
@@ -243,8 +246,6 @@ pub fn new(allocator: std.mem.Allocator, io: std.Io, em: *EnvMap) !*App {
         error.OutOfMemory => return error.BootstrapArenaExhausted,
         else => return e,
     };
-    hServer = app.httpServer;
-
     // register auth provider refresher job
     try app.addOAuthKeyRefresher();
 
@@ -643,17 +644,17 @@ pub fn run(self: *Self) !void {
     self.container.started.store(true, .monotonic);
 
     // Graceful shutdown (bounded drain):
-    //   1. On SIGINT/SIGTERM the HTTP server stops accepting new connections
-    //      immediately (startShutdownHandler -> hServer.shutdown()).
+    //   1. The signal handler only sets `shutdown_requested`. On seeing it, this
+    //      thread stops the HTTP server and the cron scheduler. No teardown runs
+    //      in the signal handler itself: logging and thread joins are not
+    //      async-signal-safe.
     //   2. In-flight requests (handler.in_flight) get up to
-    //      SHUTDOWN_DRAIN_TIMEOUT_MS to finish; default 10s, overridable via the
-    //      SHUTDOWN_DRAIN_TIMEOUT_MS env var. No new requests are accepted in
-    //      this window.
+    //      SHUTDOWN_DRAIN_TIMEOUT_MS to finish; default 10s. No new requests are
+    //      accepted in this window.
     //   3. After the timeout any request still in flight is cut and the server
     //      is torn down. Worker-side keep-alive connection draining is NOT
     //      implemented in the bundled httpz fork, so idle keep-alive
-    //      connections are closed at teardown rather than flushed. This bound
-    //      exists so shutdown can never hang on a slow or disconnected client.
+    //      connections are closed at teardown rather than flushed.
     const drain_timeout_ms: u64 = blk: {
         const v = self.container.config.getAsInt("SHUTDOWN_DRAIN_TIMEOUT_MS") catch 0;
         break :blk if (v == 0) 10_000 else @as(u64, v);
@@ -661,14 +662,26 @@ pub fn run(self: *Self) !void {
     while (!shutdown_requested.load(.monotonic)) {
         std.Io.sleep(utils.io, std.Io.Duration.fromMilliseconds(100), .awake) catch {};
     }
+
+    // Stop accepting and stop scheduling from the main thread. Both are atomic
+    // flag stores or ordinary joins; neither is safe from a C signal handler.
+    self.httpServer.shutdown();
+    if (self.cronz) |c| {
+        c.stop();
+    }
+
     var waited: u64 = 0;
-    while (hServer.?.handler.in_flight.load(.monotonic) > 0 and waited < drain_timeout_ms) {
+    while (self.httpServer.handler.in_flight.load(.monotonic) > 0 and waited < drain_timeout_ms) {
         std.Io.sleep(utils.io, std.Io.Duration.fromMilliseconds(50), .awake) catch {};
         waited += 50;
     }
-    if (hServer.?.handler.in_flight.load(.monotonic) > 0) {
+    if (self.httpServer.handler.in_flight.load(.monotonic) > 0) {
         var buf: [128]u8 = undefined;
-        const msg = std.fmt.bufPrint(&buf, "shutdown drain timed out after {d}ms with {d} in-flight requests; forcing close", .{ drain_timeout_ms, hServer.?.handler.in_flight.load(.monotonic) }) catch "shutdown drain timed out; forcing close";
+        const msg = std.fmt.bufPrint(
+            &buf,
+            "shutdown drain timed out after {d}ms with {d} in-flight requests; forcing close",
+            .{ drain_timeout_ms, self.httpServer.handler.in_flight.load(.monotonic) },
+        ) catch "shutdown drain timed out; forcing close";
         self.container.log.warn(msg);
     }
 
@@ -731,30 +744,19 @@ fn startShutdownHandler(_: Self) !void {
 }
 
 fn shutdown(_: std.c.SIG) callconv(.c) void {
-    // Signal shutdown only. Joining threads / tearing down from a signal
-    // handler is undefined behavior (can deadlock), so we just stop the
-    // scheduler loop and stop the http server. The actual thread join for
-    // cronz happens later in run() once the server thread exits.
+    // An atomic store is the only operation that is safe here. Logging,
+    // stopping the listener and joining threads all allocate or take locks;
+    // `run()` performs them once it observes this flag.
     shutdown_requested.store(true, .monotonic);
-
-    if (AppInstance.cronz) |cronz| {
-        cronz.stop();
-        AppInstance.log.info("cleaning running cronz");
-    }
-
-    if (hServer) |h| {
-        h.shutdown();
-    }
 }
 
-pub fn shutdownApp(_: Self) void {
-    if (AppInstance.cronz) |cronz| {
-        cronz.destroy();
-        AppInstance.log.info("cleaning running cronz");
-    }
-
-    if (hServer) |h| {
-        h.shutdown();
+/// Programmatic shutdown for an embedder. Runs on a normal thread, so ordinary
+/// teardown is allowed. If `run()` is active it observes the flag and stops the
+/// HTTP listener; a CLI app has no listener to stop.
+pub fn shutdownApp(self: *Self) void {
+    shutdown_requested.store(true, .monotonic);
+    if (self.cronz) |cronz| {
+        cronz.stop();
     }
 }
 

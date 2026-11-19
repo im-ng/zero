@@ -124,7 +124,7 @@ pub const GCP = struct {
 
     fn ensureToken(self: *GCP) ![]const u8 {
         if (self.access_token_override.len > 0) return self.access_token_override;
-        self.token_mutex.lock(utils.io) catch {};
+        self.token_mutex.lockUncancelable(utils.io);
         defer self.token_mutex.unlock(utils.io);
         // Re-check after taking the lock: another thread may have refreshed.
         if (self.token) |t| {

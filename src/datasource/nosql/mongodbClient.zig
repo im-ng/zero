@@ -52,7 +52,7 @@ pub const Connection = struct {
     // Async-aware: `lock` suspends the Io task while contended instead of
     // spinning the CPU across the network round-trip the lock guards (audit #27).
     fn lock(self: *Connection) void {
-        self.mutex.lock(utils.io) catch {};
+        self.mutex.lockUncancelable(utils.io);
     }
 
     fn unlock(self: *Connection) void {

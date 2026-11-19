@@ -73,7 +73,7 @@ fn prepareChildAllocator(self: *Self) !*arena {
     return ca;
 }
 
-fn destroryChildAllocator(self: *Self, ca: *arena) void {
+fn destroyChildAllocator(self: *Self, ca: *arena) void {
     const caPtr: *arena = @ptrCast(@alignCast(ca.allocator().ptr));
     caPtr.deinit();
 
@@ -88,7 +88,7 @@ pub fn runSchedules(self: *Self, _: i128) void {
         // before appending (which may reallocate `self.jobs.items`); without this,
         // the loop reads a slice that a concurrent append has moved or freed
         // (use-after-free / torn read —
-        self.mu.lock(self.container.io) catch {};
+        self.mu.lockUncancelable(self.container.io);
         for (self.jobs.items) |*j| {
             if (j.compare(now)) {
                 // Serialize runs of the same job so an overrunning tick can't stack
@@ -108,7 +108,7 @@ pub fn runSchedules(self: *Self, _: i128) void {
                         self.container.log.any(err);
                         break;
                     };
-                    defer self.destroryChildAllocator(ca);
+                    defer self.destroyChildAllocator(ca);
 
                     var ctx = Context.init(
                         ca.allocator(),
@@ -313,7 +313,7 @@ pub fn addCron(self: *Self, schedule: []const u8, name: []const u8, hook: *const
     j.name = name;
     j.exec = hook;
 
-    self.mu.lock(self.container.io) catch {};
+    self.mu.lockUncancelable(self.container.io);
     try self.jobs.append(j);
     self.mu.unlock(self.container.io);
 

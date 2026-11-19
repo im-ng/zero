@@ -83,7 +83,7 @@ pub fn create(
 /// Held under `mu` so concurrent `Publish`/`addSubscriber` (which also lock)
 /// never observe a half-mutated connection during a reconnect (audit #23).
 fn connect(self: *Self) !void {
-    self.mu.lock(self.container.io) catch {};
+    self.mu.lockUncancelable(self.container.io);
     defer self.mu.unlock(self.container.io);
     self.disconnect();
 
@@ -164,7 +164,7 @@ pub fn destroy(self: *Self) void {
 pub fn Publish(self: *Self, subject: []const u8, payload: []const u8) !void {
     // Serialize concurrent publishes from HTTP handlers / cron (audit #11), and
     // exclude the reconnect path which also takes `mu`.
-    self.mu.lock(self.container.io) catch {};
+    self.mu.lockUncancelable(self.container.io);
     defer self.mu.unlock(self.container.io);
     // Connection may be mid-reconnect or failed; never unwrap a null socket.
     // `writer`/`reader` are value-type optionals; hand the callees pointers to
@@ -181,13 +181,13 @@ pub fn Publish(self: *Self, subject: []const u8, payload: []const u8) !void {
 }
 
 pub fn addSubscriber(self: *Self, topic: []const u8, hook: *const fn (*root.Context) anyerror!void) !void {
-    self.mu.lock(self.container.io) catch {};
+    self.mu.lockUncancelable(self.container.io);
     try self.subscriber.append(.{ .topic = topic, .exec = hook });
     self.mu.unlock(self.container.io);
 
     // Held under `mu` so a concurrent reconnect can't null the push socket while
     // we write to it. Bail if the connection isn't up rather than unwrapping null.
-    self.mu.lock(self.container.io) catch {};
+    self.mu.lockUncancelable(self.container.io);
     defer self.mu.unlock(self.container.io);
     const w = if (self.sub_writer) |*sw| sw else return;
     try encodeCommand(w, &.{ "SUBSCRIBE", topic });
@@ -266,7 +266,7 @@ fn dispatch(self: *Self, channel: []const u8, payload: []const u8) void {
     // lock across the invocation (audit #23).
     var matched = std.array_list.Managed(*const fn (*root.Context) anyerror!void).init(self.allocator);
     {
-        self.mu.lock(self.container.io) catch {};
+        self.mu.lockUncancelable(self.container.io);
         for (self.subscriber.items) |sub| {
             if (std.mem.eql(u8, sub.topic, channel)) {
                 matched.append(sub.exec) catch {};

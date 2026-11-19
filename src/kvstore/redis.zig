@@ -17,32 +17,32 @@ pub const KVRedis = struct {
     rdz: *root.rdz,
 
     pub fn get(self: *KVRedis, ctx: *root.Context, key: []const u8) !?[]const u8 {
-        self.rdz.mu.lock(utils.io) catch {};
+        self.rdz.mu.lockUncancelable(utils.io);
         defer self.rdz.mu.unlock(utils.io);
         return try self.rdz.client.sendAlloc(?[]const u8, ctx.allocator, .{ "GET", key });
     }
 
     pub fn set(self: *KVRedis, _: *root.Context, key: []const u8, value: []const u8) !void {
-        self.rdz.mu.lock(utils.io) catch {};
+        self.rdz.mu.lockUncancelable(utils.io);
         defer self.rdz.mu.unlock(utils.io);
         try self.rdz.client.send(void, .{ "SET", key, value });
     }
 
     pub fn delete(self: *KVRedis, _: *root.Context, key: []const u8) !void {
-        self.rdz.mu.lock(utils.io) catch {};
+        self.rdz.mu.lockUncancelable(utils.io);
         defer self.rdz.mu.unlock(utils.io);
         try self.rdz.client.send(void, .{ "DEL", key });
     }
 
     pub fn exists(self: *KVRedis, _: *root.Context, key: []const u8) !bool {
-        self.rdz.mu.lock(utils.io) catch {};
+        self.rdz.mu.lockUncancelable(utils.io);
         defer self.rdz.mu.unlock(utils.io);
         const n = try self.rdz.client.send(i64, .{ "EXISTS", key });
         return n > 0;
     }
 
     pub fn expire(self: *KVRedis, _: *root.Context, key: []const u8, ms: i64) !void {
-        self.rdz.mu.lock(utils.io) catch {};
+        self.rdz.mu.lockUncancelable(utils.io);
         defer self.rdz.mu.unlock(utils.io);
         try self.rdz.client.send(void, .{ "PEXPIRE", key, ms });
     }

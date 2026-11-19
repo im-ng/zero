@@ -256,9 +256,12 @@ pub fn create(allocator: std.mem.Allocator, container: *root.container) !*server
     });
 
     hzs.router = try hzs.http.router(.{
+        // tracz runs first so every response carries a correlation id, even when
+        // a later middleware rejects the request. Error handlers must never have
+        // to unwrap a header that a rejected request never received.
         .middlewares = &.{
-            rateLimitMW,
             traczMW,
+            rateLimitMW,
             corsMW,
             authMW,
             rbacMW,

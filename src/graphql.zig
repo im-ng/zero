@@ -578,8 +578,10 @@ fn valueNodeToJson(obj: ast.ObjectValueNode, alloc: std.mem.Allocator) anyerror!
 
 fn valueNodeToJsonValue(node: ast.ValueNode, alloc: std.mem.Allocator) anyerror!std.json.Value {
     return switch (node) {
-        .Int => .{ .integer = std.fmt.parseInt(i64, node.Int.value, 10) catch 0 },
-        .Float => .{ .float = std.fmt.parseFloat(f64, node.Float.value) catch 0 },
+        // Propagate parse failures so malformed literals are rejected instead of
+        // silently becoming 0, which would hide invalid client input.
+        .Int => .{ .integer = try std.fmt.parseInt(i64, node.Int.value, 10) },
+        .Float => .{ .float = try std.fmt.parseFloat(f64, node.Float.value) },
         .String => .{ .string = try dequote(alloc, node.String.value) },
         .Boolean => .{ .bool = node.Boolean.value },
         .Null => .null,
@@ -683,4 +685,16 @@ test "graphql: resolve query with constant, resolver and arguments" {
     std.testing.allocator.free(user.object.get("name").?.string);
 
     try testing.expect(ec.errors.items.len == 0);
+}
+
+test "graphql: malformed numeric literal returns an error instead of zero" {
+    const alloc = std.testing.allocator;
+
+    // A malformed integer must surface the parse error, not coerce to 0 and
+    // silently accept invalid input from the client.
+    const bad_int = ast.ValueNode{ .Int = .{ .value = "not-a-number" } };
+    try std.testing.expectError(error.InvalidCharacter, valueNodeToJsonValue(bad_int, alloc));
+
+    const bad_float = ast.ValueNode{ .Float = .{ .value = "1.2.3" } };
+    try std.testing.expectError(error.InvalidCharacter, valueNodeToJsonValue(bad_float, alloc));
 }

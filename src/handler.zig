@@ -37,6 +37,20 @@ pub const Handler = struct {
     var metric_tick: std.atomic.Value(u64) = .init(0);
     const METRIC_SAMPLE_RATE: u64 = 32;
 
+    /// Return a correlation id for an access log line. Error handlers can run
+    /// before tracz has stamped the response, so a forced unwrap here would
+    /// panic while handling an existing failure. Prefer the response value,
+    /// then the inbound header, then a stable placeholder.
+    fn correlationId(req: *const httpz.Request, res: *const httpz.Response) []const u8 {
+        if (res.headers.get("X-Correlation-ID")) |id| {
+            return id;
+        }
+        if (req.headers.get("X-Correlation-ID")) |id| {
+            return id;
+        }
+        return "-";
+    }
+
     pub fn metric(self: *Handler, duration: f64, method: []const u8, status: u16, path: []const u8) !void {
         // Accurate total on every request.
         try self.container.metricz.responseHits(.{
@@ -92,7 +106,7 @@ pub const Handler = struct {
         const access_log = try std.fmt.allocPrint(
             req.arena,
             "{s}\t {d} {d}ms {s} {s}",
-            .{ res.headers.get("X-Correlation-ID").?, res.status, 0, @tagName(req.method), req.url.path },
+            .{ correlationId(req, res), res.status, 0, @tagName(req.method), req.url.path },
         );
         ctx.info(access_log);
     }
@@ -184,7 +198,7 @@ pub const Handler = struct {
             req.arena,
             "{s}\t {d} {d}ms {s} {s}",
             .{
-                res.headers.get("X-Correlation-ID").?,
+                correlationId(req, res),
                 res.status,
                 duration,
                 @tagName(req.method),
@@ -208,7 +222,13 @@ pub const Handler = struct {
         const access_log = try std.fmt.allocPrint(
             req.arena,
             "{s}\t {d} {d}ms {s} {s}",
-            .{ res.headers.get("X-Correlation-ID").?, res.status, utils.elapsedMs(start), @tagName(req.method), req.url.path },
+            .{
+                correlationId(req, res),
+                res.status,
+                utils.elapsedMs(start),
+                @tagName(req.method),
+                req.url.path,
+            },
         );
         ctx.info(access_log);
     }
@@ -229,40 +249,70 @@ pub const Handler = struct {
         const access_log = try std.fmt.allocPrint(
             req.arena,
             "{s}\t {d} {d}ms {s} {s}",
-            .{ res.headers.get("X-Correlation-ID").?, res.status, utils.elapsedMs(start), @tagName(req.method), req.url.path },
+            .{
+                correlationId(req, res),
+                res.status,
+                utils.elapsedMs(start),
+                @tagName(req.method),
+                req.url.path,
+            },
         );
         ctx.info(access_log);
     }
 
     pub fn uncaughtError(self: *Handler, req: *httpz.Request, res: *httpz.Response, err: anyerror) void {
         const start = utils.nowMonotonic();
-        std.debug.print("something went wrong\n", .{});
+        const log = self.container.log;
+        const cid = correlationId(req, res);
 
         var ctx = Context.init(req.arena, self.container, req, res) catch |init_err| {
-            std.debug.print("context init failed: {}\n", .{init_err});
+            // A failure while handling a failure must not recurse. Best-effort
+            // log only: if the arena is also exhausted there is nothing left to do.
+            const msg = std.fmt.allocPrint(
+                req.arena,
+                "context init failed in error path: {}",
+                .{init_err},
+            ) catch return;
+            log.err(msg);
             return;
         };
         defer ctx.cleanup();
 
-        // Report the error with a status that matches its class instead of
-        // always 500 (audit #28). The body stays generic so internal failure
-        // detail is never leaked to the client.
+        // Map the error to its status class. The body stays generic so internal
+        // failure detail never reaches the client.
         res.setStatus(root.Error.statusForError(err));
         res.content_type = .JSON;
         res.body =
             \\ {"error": "something went wrong"}
         ;
 
-        self.metric(utils.elapsedSeconds(start), @tagName(req.method), res.status, req.url.path) catch |e| {
-            std.debug.print("metric recording failed: {}\n", .{e});
+        // Error paths are a scanner target. A fixed label keeps random URLs
+        // from growing the metric label set without bound.
+        self.metric(
+            utils.elapsedSeconds(start),
+            @tagName(req.method),
+            res.status,
+            "/_error",
+        ) catch |e| {
+            const msg = std.fmt.allocPrint(
+                req.arena,
+                "metric failed in error path: {}",
+                .{e},
+            ) catch return;
+            log.err(msg);
         };
 
         const access_log = std.fmt.allocPrint(
             req.arena,
             "{s}\t {d} {d}ms {s} {s}",
-            .{ res.headers.get("X-Correlation-ID").?, res.status, utils.elapsedMs(start), @tagName(req.method), req.url.path },
+            .{ cid, res.status, utils.elapsedMs(start), @tagName(req.method), "/_error" },
         ) catch |e| {
-            std.debug.print("access log alloc failed: {}\n", .{e});
+            const msg = std.fmt.allocPrint(
+                req.arena,
+                "access log failed in error path: {}",
+                .{e},
+            ) catch return;
+            log.err(msg);
             return;
         };
         ctx.info(access_log);

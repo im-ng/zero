@@ -49,7 +49,7 @@ pub fn create(allocator: std.mem.Allocator) !*rdz {
 /// `.interface` addresses) is healed transparently. No-op-safe: a failed
 /// reconnect leaves the caller to report the outage.
 pub fn reconnect(self: *Self) !void {
-    self.mu.lock(utils.io) catch {};
+    self.mu.lockUncancelable(utils.io);
     defer self.mu.unlock(utils.io);
     // Best-effort tear-down of the dead socket; ignore errors (already broken).
     self.conn.close(utils.io);

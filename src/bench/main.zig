@@ -183,8 +183,12 @@ fn fire(client: *zul.http.Client, req: Req) bool {
         const got_lower = std.ascii.allocLowerString(std.heap.page_allocator, got_ct) catch "";
         const want_lower = std.ascii.allocLowerString(std.heap.page_allocator, want) catch "";
         defer {
-            if (got_lower.len > 0) std.heap.page_allocator.free(got_lower);
-            if (want_lower.len > 0) std.heap.page_allocator.free(want_lower);
+            if (got_lower.len > 0) {
+                std.heap.page_allocator.free(got_lower);
+            }
+            if (want_lower.len > 0) {
+                std.heap.page_allocator.free(want_lower);
+            }
         }
         if (std.mem.indexOf(u8, got_lower, want_lower) == null) {
             if (!first_ct_printed.swap(true, .monotonic)) {
@@ -592,7 +596,9 @@ fn runScenario(
         const max_us = global.max_ns / 1000;
 
         const rss1 = readRss();
-        if (first_level_rss == null) first_level_rss = rss1;
+        if (first_level_rss == null) {
+            first_level_rss = rss1;
+        }
         if (rss1 > scenario_peak) {
             scenario_peak = rss1;
         }

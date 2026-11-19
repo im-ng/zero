@@ -75,14 +75,21 @@ pub const Context = struct {
             // /lastId/rows so concurrent requests can't share a transaction or
             // clobber each other's last-insert-id.
             const session = try root.SQL.createSession(allocator, container.SQL.?);
-            c.SQL = root.Datasource.init(session, .postgres, container.datasource.breaker, container.metricz);
+            c.SQL = root.Datasource.init(
+                session,
+                .postgres,
+                container.datasource.breaker,
+                container.metricz,
+            );
         } else if (container.MySQL != null) {
             // MySQL: same per-request session model as Postgres. Each request
             // borrows a pooled connection (pinned for transactions) so concurrent
             // requests never share a socket or a transaction.
             const session = try root.MySQL.createSession(allocator, container.MySQL.?);
             c.SQL = root.Datasource.init(session, .mysql, container.datasource.breaker, container.metricz);
-        } else if (container.SQLite != null or container.DuckDB != null or container.ClickHouse != null or container.DuckGres != null) {
+        } else if (container.SQLite != null or container.DuckDB != null or
+            container.ClickHouse != null or container.DuckGres != null)
+        {
             // SQLite/DuckDB backends reuse a single shared connection; the
             // per-request session does not apply (see ZIG_LEARNINGS.md — their
             // single-connection concurrency is a separate, documented limitation).
@@ -152,13 +159,23 @@ pub const Context = struct {
             .params = std.StringHashMap([]const u8).init(allocator),
         };
 
-        if (container.SQL != null or container.SQLite != null or container.DuckDB != null or container.ClickHouse != null or container.DuckGres != null) {
-            c.SQL = container.datasource;
+        // Mirror `init` exactly. A shared Postgres datasource here would let two
+        // concurrent cron or pub/sub handlers share a transaction connection.
+        if (container.SQL != null) {
+            const session = try root.SQL.createSession(allocator, container.SQL.?);
+            c.SQL = root.Datasource.init(
+                session,
+                .postgres,
+                container.datasource.breaker,
+                container.metricz,
+            );
         } else if (container.MySQL != null) {
-            // Mirror `init`: MySQL needs a per-request session so CLI/cron/pub-sub
-            // contexts get a working `ctx.SQL` instead of a null handle
             const session = try root.MySQL.createSession(allocator, container.MySQL.?);
             c.SQL = root.Datasource.init(session, .mysql, container.datasource.breaker, container.metricz);
+        } else if (container.SQLite != null or container.DuckDB != null or
+            container.ClickHouse != null or container.DuckGres != null)
+        {
+            c.SQL = container.datasource;
         }
         if (container.defaultKV) |kv| {
             c.KV = kv;
@@ -249,11 +266,11 @@ pub const Context = struct {
         self.container.log.Fatal(self.allocator, message);
     }
 
-    /// deinit context from parent allocator
+    /// Full teardown: run the request cleanup first so an open transaction is
+    /// rolled back, then release the context itself. Callers that only need to
+    /// end a request (stack-allocated contexts) use `cleanup` directly.
     pub fn deinit(self: *Context) void {
-        if (self.baggage) |*b| {
-            b.deinit();
-        }
+        self.cleanup();
         self.allocator.destroy(self);
     }
 
@@ -278,9 +295,16 @@ pub const Context = struct {
         }
     }
 
-    /// returns traceID of the service request
+    /// Returns the W3C trace id of the service request. When an inbound
+    /// `traceparent` is present its 32-hex trace id is used; otherwise fall back
+    /// to the correlation id, which tracz generates in the same trace-id shape.
     pub fn trace(self: *Context) ?[]const u8 {
         if (self.request) |r| {
+            if (r.header("traceparent")) |tp| {
+                if (tp.len >= 35 and tp[0] == '0' and tp[1] == '0' and tp[2] == '-') {
+                    return tp[3..35];
+                }
+            }
             return r.headers.get("X-Correlation-ID");
         }
         return null;

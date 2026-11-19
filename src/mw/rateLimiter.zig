@@ -109,7 +109,7 @@ pub fn execute(self: *rateLimiter, req: *httpz.Request, res: *httpz.Response, ex
         // INCR + PEXPIRE are one critical section on the shared socket: lock the
         // Redis mutex so concurrent requests can't interleave their RESP frames
         // with KV/health commands
-        self.rdz.?.mu.lock(utils.io) catch {};
+        self.rdz.?.mu.lockUncancelable(utils.io);
         defer self.rdz.?.mu.unlock(utils.io);
         const count = self.redis.?.send(i64, .{ "INCR", redis_key }) catch {
             // Redis unreachable: by default fail open so a Redis outage does not
