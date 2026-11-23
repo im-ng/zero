@@ -274,7 +274,7 @@ pub const GCP = struct {
     };
 };
 
-fn publishWrap(ptr: *anyopaque, subject: []const u8, payload: []const u8) anyerror!void {
+fn publishWrap(ptr: *anyopaque, subject: []const u8, payload: []const u8, _: ?[]const u8) anyerror!void {
     const self = @as(*GCP, @ptrCast(@alignCast(ptr)));
     return self.publish(subject, payload);
 }

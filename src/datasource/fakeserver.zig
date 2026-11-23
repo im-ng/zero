@@ -26,6 +26,9 @@ pub const FakeServer = struct {
         status: u16 = 200,
         content_type: []const u8 = "application/json",
         body: []const u8,
+        /// Optional pause before the response is written. Used to test client
+        /// request deadlines against a server that accepts but stalls.
+        delay_ms: u64 = 0,
     };
 
     fn newSocket() !posix.socket_t {
@@ -119,6 +122,10 @@ pub const FakeServer = struct {
                 if (n <= 0) break;
                 total += @intCast(n);
             }
+        }
+
+        if (resp.delay_ms > 0) {
+            std.Io.sleep(std.testing.io, .fromMilliseconds(@intCast(resp.delay_ms)), .awake) catch {};
         }
 
         const out = try std.fmt.allocPrint(

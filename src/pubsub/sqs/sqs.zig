@@ -304,7 +304,7 @@ fn sqsJsonField(obj: std.json.ObjectMap, lower: []const u8, upper: []const u8) ?
     return null;
 }
 
-fn publishWrap(ptr: *anyopaque, subject: []const u8, payload: []const u8) anyerror!void {
+fn publishWrap(ptr: *anyopaque, subject: []const u8, payload: []const u8, _: ?[]const u8) anyerror!void {
     const self = @as(*SQS, @ptrCast(@alignCast(ptr)));
     return self.publish(subject, payload);
 }

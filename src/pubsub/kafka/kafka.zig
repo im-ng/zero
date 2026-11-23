@@ -243,7 +243,7 @@ pub fn publish(self: *Self, ctx: *Context, topic: *kafkaTopic, key: []const u8, 
 
 /// Convenience for the unified `PubSub` interface: publish to a subject
 /// using a throwaway context (Kafka's `publish` requires a `*Context`).
-pub fn publishOnSubject(self: *Self, subject: []const u8, payload: []const u8) !void {
+pub fn publishOnSubject(self: *Self, subject: []const u8, payload: []const u8, key: ?[]const u8) !void {
     const ca = self.prepareChildAllocator() catch |err| {
         self.container.log.any(err);
         return;
@@ -273,7 +273,7 @@ pub fn publishOnSubject(self: *Self, subject: []const u8, payload: []const u8) !
     };
     defer rdkafka.rd_kafka_topic_destroy(topic);
 
-    try self.publish(context, topic, "", payload);
+    try self.publish(context, topic, key orelse "", payload);
 }
 
 pub inline fn wait(self: Self, comptime timeout_ms: u16) void {
@@ -327,7 +327,7 @@ fn processMessage(self: *Self, context: *Context, msg: *kafkaMessage, subscriber
             const dlq = std.fmt.allocPrint(self.container.allocator, "{s}__dlq", .{msg.topic}) catch return;
             defer self.container.allocator.free(dlq);
             self.container.metricz.dlq(.{ .topic = msg.topic, .consumer = "dlq" }) catch {};
-            self.publishOnSubject(dlq, msg.payload orelse &[_]u8{}) catch |dlerr| {
+            self.publishOnSubject(dlq, msg.payload orelse &[_]u8{}, null) catch |dlerr| {
                 self.container.log.Any(self.container.allocator, dlerr);
             };
             break;
@@ -516,9 +516,9 @@ inline fn getTopicName(_: *Self, topic: *kafkaTopic) []const u8 {
 /// Type-erased VTable conforming to `pubsubInterface.Interface.VTable`.
 pub const vtable = root.pubsubInterface.Interface.VTable{
     .publish = struct {
-        fn call(ptr: *anyopaque, subject: []const u8, payload: []const u8) anyerror!void {
+        fn call(ptr: *anyopaque, subject: []const u8, payload: []const u8, key: ?[]const u8) anyerror!void {
             const self: *Kafka = @ptrCast(@alignCast(ptr));
-            try self.publishOnSubject(subject, payload);
+            try self.publishOnSubject(subject, payload, key);
         }
     }.call,
     .subscribe = struct {

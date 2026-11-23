@@ -32,10 +32,9 @@ pub const ServiceOptions = struct {
     auth: ?OutboundAuth = null,
     circuitBreaker: ?CircuitBreakerConfig = null,
     rateLimiter: ?RateLimiterConfig = null,
-    /// Reserved per-request timeout (ms) for this downstream. NOT YET ENFORCED:
-    /// the pinned zul client has no request-deadline hook, so a non-null value
-    /// currently only emits a startup warning. A stalled downstream still needs
-    /// a bound at the caller (bulkhead / circuit breaker).
+    /// Whole-request deadline (ms) for this downstream. Covers connect, headers
+    /// and body. null (default) means no deadline. Enforced by racing the HTTP
+    /// call against a timer on the Io reactor and cancelling on expiry.
     timeout_ms: ?u64 = null,
     /// Maximum number of additional attempts for transient failures (network
     /// errors and 5xx). 0 (default) = no retry.
@@ -66,7 +65,7 @@ auth: ?OutboundAuth = null,
 breaker: ?CircuitBreaker = null,
 /// Per-service fixed-window rate limiter (null = disabled).
 limiter: ?RateLimiter = null,
-/// Reserved timeout (ms); not enforced by the pinned zul client. See ServiceOptions.
+/// Whole-request deadline (ms) for outbound calls to this service. See ServiceOptions.
 timeout_ms: ?u64 = null,
 /// Max additional attempts for transient failures (network errors + 5xx).
 max_retries: ?u32 = null,
@@ -121,17 +120,6 @@ pub fn createWithConfig(
         .limiter = if (opts.rateLimiter) |rl| RateLimiter.init(rl) else null,
         .oauth_breaker = CircuitBreaker.init(CircuitBreakerConfig{}),
     };
-
-    if (opts.timeout_ms != null) {
-        const msg = try std.fmt.allocPrint(
-            ct.allocator,
-            "service '{s}': timeout_ms is configured but the pinned zul client " ++
-                "has no request deadline; the option is not enforced",
-            .{service_name},
-        );
-        defer ct.allocator.free(msg);
-        ct.log.warn(msg);
-    }
 
     return c;
 }
@@ -468,6 +456,43 @@ fn isConnectionError(e: anyerror) bool {
     };
 }
 
+/// Run `getResponse` under a whole-request deadline. The pinned zul client has
+/// no request-timeout hook, so we race the call against an Io timer and cancel
+/// the in-flight task on expiry. Cancellation propagates through std.http's
+/// cancelable points and aborts the socket read/write.
+fn getResponseWithDeadline(
+    req: *zul.http.Request,
+    io: std.Io,
+    timeout_ms: u64,
+) !zul.http.Response {
+    const Result = union(enum) {
+        response: anyerror!zul.http.Response,
+        timeout: void,
+    };
+    var slots: [2]Result = undefined;
+    var select = std.Io.Select(Result).init(io, &slots);
+    defer select.cancelDiscard(); // cancels whichever task did not win
+
+    const Fetch = struct {
+        fn call(r: *zul.http.Request) anyerror!zul.http.Response {
+            return r.getResponse(.{});
+        }
+    };
+    const Timer = struct {
+        fn call(t_io: std.Io, ms: u64) void {
+            std.Io.sleep(t_io, .fromMilliseconds(@intCast(ms)), .awake) catch {};
+        }
+    };
+
+    select.async(.response, Fetch.call, .{req});
+    select.async(.timeout, Timer.call, .{ io, timeout_ms });
+
+    return switch (try select.await()) {
+        .response => |res| res,
+        .timeout => error.RequestTimeout,
+    };
+}
+
 fn createAndSendRequest(
     self: *Self,
     ctx: *Context,
@@ -583,7 +608,12 @@ fn createAndSendRequest(
 
         const start = utils.nowMonotonic();
 
-        res = req.getResponse(.{}) catch |e| {
+        const response_result = if (self.timeout_ms) |ms|
+            getResponseWithDeadline(&req, self.container.io, ms)
+        else
+            req.getResponse(.{});
+
+        res = response_result catch |e| {
             // A stale idle keep-alive socket resets on the first write after a
             // quiet period. That is a connection-level blip, not an upstream
             // fault: reconnect once and retry without counting it as a failure.
@@ -997,4 +1027,39 @@ test "client: isConnectionError classifies transient socket resets" {
 
     // Real upstream problems (timeout, DNS) must NOT be swallowed as retries.
     try std.testing.expect(!isConnectionError(error.OutOfMemory));
+}
+
+test "client: getResponseWithDeadline times out a stalled downstream" {
+    const FakeServer = @import("../datasource/fakeserver.zig").FakeServer;
+    const std_io = @import("../utils.zig").io;
+
+    var fs = try FakeServer.start(.{
+        .body = "too late",
+        .delay_ms = 400,
+    });
+    defer fs.stop();
+
+    var client = zul.http.Client.init(std_io, std.testing.allocator);
+    defer client.deinit();
+
+    const url = try std.fmt.allocPrint(
+        std.testing.allocator,
+        "http://127.0.0.1:{d}/slow",
+        .{fs.port},
+    );
+    defer std.testing.allocator.free(url);
+
+    var req = try client.allocRequest(std.testing.allocator, url);
+    defer req.deinit();
+
+    const started = std.Io.Timestamp.now(std_io, .awake);
+    const result = getResponseWithDeadline(&req, std_io, 50);
+    const elapsed_ms = @divFloor(
+        std.Io.Timestamp.durationTo(started, std.Io.Timestamp.now(std_io, .awake)).nanoseconds,
+        std.time.ns_per_ms,
+    );
+
+    try std.testing.expectError(error.RequestTimeout, result);
+    // Must return close to the configured deadline, not the server's delay.
+    try std.testing.expect(elapsed_ms < 300);
 }

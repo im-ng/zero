@@ -408,7 +408,7 @@ const Frame = struct {
 /// Type-erased VTable conforming to `pubsubInterface.Interface.VTable`.
 pub const vtable = root.pubsubInterface.Interface.VTable{
     .publish = struct {
-        fn call(ptr: *anyopaque, subject: []const u8, payload: []const u8) anyerror!void {
+        fn call(ptr: *anyopaque, subject: []const u8, payload: []const u8, _: ?[]const u8) anyerror!void {
             const self: *Redis = @ptrCast(@alignCast(ptr));
             try self.Publish(subject, payload);
         }
