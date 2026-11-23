@@ -484,11 +484,25 @@ fn getResponseWithDeadline(
         }
     };
 
+    const started = std.Io.Timestamp.now(io, .awake);
     select.async(.response, Fetch.call, .{req});
     select.async(.timeout, Timer.call, .{ io, timeout_ms });
 
-    return switch (try select.await()) {
-        .response => |res| res,
+    const first = try select.await();
+    return switch (first) {
+        .response => |res| blk: {
+            // The response can win the Select race on runtimes whose timer
+            // task is scheduled late. Enforce the deadline from the clock as
+            // well so an over-deadline response is still rejected.
+            const elapsed_ns = std.Io.Timestamp.durationTo(
+                started,
+                std.Io.Timestamp.now(io, .awake),
+            ).nanoseconds;
+            if (elapsed_ns > @as(i128, timeout_ms) * std.time.ns_per_ms) {
+                break :blk error.RequestTimeout;
+            }
+            break :blk res;
+        },
         .timeout => error.RequestTimeout,
     };
 }
