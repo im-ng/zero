@@ -43,6 +43,8 @@ pub fn main(init: std.process.Init) !void {
     try migrations.all(app);
     try app.runMigrations();
 
+    app.onStartup(enableWalMode);
+
     try app.get("/", index);
     try app.post("/sqlite/users", createUser);
     try app.get("/sqlite/users", listUsers);
@@ -52,6 +54,13 @@ pub fn main(init: std.process.Init) !void {
     try app.get("/memory", memoryUsage);
 
     try app.run();
+}
+
+fn enableWalMode(ctx: *Context) !void {
+    _ = try ctx.SQL.exec(ctx, "PRAGMA journal_mode=WAL", .{});
+    _ = try ctx.SQL.exec(ctx, "PRAGMA synchronous=NORMAL", .{});
+    _ = try ctx.SQL.exec(ctx, "PRAGMA busy_timeout=5000", .{});
+    _ = try ctx.SQL.exec(ctx, "PRAGMA foreign_keys=ON", .{});
 }
 
 pub fn memoryUsage(ctx: *Context) !void {

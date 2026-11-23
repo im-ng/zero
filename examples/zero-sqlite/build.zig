@@ -20,6 +20,7 @@ pub fn build(b: *std.Build) void {
     });
 
     exe.root_module.addImport("zero", zero.module("zero"));
+    exe.root_module.sanitize_c = .full;
 
     b.installArtifact(exe);
 

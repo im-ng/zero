@@ -283,12 +283,12 @@ pub const Context = struct {
     /// `defer req.arena.destroy(&ctx)`, which destroyed the on-stack `ctx` value
     /// through the arena
     pub fn cleanup(self: *Context) void {
-        const has_sql = self.container.SQL != null or self.container.MySQL != null or
-            self.container.SQLite != null or self.container.DuckDB != null or
-            self.container.ClickHouse != null or self.container.DuckGres != null;
-        if (has_sql) {
-            self.SQL.rollback();
-        }
+        // const has_sql = self.container.SQL != null or self.container.MySQL != null or
+        // self.container.SQLite != null or self.container.DuckDB != null or
+        // self.container.ClickHouse != null or self.container.DuckGres != null;
+        // if (has_sql) {
+        //     self.SQL.rollback();
+        // }
         if (self.baggage) |*b| {
             b.deinit();
             self.baggage = null;
