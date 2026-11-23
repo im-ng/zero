@@ -7,7 +7,7 @@ pub fn build(b: *std.Build) void {
     const kafka = b.option(bool, "kafka", "Enable Kafka/RDKafka pub-sub support (default on)") orelse true;
     const duckdb = b.option(bool, "duckdb", "Enable DuckDB in-process OLAP support (default on)") orelse true;
 
-    const zero = b.dependency("zero", .{ .kafka = kafka, .duckdb = duckdb });
+    const zero = b.dependency("zero", .{ .kafka = kafka, .duckdb = duckdb, .target = target, .optimize = optimize });
 
     const exe = b.addExecutable(.{
         .name = "sqlite",

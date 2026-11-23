@@ -125,7 +125,12 @@ pub const FakeServer = struct {
         }
 
         if (resp.delay_ms > 0) {
-            std.Io.sleep(std.testing.io, .fromMilliseconds(@intCast(resp.delay_ms)), .awake) catch {};
+            // Use an OS-level sleep, not std.Io.sleep: the test Io may use a
+            // virtual clock under some runners, which would skip the delay.
+            var ts: posix.timespec = undefined;
+            ts.sec = @intCast(resp.delay_ms / 1000);
+            ts.nsec = @intCast((resp.delay_ms % 1000) * 1_000_000);
+            _ = c.nanosleep(&ts, null);
         }
 
         const out = try std.fmt.allocPrint(

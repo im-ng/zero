@@ -93,7 +93,7 @@ pub fn build(b: *std.Build) void {
     const jwt = b.dependency("zig_jwt", .{});
     module.addImport("jwt", jwt.module("zig-jwt"));
 
-    const sqlite = b.dependency("sqlite", .{});
+    const sqlite = b.dependency("sqlite", .{ .target = target, .optimize = optimize });
     module.addImport("sqlite", sqlite.module("sqlite"));
 
     const nats = b.dependency("nats", .{});

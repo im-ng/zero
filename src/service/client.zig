@@ -1035,7 +1035,7 @@ test "client: getResponseWithDeadline times out a stalled downstream" {
 
     var fs = try FakeServer.start(.{
         .body = "too late",
-        .delay_ms = 400,
+        .delay_ms = 2000,
     });
     defer fs.stop();
 
