@@ -36,11 +36,10 @@ test "datasource sqlite backend integration" {
     const m = try root.metricz.initialize(allocator, .{ .prefix = "", .exclude = null }, null);
     defer allocator.destroy(m);
 
-    const sqlite = try root.SQLite.init(allocator, ":memory:", true, true, root.sqlitez.ThreadingMode.MultiThread, log, m);
-    defer {
-        sqlite.db.deinit();
-        allocator.destroy(sqlite);
-    }
+    // One connection: each `:memory:` handle is a separate database, so a pool
+    // would give statements different databases.
+    const sqlite = try root.SQLite.init(allocator, ":memory:", true, true, root.sqlitez.ThreadingMode.MultiThread, log, m, 1);
+    defer sqlite.deinit();
 
     // Unified handle; the caller never names the concrete backend.
     // `var` (not `const`): `exec` takes a mutable `*Interface` receiver.
@@ -104,11 +103,10 @@ test "datasource sql parity: limit/offset and upsert" {
     const m = try root.metricz.initialize(allocator, .{ .prefix = "", .exclude = null }, null);
     defer allocator.destroy(m);
 
-    const sqlite = try root.SQLite.init(allocator, ":memory:", true, true, root.sqlitez.ThreadingMode.MultiThread, log, m);
-    defer {
-        sqlite.db.deinit();
-        allocator.destroy(sqlite);
-    }
+    // One connection: each `:memory:` handle is a separate database, so a pool
+    // would give statements different databases.
+    const sqlite = try root.SQLite.init(allocator, ":memory:", true, true, root.sqlitez.ThreadingMode.MultiThread, log, m, 1);
+    defer sqlite.deinit();
 
     var ds = root.Datasource.init(sqlite, .sqlite, null, null);
     var ctx_storage: root.Context = undefined;
