@@ -751,6 +751,12 @@ pub fn destroy(self: *Self) void {
         m.deinit();
     }
 
+    // SQLite datasource: closes every pooled connection and frees the struct
+    // allocated by `loadSQLite` / `SQLite.init` (deinit frees it itself).
+    if (self.SQLite) |sqlite| {
+        sqlite.deinit();
+    }
+
     // In-process OLAP engine (DuckDB): closes the C database/connection and the
     // struct allocated by `create` / `addDuckDB`.
     if (comptime build_options.duckdb) {
@@ -1578,6 +1584,13 @@ fn loadSQL(self: *Self) !void {
 }
 
 fn loadSQLite(self: *Self) !void {
+    // `create` calls this once via loadSQL (when DB_DIALECT=sqlite) and again
+    // unconditionally below. Guarding avoids opening a second set of pooled
+    // connections and overwriting — and leaking — the first one.
+    if (self.SQLite != null) {
+        return;
+    }
+
     var buffer: []u8 = undefined;
     buffer = try self.bootstrap.alloc(u8, 512);
 
@@ -1591,6 +1604,16 @@ fn loadSQLite(self: *Self) !void {
     const sqlite_create = self.config.getAsBool("SQLITE_CREATE");
     const sqlite_write = self.config.getAsBool("SQLITE_WRITE");
     const threading = self.config.get("SQLITE_THREADING");
+
+    // getAsInt returns 0 for a missing key, so treat 0 as "use the default".
+    // Cap the pool so a bad config cannot open an unbounded number of handles.
+    const configured_pool = self.config.getAsInt("SQLITE_POOL_SIZE") catch 0;
+    const sqlite_pool_size: usize = if (configured_pool <= 0)
+        4
+    else if (configured_pool > 64)
+        64
+    else
+        @intCast(configured_pool);
 
     const threading_mode = if (std.mem.eql(u8, threading, "multi-thread"))
         root.sqlitez.ThreadingMode.MultiThread
@@ -1609,11 +1632,12 @@ fn loadSQLite(self: *Self) !void {
         threading_mode,
         self.log,
         self.metricz,
+        sqlite_pool_size,
     );
 
     self.wireDatasource(self.SQLite, .sqlite);
 
-    buffer = try std.fmt.bufPrint(buffer, "connected to sqlite at '{s}'", .{dbPath});
+    buffer = try std.fmt.bufPrint(buffer, "connected to sqlite at '{s}' (pool size {d})", .{ dbPath, sqlite_pool_size });
     self.log.info(buffer);
 
     // Auto-register a SQL (sqlite) dependency health probe.

@@ -87,12 +87,22 @@ pub const Context = struct {
             // requests never share a socket or a transaction.
             const session = try root.MySQL.createSession(allocator, container.MySQL.?);
             c.SQL = root.Datasource.init(session, .mysql, container.datasource.breaker, container.metricz);
-        } else if (container.SQLite != null or container.DuckDB != null or
-            container.ClickHouse != null or container.DuckGres != null)
+        } else if (container.SQLite != null) {
+            // SQLite has a real connection pool now: each request borrows a
+            // connection per call, so WAL readers run alongside a writer and
+            // last-id/rows state stays isolated to this session.
+            const session = try root.SQLite.createSession(allocator, container.SQLite.?);
+            c.SQL = root.Datasource.init(
+                session,
+                .sqlite,
+                container.datasource.breaker,
+                container.metricz,
+            );
+        } else if (container.DuckDB != null or container.ClickHouse != null or
+            container.DuckGres != null)
         {
-            // SQLite/DuckDB backends reuse a single shared connection; the
-            // per-request session does not apply (see ZIG_LEARNINGS.md — their
-            // single-connection concurrency is a separate, documented limitation).
+            // These backends still reuse a single shared connection; the
+            // per-request session does not apply to them.
             c.SQL = container.datasource;
         }
 
@@ -172,8 +182,16 @@ pub const Context = struct {
         } else if (container.MySQL != null) {
             const session = try root.MySQL.createSession(allocator, container.MySQL.?);
             c.SQL = root.Datasource.init(session, .mysql, container.datasource.breaker, container.metricz);
-        } else if (container.SQLite != null or container.DuckDB != null or
-            container.ClickHouse != null or container.DuckGres != null)
+        } else if (container.SQLite != null) {
+            const session = try root.SQLite.createSession(allocator, container.SQLite.?);
+            c.SQL = root.Datasource.init(
+                session,
+                .sqlite,
+                container.datasource.breaker,
+                container.metricz,
+            );
+        } else if (container.DuckDB != null or container.ClickHouse != null or
+            container.DuckGres != null)
         {
             c.SQL = container.datasource;
         }
