@@ -1,8 +1,8 @@
 name: SBOM
 
-# Produce a merged CycloneDX SBOM (source deps + compiled binary) on every push
-# and PR, and on manual trigger. The artifact is `final-sbom.json`, ready for
-# Dependency-Track / Grype or to attach to a release.
+# Produce a CycloneDX SBOM from build.zig.zon on every push and PR, and on
+# manual trigger. The artifact is `final-sbom.json`, ready for Dependency-Track
+# / Grype or to attach to a release.
 on:
   push:
     branches: [ main, master ]
@@ -16,8 +16,7 @@ permissions:
 jobs:
   sbom:
     runs-on: ubuntu-latest
-    # SBOM tooling (cdxgen, cyclonedx-cli, syft) and Zig 0.17.0 ship in the
-    # image — no runtime install steps needed.
+    # The image ships awk/jq and Zig 0.17.0 — no runtime install steps needed.
     container:
       image: imng/zero-kcov:0.3.6
       options: --security-opt seccomp=unconfined
@@ -26,7 +25,7 @@ jobs:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      - name: Generate merged SBOM
+      - name: Generate SBOM
         run: ./scripts/gen-sbom.sh
 
       - name: Upload SBOM artifact
