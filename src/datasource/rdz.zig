@@ -40,7 +40,10 @@ pass: []const u8 = "",
 pub fn create(allocator: std.mem.Allocator) !*rdz {
     const rz = try allocator.create(rdz);
     errdefer allocator.destroy(rz);
-    rz.client = undefined;
+    // allocator.create returns uninitialized memory. Assign the whole struct
+    // literal so every default applies — notably `mu = .init`. Setting only
+    // `client` left the mutex state as garbage and lockUncancelable spun forever.
+    rz.* = .{ .allocator = allocator };
     return rz;
 }
 

@@ -152,26 +152,29 @@ pub fn loadRedis(c: *Container) !void {
 }
 
 pub fn redisHealthCheck(c: *Container) anyerror!void {
-    if (c.redis) |*r| {
-        // Serialize on the shared Redis socket so a concurrent KV/rate-limiter
-        // command can't interleave RESP frames
-        if (c.rdz) |rz| {
-            rz.mu.lockUncancelable(utils.io);
-            defer rz.mu.unlock(utils.io);
-        }
+    // Pointer into the optional's payload: sendAlloc mutates the client.
+    if (c.redis == null) {
+        return error.RedisUnavailable;
+    }
+    const r = &c.redis.?;
+
+    // The lock must cover the whole command. A defer inside this if-block would
+    // release it before sendAlloc, letting PING interleave with KV/rate-limiter
+    // frames on the shared socket and corrupt the RESP stream.
+    if (c.rdz) |rz| {
+        rz.mu.lockUncancelable(utils.io);
         const pong = r.sendAlloc([]u8, c.allocator, .{"ping"}) catch {
-            // The shared socket may have died in an outage. Rebuild it in place
-            // once before declaring Redis unavailable — this heals KV, the rate
-            // limiter, and the health probe at the same time (they all borrow the
-            // same `rdz` reader/writer interfaces).
-            if (c.rdz) |rz| {
-                rz.reconnect() catch return error.RedisUnavailable;
-                return;
-            }
-            return error.RedisUnavailable;
+            // Unlock before reconnect: reconnect() takes the same mutex itself.
+            rz.mu.unlock(utils.io);
+            rz.reconnect() catch return error.RedisUnavailable;
+            return;
         };
         c.allocator.free(pong);
+        rz.mu.unlock(utils.io);
         return;
     }
-    return error.RedisUnavailable;
+
+    // No shared socket wrapper: send without serialization (single consumer).
+    const pong = r.sendAlloc([]u8, c.allocator, .{"ping"}) catch return error.RedisUnavailable;
+    c.allocator.free(pong);
 }
