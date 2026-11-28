@@ -28,7 +28,7 @@ test "staticResolve matches mount with path boundary" {
 }
 
 test "runHealthCheck reports the real check result" {
-    // T17: a health check must report its real outcome, never a stale success and
+    // a health check must report its real outcome, never a stale success and
     // never crash on a failing check. Synchronous semantics are preserved for the
     // disabled-snapshot mode; snapshot mode (`refreshHealthSnapshot`) layers
     // off-path probing on top.

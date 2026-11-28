@@ -3,7 +3,6 @@ const root = @import("../zero.zig");
 const utils = root.utils;
 
 /// Redis-backed KV store, wrapping `rediz.Client` (okredis).
-///
 /// The underlying `rediz.Client` is a single shared connection; without
 /// serialization, concurrent requests would interleave their RESP frames on the
 /// socket and corrupt the stream. A mutex makes every command a full

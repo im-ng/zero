@@ -3,14 +3,12 @@ const root = @import("zero.zig");
 const zul = @import("zul");
 
 /// HashiCorp Vault secret injection for `zero`.
-///
 /// When `VAULT_ADDR` is set, `load` authenticates (via `VAULT_TOKEN`, or an
 /// AppRole login with `VAULT_ROLE_ID` + `VAULT_SECRET_ID`) and fetches every
 /// comma-separated `VAULT_SECRETS_PATH`, merging the returned key/value pairs
 /// into the process environment. Subsequent datasource wiring (`DB_*`, `REDIS_*`,
-/// ...) then reads credentials that never lived in a file or image. Secret
+///...) then reads credentials that never lived in a file or image. Secret
 /// values are never logged.
-///
 /// KV v2 nests secrets under `mount/data/path`; KV v1 under `mount/path`. The
 /// `vault kv` CLI inserts the `data/` segment automatically, so we accept either
 /// form: a `404` on the given path is retried once with `data/` inserted.

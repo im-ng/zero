@@ -207,7 +207,7 @@ pub fn dbResponse(ctx: *Context) !void {
     }
 }
 
-// --- Round 1: time-series (InfluxDB) ---
+// --- time-series (InfluxDB) ---
 
 pub fn tsWrite(ctx: *Context) !void {
     if (ctx.Timeseries) |ts| {

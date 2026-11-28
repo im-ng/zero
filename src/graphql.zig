@@ -18,7 +18,7 @@ pub const ErrorObject = struct {
 };
 
 // Cap on GraphQL query nesting depth. A deeper query is rejected with a field
-// error rather than recursing without bound (stack exhaustion / DoS, audit #29).
+// error rather than recursing without bound (stack exhaustion / DoS,).
 const max_query_depth: usize = 16;
 
 const GraphQLRequest = struct {
@@ -127,7 +127,7 @@ pub fn handle(
         dispatch(Query, query_root, op.selection_set.?, &ec)) catch {
         // A dispatch error (e.g. OOM or an unexpected resolver panic) must still
         // produce a spec-shaped `errors` payload rather than an empty `{data:{}}`
-        // so clients can tell the response failed (audit #29). The message is
+        // so clients can tell the response failed. The message is
         // generic — internal detail is never leaked.
         try ctx.container.metricz.graphqlOperation(.{ .operation = op_name, .kind = op_kind, .status = "error" }, utils.elapsedSeconds(start));
         ctx.response.setStatus(.internal_server_error);

@@ -27,7 +27,6 @@ pub const Options = struct {
 };
 
 /// Unified, type-erased search interface.
-///
 /// Usage (mirrors `ctx.SQL`):
 ///   try ctx.Search.index(ctx, "products", "{\"id\":\"1\",\"title\":\"shoe\"}");
 ///   const hits = try ctx.Search.query(ctx, "products", "title:shoe");

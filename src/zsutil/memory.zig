@@ -19,11 +19,9 @@ fn sysctlInt(name: []const u8) ?usize {
 }
 
 /// Retrieves the current memory usage statistics.
-///
 /// Cross-platform: delegates to `zf.gather` so this works on macOS (sysctl) as
 /// well as Linux (/proc/meminfo), instead of reading /proc directly. Reports
 /// system-wide memory, not per-process.
-///
 /// Returns a `MemUsage` struct with the current memory usage statistics.
 pub fn usage() !MemUsage {
     var sys = root.sysinfo.gather.gather(std.heap.page_allocator, utils.io);
@@ -49,7 +47,6 @@ pub fn usage() !MemUsage {
 }
 
 /// Sets the value of a field in the `MemUsage` struct.
-///
 /// - `value`: A pointer to the field to be set.
 /// - `line`: The line of text containing the field value.
 /// - `section`: The section of the line that contains the field name.
@@ -77,7 +74,6 @@ const MemUsage = struct {
     free_swap: usize = 0,
 
     /// Calculates the percentage of memory used.
-    ///
     /// Returns the percentage of memory used as a `f32` value, or an error if the memory usage statistics are not initialized.
     pub fn percentageUsed(self: MemUsage) !f32 {
         if (self.total == 0 or self.free == 0) {

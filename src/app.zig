@@ -503,7 +503,7 @@ fn queryParam(ctx: *root.Context, name: []const u8) ?[]const u8 {
 }
 
 /// `GET /remote.log.service?id=<uuid>` — returns the current in-process log
-/// level for the given service id as `{ "data": { "id": ..., "level": ... } }`.
+/// level for the given service id as `{ "data": { "id":..., "level":... } }`.
 fn remoteLogServiceGet(ctx: *root.Context) !void {
     const id = queryParam(ctx, "id") orelse "";
     const level = logLevelName(ctx.container.log.logLevel);
@@ -826,7 +826,7 @@ fn favIcon(ctx: *Context) !void {
 /// Join `root` with a URL-relative `rel` and return an owned path that is
 /// guaranteed to stay inside `root`. Any `..` segment is rejected (path
 /// traversal) and `.`/empty segments are collapsed. This is the single guard
-/// against static-file traversal (audit #5); every static-serving path must go
+/// against static-file traversal; every static-serving path must go
 /// through it rather than concatenating `url.path` directly.
 fn safeStaticPath(allocator: std.mem.Allocator, base: []const u8, rel: []const u8) ![]const u8 {
     var out = std.array_list.Managed(u8).init(allocator);
@@ -1143,7 +1143,6 @@ pub fn query(self: *Self, path: []const u8, handler: *const fn (*root.Context) a
 }
 
 /// Registers a GraphQL-over-HTTP endpoint at `path`.
-///
 /// `query_root`/`mutation_root` are resolver instances (plain Zig structs whose
 /// fields are constant values or `fn(*Context, Args) !T` resolvers). They must
 /// outlive the request (e.g. global `var` instances).

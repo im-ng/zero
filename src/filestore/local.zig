@@ -9,7 +9,6 @@ const constants = root.constants;
 const max_walk_depth: usize = 64;
 // Hard cap on the number of keys `list` will return. An unbounded listing lets
 // a store with many files OOM the request; callers that need more must page
-// (audit #26).
 const max_list_entries: usize = 100_000;
 
 /// Local-disk file store. Keys are treated as posix-style relative paths under
@@ -124,7 +123,7 @@ pub const FileStoreLocal = struct {
 
     // Bounded, sorted pagination over the same key set as `list`. Sorting makes
     // the offset/limit window deterministic across requests; the `max_list_entries`
-    // cap in `walk` still bounds total keys (audit #31).
+    // cap in `walk` still bounds total keys.
     pub fn listPaginated(
         self: *FileStoreLocal,
         ctx: *root.Context,
@@ -171,7 +170,7 @@ pub const FileStoreLocal = struct {
     ) !void {
         // Fail fast on an unexpectedly deep tree instead of recursing forever.
         // A runtime check (not `std.debug.assert`) so the guard holds in
-        // ReleaseFast too (audit #26).
+        // ReleaseFast too.
         if (depth > max_walk_depth) return error.FileStoreTooDeep;
         var d = std.Io.Dir.cwd().openDir(root.utils.io, dir, .{ .iterate = true }) catch |err| {
             if (err == error.FileNotFound) return;

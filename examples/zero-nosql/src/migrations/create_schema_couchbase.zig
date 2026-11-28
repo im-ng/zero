@@ -7,7 +7,7 @@ pub const migrationNumber: i64 = 1790080272;
 
 /// Couchbase (document) schema. N1QL needs a primary index before any query can
 /// run, so the migration creates one on the configured bucket. Tagged
-/// `.backend = .couchbase` so it only runs when Couchbase is the active backend.
+/// `.backend =.couchbase` so it only runs when Couchbase is the active backend.
 pub fn create_schema_couchbase_run(c: *Context) anyerror!void {
     const bucket = c.container.config.get("COUCHBASE_BUCKET");
     const query = try std.fmt.allocPrint(

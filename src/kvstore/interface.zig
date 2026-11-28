@@ -18,7 +18,6 @@ pub const Options = struct {
 
 /// Unified, type-erased KV store handle. Mirrors `root.Datasource` so a caller
 /// can use `get`/`set`/`delete`/`exists`/`expire` without knowing the backend.
-///
 /// Returned slices from `get` are allocated with `ctx.allocator` and owned by
 /// the caller (free with `ctx.allocator.free`).
 pub const KVStore = struct {

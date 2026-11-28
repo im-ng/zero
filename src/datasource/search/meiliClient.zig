@@ -4,12 +4,10 @@ const zul = root.zul;
 const utils = root.utils;
 
 /// Self-contained Meilisearch REST client over `zul` (no external driver).
-///
 /// Covers the subset the unified `Search` interface needs: index (upsert),
 /// search, get, delete, plus index creation. Auth uses the
 /// `Authorization: Bearer <api_key>` header. The last upstream failure is kept
 /// in atomics so the health probe can read it without a lock.
-///
 /// This is the standalone client half of the Meilisearch backend, mirroring
 /// `cassandra.zig` / `cassandraClient.zig`. `meili.zig` wraps it into the
 /// `Search` interface.

@@ -25,7 +25,7 @@ pub const CircuitBreaker = struct {
     /// When the breaker entered `half_open`. Used to self-heal: a half-open
     /// trial that never reports a result (e.g. the downstream returned a
     /// terminal 404 with no success/failure recorded) must not pin the breaker
-    /// in `half_open` forever (audit #24: stuck half-open).
+    /// in `half_open` forever (stuck half-open).
     half_open_at: i128 = 0,
     mutex: std.Io.Mutex = .init,
 

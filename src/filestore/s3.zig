@@ -6,10 +6,9 @@ const constants = root.constants;
 const sigv4 = @import("../utils/sigv4.zig");
 
 /// S3-compatible object store (MinIO / R2 / Spaces / B2 / AWS S3).
-///
 /// Requests are signed with AWS Signature Version 4 over the existing `zul`
 /// HTTP client. Object keys map directly to S3 keys under `bucket`:
-/// `create(ctx, "avatars/1.png", ...)` -> `PUT /<bucket>/avatars/1.png`.
+/// `create(ctx, "avatars/1.png",...)` -> `PUT /<bucket>/avatars/1.png`.
 pub const FileStoreS3 = struct {
     allocator: std.mem.Allocator,
     endpoint: []const u8,
@@ -63,7 +62,6 @@ pub const FileStoreS3 = struct {
     ///   SUPABASE_STORAGE_REGION    (default us-east-1, required by SigV4 scope)
     ///   SUPABASE_STORAGE_BUCKET    (required)
     ///   SUPABASE_STORAGE_ACCESS_KEY / SUPABASE_STORAGE_SECRET_KEY (required)
-    ///
     /// The S3 access key + secret are the "S3 Access Keys" shown in the Supabase
     /// Storage settings panel (not the anon/service-role JWTs).
     pub fn openSupabase(allocator: std.mem.Allocator, container: *root.container) !*FileStoreS3 {
@@ -180,7 +178,7 @@ pub const FileStoreS3 = struct {
         try req.header("authorization", h.authorization);
         // Preserve a content type derived from the key; otherwise S3 serves the
         // object as application/octet-stream and inline viewers fall back to
-        // sniffing (audit #26).
+        // sniffing.
         try req.header("content-type", mimeForExt(key));
         req.body(data);
 
@@ -190,7 +188,7 @@ pub const FileStoreS3 = struct {
 
     // Map a storage key's extension to a safe content type. Anything unknown is
     // forced to octet-stream rather than sniffed, so a stored HTML/SVG upload
-    // can never be served with an executable type (audit #26).
+    // can never be served with an executable type.
     fn mimeForExt(key: []const u8) []const u8 {
         const ext = std.fs.path.extension(key);
         if (ext.len == 0) return "application/octet-stream";
@@ -340,7 +338,7 @@ pub const FileStoreS3 = struct {
 
     // Paginate over `list` results. Native S3 continuation-token paging is a
     // follow-up; here we page the already-fetched set without leaking the
-    // non-returned keys (audit #31).
+    // non-returned keys.
     pub fn listPaginated(
         self: *FileStoreS3,
         ctx: *root.Context,

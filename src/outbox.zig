@@ -4,7 +4,6 @@ const utils = root.utils;
 
 /// Transactional outbox (opt-in). Wire it with `App.addOutbox(opts)`; the table,
 /// poller and retry pattern are shipped here.
-///
 /// Pattern: inside a DB transaction, after your business writes, call
 /// `zero.outbox.enqueue(ctx, table, topic, payload)` to insert a message row. A
 /// background cron job (registered by `addOutbox`) periodically polls the table,

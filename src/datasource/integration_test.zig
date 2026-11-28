@@ -91,7 +91,7 @@ test "datasource sqlite backend integration" {
 
 // Cross-dialect parity baseline for pagination (LIMIT/OFFSET) and upsert. These
 // statements are valid on both SQLite and Postgres; MySQL's upsert spelling
-// (`INSERT ... ON DUPLICATE KEY UPDATE`) is a documented gap. Kept in the
+// (`INSERT... ON DUPLICATE KEY UPDATE`) is a documented gap. Kept in the
 // integration build because it drives the real sqlite driver.
 test "datasource sql parity: limit/offset and upsert" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);

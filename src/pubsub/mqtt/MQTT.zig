@@ -119,7 +119,7 @@ pub fn destroy(self: *Self) void {
 }
 
 pub fn Publish(self: *Self, topic: []const u8, payload: []const u8) !?u16 {
-    // Serialize concurrent publishes from HTTP handlers / cron (audit #11).
+    // Serialize concurrent publishes from HTTP handlers / cron.
     self.mu.lockUncancelable(self.container.io);
     defer self.mu.unlock(self.container.io);
     return try self.mqtt.publish(.{}, .{
@@ -207,7 +207,7 @@ fn consume(self: *Self, subscriber: mqSubscriber) !void {
                 defer self.destroyChildAllocator(ca);
 
                 // A valid, non-socket response for the subscriber hook's Context
-                // (audit #15): `_res` is an undefined `*httpz.Response`.
+                //: `_res` is an undefined `*httpz.Response`.
                 const res = root.context.makeSyntheticResponse(ca.allocator()) catch |err| {
                     self.container.log.Any(self.container.allocator, err);
                     continue;

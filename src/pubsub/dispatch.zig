@@ -33,7 +33,7 @@ pub fn runHook(
         allocator.destroy(ca);
     }
 
-    // A valid, non-socket response for the subscriber hook's Context (audit #15):
+    // A valid, non-socket response for the subscriber hook's Context:
     // an undefined `*httpz.Response` is UB if the hook touches it. Backed by the
     // per-message arena, freed when `ca` is deinited at the end of this function.
     const res = root.context.makeSyntheticResponse(ca.allocator()) catch return .failed;
@@ -66,7 +66,7 @@ pub fn runHook(
             }
             // Final failure. Native-DLQ backends (SQS/GCP) rely on their own
             // redrive policy; app-level republish would re-enter the same queue
-            // and loop (audit #14). Leave the message for native redelivery.
+            // and loop. Leave the message for native redelivery.
             if (container.pubSub) |ps| {
                 if (ps.native_dlq) {
                     container.metricz.dlq(.{ .topic = subject, .consumer = "dlq" }) catch {};

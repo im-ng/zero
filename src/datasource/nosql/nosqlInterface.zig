@@ -47,7 +47,6 @@ pub const Options = struct {
 };
 
 /// Unified, type-erased NoSQL interface.
-///
 /// Usage (mirrors `ctx.SQL` — the caller supplies the statement):
 ///   try ctx.NoSQL.put(ctx, "INSERT INTO users (id, data) VALUES ('alice', '{...}')");
 ///   const doc = try ctx.NoSQL.get(ctx, "SELECT data FROM users WHERE id = 'alice'");
@@ -367,8 +366,8 @@ pub const MockBackend = struct {
 // ===================== Tests =====================
 
 // test "NoSQL dispatches through the type-erased handle" {
-//     var mock: MockBackend = .{ .last_value = "" };
-//     var n = NoSQL.init(&mock, .mock, null, null);
+//     var mock: MockBackend =.{.last_value = "" };
+//     var n = NoSQL.init(&mock,.mock, null, null);
 //     var ctx_storage: root.Context = undefined;
 //     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
 //     defer arena.deinit();

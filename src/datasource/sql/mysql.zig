@@ -22,18 +22,18 @@ const tlso = root.tlso;
 const capProtocol41: u32 = 0x200;
 const capSecureConnection: u32 = 0x8000;
 // Cap on how long `poolAcquire` blocks waiting for a free connection before
-// failing fast (audit #16). A saturated pool should not hang a request forever.
+// failing fast. A saturated pool should not hang a request forever.
 const pool_acquire_timeout_ms: u64 = 30_000;
 // Bounded reconnect loop for a fresh connection (the Postgres backend already
 // retries; MySQL had none — a transient blip failed the request instantly,
-// audit #30). Short backoff between attempts; the per-attempt connect timeout
+//). Short backoff between attempts; the per-attempt connect timeout
 // (10s) still bounds each try.
 const mysql_connect_retries: usize = 3;
 const mysql_connect_backoff_ms: u64 = 50;
 
 // Build an `Io.Timeout` from a millisecond budget. `Clock.Duration` carries a
 // clock tag, but for a relative timeout only the raw nanoseconds matter, so any
-// clock is valid (audit #16).
+// clock is valid.
 fn timeoutFromMs(ms: u64) std.Io.Timeout {
     return .{ .duration = .{ .raw = std.Io.Duration.fromMilliseconds(@intCast(ms)), .clock = .real } };
 }
@@ -57,7 +57,7 @@ pub const Config = struct {
     ssl_ca: ?[]const u8 = null,
     max: usize = 10,
     // Cap on the TCP connect + handshake; a dead/unreachable host must not hang a
-    // request thread or pin a pool slot forever (audit #16).
+    // request thread or pin a pool slot forever.
     connect_timeout_ms: u64 = 10_000,
 };
 
@@ -123,7 +123,7 @@ pub const Connection = struct {
         // and a blocked connect cannot be abandoned (cleanup blocks until the
         // syscall returns). A true connect timeout is therefore unavailable on
         // this backend; connect is bounded by the OS TCP timeout, and the pool
-        // acquire path is bounded by `pool_acquire_timeout_ms` (audit #16).
+        // acquire path is bounded by `pool_acquire_timeout_ms`.
         const stream = try addr.connect(io, .{ .mode = .stream });
 
         const recv_buf = try allocator.alloc(u8, 1 << 16);
@@ -914,7 +914,7 @@ pub const MySQL = struct {
     mu: std.Io.Mutex = .init,
     // Signalling primitive for connection availability. An `Event` (rather than a
     // `Condition`) lets `poolAcquire` bound the wait with a deadline so a fully
-    // saturated pool fails fast instead of hanging a request forever (audit #16).
+    // saturated pool fails fast instead of hanging a request forever.
     event: std.Io.Event = .unset,
     free: std.ArrayList(*Connection) = .empty,
     total: usize = 0,
@@ -1011,7 +1011,7 @@ pub const MySQL = struct {
 
     // On a failed query, only a transport/protocol failure (not a SQL error from
     // an ERR packet) means the connection is broken. Poisoning on `MySqlError`
-    // would discard a perfectly good connection and thrash the pool (audit #17).
+    // would discard a perfectly good connection and thrash the pool.
     // Releases the connection and returns the error to the caller, which then
     // propagates it with its own return type.
     fn failConn(self: *Self, conn: *Connection, err: anyerror) void {
@@ -1046,7 +1046,7 @@ pub const MySQL = struct {
                 self.total += 1;
                 self.mu.unlock(self.io);
                 // Retry transient connect failures a few times before giving up,
-                // so a brief network blip doesn't fail the request (audit #30).
+                // so a brief network blip doesn't fail the request.
                 var last_err: anyerror = error.MySqlConnectFailed;
                 var attempt: usize = 0;
                 while (attempt < mysql_connect_retries) : (attempt += 1) {

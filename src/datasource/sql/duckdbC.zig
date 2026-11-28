@@ -8,10 +8,10 @@ pub const idx_t = u64;
 pub const duckdb_state = c_int;
 pub const duckdb_type = c_int;
 
-/// `typedef struct _duckdb_database { ... } *duckdb_database;` — a pointer type.
+/// `typedef struct _duckdb_database {... } *duckdb_database;` — a pointer type.
 pub const duckdb_database = ?*anyopaque;
 
-/// `typedef struct _duckdb_connection { ... } *duckdb_connection;`
+/// `typedef struct _duckdb_connection {... } *duckdb_connection;`
 pub const duckdb_connection = ?*anyopaque;
 
 /// `duckdb_result` is a struct passed by value.

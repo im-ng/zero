@@ -184,7 +184,7 @@ pub fn exec(self: *Self, comptime query: []const u8, args: anytype) !i64 {
 
     self.lastId = id orelse 0;
     // `execOpts` returns the server's affected-row count for Postgres; surface
-    // it as `rowsAffected` (it was hardcoded to 0, audit #22).
+    // it as `rowsAffected` (it was hardcoded to 0,).
     self.rows = @intCast(id orelse 0);
     return self.lastId;
 }
@@ -241,7 +241,7 @@ pub fn select(self: *Self, comptime _type: anytype, comptime query: []const u8, 
     self.recordMetrics(duration, query, "select");
 
     // Zero rows would otherwise hand the caller `undefined` memory wrapped in a
-    // non-null optional (audit #22).
+    // non-null optional.
     if (!found) return null;
     return result;
 }

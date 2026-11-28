@@ -48,7 +48,7 @@ pub fn main(init: std.process.Init) !void {
     // Per-service outbound config: auth + circuit breaker. Explicit values here
     // override any SERVICE_AUTHSERVICE_* env defaults resolved by addHttpService.
     var svc_opts: zero.client.ServiceOptions = .{};
-    // svc_opts.circuitBreaker = .{ .failure_threshold = 5, .cooldown_ms = 30_000 };
+    // svc_opts.circuitBreaker =.{.failure_threshold = 5,.cooldown_ms = 30_000 };
 
     const svc_key = app.config.getOrDefault("AUTH_API_KEY", "");
     if (svc_key.len > 0) {

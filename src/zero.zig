@@ -2,7 +2,7 @@ pub const std = @import("std");
 pub const constants = @import("constants.zig");
 
 // Comptime feature flags, emitted by `build.zig` (-Dkafka / -Dduckdb). Lets a
-// build drop a subsystem (and its native library) entirely. T22.
+// build drop a subsystem (and its native library) entirely.
 pub const build_options = @import("build_options");
 
 // zero dependencies

@@ -7,7 +7,7 @@ pub fn build(b: *std.Build) void {
 
     // Feature flags: keep a subsystem out of the build when its native library
     // (librdkafka / libduckdb) is unavailable. Both default to on so the build
-    // is unchanged unless explicitly disabled (T22).
+    // is unchanged unless explicitly disabled.
     const kafka_enabled = b.option(bool, "kafka", "Build with Apache Kafka (librdkafka) support") orelse true;
     const duckdb_enabled = b.option(bool, "duckdb", "Build with DuckDB (in-process OLAP SQL) support") orelse true;
 
@@ -384,7 +384,7 @@ pub fn build(b: *std.Build) void {
     // `zig build` (the default step) also produces the zero CLI.
     b.getInstallStep().dependOn(&install_zero.step);
 
-    // Protobuf code generation. `zig build gen-proto` compiles .proto files in
+    // Protobuf code generation. `zig build gen-proto` compiles.proto files in
     // `proto/` into Zig structs under `src/proto/`. The first run downloads
     // Google's protoc (lazy dep in the protobuf package); pass a local binary
     // via `.protoc = b.path("protoc")` to build fully offline.

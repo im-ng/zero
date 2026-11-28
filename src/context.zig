@@ -427,7 +427,6 @@ pub const Context = struct {
         const f = form.get(field) orelse return null;
         // Keep only the basename: a client-supplied filename like `../../etc/x`
         // must never become a traversal key when the caller saves it to a store
-        // (audit #26).
         const raw_name = f.filename orelse "";
         const safe_name = std.fs.path.basename(raw_name);
         return root.UploadedFile{
@@ -554,7 +553,7 @@ pub const Context = struct {
     }
 
     /// Issues a 3xx redirect. Defaults to 302 Found; use redirectWith for an
-    /// explicit status (e.g. .moved_permanently / .see_other / .temporary_redirect).
+    /// explicit status (e.g..moved_permanently /.see_other /.temporary_redirect).
     pub fn redirect(self: *Context, url: []const u8) void {
         self.redirectWith(std.http.Status.found, url);
     }
@@ -601,7 +600,6 @@ pub const Context = struct {
 
     /// Executes a GraphQL query against the given resolver root(s) and writes a
     /// `Content-Type: application/json` `{ data, errors }` response.
-    ///
     /// `mutation_root` may be null when the operation is always a query.
     pub fn graphql(
         self: *Context,
@@ -626,7 +624,7 @@ pub const Context = struct {
 
 /// Build a valid `httpz.Response` for non-HTTP contexts (cron jobs, pub/sub
 /// subscriber dispatch) so `Context` never carries an undefined response pointer
-/// (audit #15). The response accessors these contexts use — `setStatus`, `body`,
+///. The response accessors these contexts use — `setStatus`, `body`,
 /// `header`, `json`, `writer` — only read `status`, `body`, `headers`, and an
 /// allocating buffer; none touch the socket, so a synthetic connection with only
 /// `res_state` initialized is sufficient. The returned response (and its backing

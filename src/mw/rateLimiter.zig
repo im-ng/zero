@@ -27,9 +27,9 @@ pub const Config = struct {
     window_ms: i64 = constants.DEFAULT_RATE_LIMIT_WINDOW_MS,
     key_mode: KeyMode = .ip,
     header_name: []const u8 = "X-Forwarded-For",
-    /// When `key_mode == .header`, the `X-Forwarded-For` header is only trusted
+    /// When `key_mode ==.header`, the `X-Forwarded-For` header is only trusted
     /// if the immediate peer is one of these proxy IPs. Otherwise a client could
-    /// spoof the header and dodge the limit (audit #25). Empty = never trust the
+    /// spoof the header and dodge the limit. Empty = never trust the
     /// header; fall back to the peer address.
     trusted_proxies: []const []const u8 = &[0][]const u8{},
     /// When true, Redis errors / map-capacity exhaustion reject the request
@@ -38,10 +38,10 @@ pub const Config = struct {
     fail_closed: bool = false,
     /// Backing store for the counter. Defaults to the existing in-process map.
     store: Store = .memory,
-    /// Borrowed Redis client used only when `store == .redis`. Copied (not
+    /// Borrowed Redis client used only when `store ==.redis`. Copied (not
     /// owned) — `container.redis` owns the connection and outlives the limiter.
     redis: ?rediz.Client = null,
-    /// Shared Redis socket+lock. When `store == .redis`, INCR/PEXPIRE are sent
+    /// Shared Redis socket+lock. When `store ==.redis`, INCR/PEXPIRE are sent
     /// under `rdz.mu` so they can't interleave with KV/health commands on the
     /// single shared socket
     rdz: ?*root.rdz = null,
@@ -191,7 +191,7 @@ pub fn execute(self: *rateLimiter, req: *httpz.Request, res: *httpz.Response, ex
 }
 
 /// Respond 429 with a plain body (the `Retry-After` header is added separately,
-/// audit #25).
+///).
 fn reject(res: *httpz.Response) void {
     res.setStatus(std.http.Status.too_many_requests);
     res.content_type = .TEXT;
@@ -227,7 +227,7 @@ fn keyFor(self: *const rateLimiter, req: *httpz.Request) ?u64 {
 }
 
 /// True if the immediate peer is a configured trusted proxy, so its forwarded
-/// headers may be believed (audit #25). Without this, `X-Forwarded-For` is
+/// headers may be believed. Without this, `X-Forwarded-For` is
 /// client-controlled and trivially spoofable.
 fn isTrustedPeer(self: *const rateLimiter, req: *httpz.Request) bool {
     if (self.trusted_proxies.len == 0) return false;

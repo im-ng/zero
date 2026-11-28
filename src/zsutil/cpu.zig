@@ -28,12 +28,10 @@ pub const CpuInfo = struct {
     cache_size: []const u8 = "",
     /// The number of CPU cores.
     cpu_cores: []const u8 = "",
-    ///
     cpu_speed: []const u8 = "",
 };
 
 /// Retrieves the CPU information.
-///
 /// Cross-platform: delegates to `zf.gather` so this works on macOS (sysctl)
 /// as well as Linux (/proc/cpuinfo), instead of reading /proc directly.
 /// Returns a `CpuInfo` struct containing the CPU information.
@@ -69,7 +67,6 @@ fn dupeOrEmpty(allocator: std.mem.Allocator, value: ?[]const u8) []const u8 {
 }
 
 /// Sets the value of a field in the `CpuInfo` struct.
-///
 /// - `allocator`: The memory allocator to use for dynamic memory allocation.
 /// - `T`: The type of the field to set.
 /// - `value`: A pointer to the field to be set.
@@ -87,10 +84,8 @@ fn setValue(allocator: std.mem.Allocator, comptime T: type, value: *T, line: []c
 }
 
 /// Calculates the percentage of CPU usage.
-///
 /// This function retrieves the CPU usage statistics twice, with a delay of `update_interval` nanoseconds between the two measurements.
 /// It then calculates the percentage of CPU usage based on the difference between the two measurements.
-///
 /// Returns the percentage of CPU usage as a `f32` value.
 pub fn percentageUsed() !f32 {
     const prev_stats = try usage();
@@ -100,9 +95,7 @@ pub fn percentageUsed() !f32 {
 }
 
 /// Retrieves the current CPU usage statistics.
-///
 /// This function reads the CPU usage statistics from the `/proc/stat` file and returns a `CpuUsage` struct containing the values.
-///
 /// Returns a `CpuUsage` struct with the current CPU usage statistics, or an error if the data is invalid.
 pub fn usage() !CpuUsage {
     const file = try std.Io.Dir.openFileAbsolute(utils.io, stat_file, .{});
@@ -129,7 +122,6 @@ pub fn usage() !CpuUsage {
 }
 
 /// Retrieves the index of the first number ocurrence.
-///
 /// This function reads a []const u8 and returns the index of the first number ocurrence.
 /// Otherwise, returns 4 (taking "cpu " string as the default)
 fn getFirstNumber(str: []const u8) usize {
@@ -160,10 +152,8 @@ const CpuUsage = struct {
 };
 
 /// Calculates the CPU usage percentage based on the provided CPU usage statistics.
-///
 /// - `prev_stats`: The CPU usage statistics for the previous measurement.
 /// - `curr_stats`: The CPU usage statistics for the current measurement.
-///
 /// Returns the CPU usage percentage as a `f32` value.
 fn calculateCpuUsage(prev: CpuUsage, curr: CpuUsage) f32 {
     const prev_idle = prev.idle;

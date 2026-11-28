@@ -3,12 +3,10 @@ const utils = @import("zero").utils;
 
 /// A byte-counting allocator that wraps any backing allocator and records total
 /// allocated / freed bytes plus a per-call-site breakdown.
-///
 /// It tracks the *true* allocation size per pointer (via a map), because some
 /// helpers (e.g. utils.timestampz) alloc a buffer and return a truncated slice;
 /// the real backing allocator frees the whole block by header, so counting freed
 /// bytes by `buf.len` would under-count and false-positive a leak.
-///
 /// `free` is a no-op for pointers it never allocated (e.g. the stack-resident
 /// `Context` that `Context.deinit` forwards to `allocator.destroy`), so the
 /// counter can be dropped in as a request arena without crashing on the

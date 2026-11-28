@@ -104,7 +104,7 @@ pub fn createWithConfig(
 
     // `allocator.create` returns uninitialized memory, so assign the full
     // struct literal. This applies every field default (notably
-    // `oauth_token = null`, `oauth_client = null`, `oauth_mutex = .init`) —
+    // `oauth_token = null`, `oauth_client = null`, `oauth_mutex =.init`) —
     // without this, those fields are garbage and `deinit`'s `free(token)`
     // frees a dangling pointer and crashes at shutdown.
     c.* = .{
@@ -521,7 +521,7 @@ fn createAndSendRequest(
     // the result of `utils.combine`, which returns an unfreeable subslice whose
     // 256-byte backing buffer is intentionally leaked by design. We must not free
     // either, so there is deliberately no `defer free` here: freeing `&absoluteURL`
-    // would corrupt the heap by destroying a stack-local slice header (audit #7).
+    // would corrupt the heap by destroying a stack-local slice header.
     var absoluteURL: []const u8 = self.url.?;
 
     if (path.len > 0) {
@@ -662,7 +662,7 @@ fn createAndSendRequest(
                 // The downstream clearly responded, so the circuit should treat
                 // it as healthy and close (a 404 is a business error, not an
                 // outage). Without this, a terminal 404 leaves the half-open
-                // trial unresolved and pins the breaker (audit #24).
+                // trial unresolved and pins the breaker.
                 if (self.breaker) |*b| {
                     b.recordSuccess();
                 }
@@ -710,7 +710,7 @@ fn createAndSendRequest(
             replayed = true;
             // Clear the cached token under the oauth mutex so concurrent requests
             // reading `self.oauth_token` in `ensureOAuthToken` can't dereference a
-            // token we're about to free (use-after-free, audit #8).
+            // token we're about to free (use-after-free,).
             self.oauth_mutex.lockUncancelable(self.container.io);
             if (self.oauth_token) |old| {
                 self.container.allocator.free(old);
@@ -729,7 +729,7 @@ fn createAndSendRequest(
     // `traceID` is either the caller-owned buffer from `getResponseTraceIDBuffer`
     // (which we free) or the response header slice `_id` (owned by the response
     // and freed by `res.deinit`, so we must NOT free it). Destroying `&traceID`
-    // would corrupt the heap (it is a stack-local slice header), audit #7.
+    // would corrupt the heap (it is a stack-local slice header),.
     var free_trace: bool = false;
     var traceID: []const u8 = undefined;
     if (responseTraceID) |_id| {
@@ -775,7 +775,7 @@ fn createAndSendRequest(
     // On success we return `parsed.value`, whose slices point into the arena that
     // `std.json.parseFromSlice` built inside `parsed`. Deinitializing `parsed`
     // here would free that arena before the caller reads the value (use-after-free,
-    // audit #6). The arena lives in `ctx.allocator` and is reclaimed by the
+    //). The arena lives in `ctx.allocator` and is reclaimed by the
     // per-request arena at request end, so the returned value stays valid for the
     // caller and the memory is not leaked past the request.
 
@@ -826,7 +826,7 @@ const OAuthFetchResult = struct {
 
 /// Fetch a fresh OAuth token from the IdP. Does NOT touch `oauth_token` and does
 /// NOT take `oauth_mutex` — the caller handles caching/locking so the mutex is
-/// never held across the network round-trip (audit #24). On failure returns an
+/// never held across the network round-trip. On failure returns an
 /// error; the caller decides whether to fall back to a stale cached token.
 fn fetchOAuthToken(self: *Self) !OAuthFetchResult {
     const cfg = self.auth.?.oauth orelse return error.OAuthTokenFetchFailed;
@@ -953,7 +953,7 @@ fn fetchOAuthToken(self: *Self) !OAuthFetchResult {
         },
     ) catch {
         // The token endpoint returned a payload we can't shape into a token
-        // (e.g. an `{"error": ...}` body, or a missing `access_token`). Treat
+        // (e.g. an `{"error":...}` body, or a missing `access_token`). Treat
         // that as a fetch failure so the caller gets a meaningful client error
         // rather than an internal `MissingField`.
         if (self.oauth_breaker) |*b| {
@@ -973,7 +973,7 @@ fn fetchOAuthToken(self: *Self) !OAuthFetchResult {
 /// Uses double-checked locking: the fast path reads a still-valid cache under
 /// the mutex and returns without any I/O, and the slow path fetches the token
 /// WITHOUT holding the mutex so concurrent outbound calls aren't blocked on the
-/// IdP round-trip (audit #24). A newer token produced by a concurrent refresh
+/// IdP round-trip. A newer token produced by a concurrent refresh
 /// is preferred over the one just fetched.
 fn ensureOAuthToken(self: *Self) ![]const u8 {
     // Fast path: return a still-valid cached token. The mutex is held only long

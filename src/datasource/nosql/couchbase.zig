@@ -177,17 +177,17 @@ pub const Couchbase = struct {
 //     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
 //     defer arena.deinit();
 //     const alloc = arena.allocator();
-//     const cb = try Couchbase.create(alloc, .{ .contact_points = "localhost:8093", .bucket = "b" });
+//     const cb = try Couchbase.create(alloc,.{.contact_points = "localhost:8093",.bucket = "b" });
 //     defer cb.deinit(alloc);
 
 //     const resp = std.json.Value{
-//         .object = blk: {
+//        .object = blk: {
 //             var o = std.json.ObjectMap.empty;
 //             var arr = std.json.Array.init(alloc);
 //             var doc = std.json.ObjectMap.empty;
-//             try doc.put(alloc, "name", std.json.Value{ .string = "alice" });
-//             try arr.append(std.json.Value{ .object = doc });
-//             try o.put(alloc, "results", std.json.Value{ .array = arr });
+//             try doc.put(alloc, "name", std.json.Value{.string = "alice" });
+//             try arr.append(std.json.Value{.object = doc });
+//             try o.put(alloc, "results", std.json.Value{.array = arr });
 //             break :blk o;
 //         },
 //     };
@@ -204,16 +204,16 @@ pub const Couchbase = struct {
 //     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
 //     defer arena.deinit();
 //     const alloc = arena.allocator();
-//     const cb = try Couchbase.create(alloc, .{ .contact_points = "localhost:8093", .bucket = "b" });
+//     const cb = try Couchbase.create(alloc,.{.contact_points = "localhost:8093",.bucket = "b" });
 //     defer cb.deinit(alloc);
 
-//     const absent = try cb.results(std.json.Value{ .object = std.json.ObjectMap.empty });
+//     const absent = try cb.results(std.json.Value{.object = std.json.ObjectMap.empty });
 //     try std.testing.expectEqual(@as(usize, 0), absent.len);
 
 //     const empty = try cb.results(std.json.Value{
-//         .object = blk: {
+//        .object = blk: {
 //             var o = std.json.ObjectMap.empty;
-//             try o.put(alloc, "results", std.json.Value{ .array = std.json.Array.init(alloc) });
+//             try o.put(alloc, "results", std.json.Value{.array = std.json.Array.init(alloc) });
 //             break :blk o;
 //         },
 //     });
@@ -224,21 +224,21 @@ pub const Couchbase = struct {
 //     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
 //     defer arena.deinit();
 //     const alloc = arena.allocator();
-//     const cb = try Couchbase.create(alloc, .{ .contact_points = "localhost:8093", .bucket = "b" });
+//     const cb = try Couchbase.create(alloc,.{.contact_points = "localhost:8093",.bucket = "b" });
 //     defer cb.deinit(alloc);
 
-//     const s = try cb.dump(alloc, std.json.Value{ .string = "x" });
+//     const s = try cb.dump(alloc, std.json.Value{.string = "x" });
 //     defer alloc.free(s);
 //     try std.testing.expectEqualStrings("\"x\"", s);
 
-//     const n = try cb.dump(alloc, std.json.Value{ .integer = 42 });
+//     const n = try cb.dump(alloc, std.json.Value{.integer = 42 });
 //     defer alloc.free(n);
 //     try std.testing.expectEqualStrings("42", n);
 
-//     const arr = try cb.dump(alloc, std.json.Value{ .array = blk: {
+//     const arr = try cb.dump(alloc, std.json.Value{.array = blk: {
 //         var a = std.json.Array.init(alloc);
-//         try a.append(std.json.Value{ .string = "a" });
-//         try a.append(std.json.Value{ .string = "b" });
+//         try a.append(std.json.Value{.string = "a" });
+//         try a.append(std.json.Value{.string = "b" });
 //         break :blk a;
 //     } });
 //     defer alloc.free(arr);
@@ -247,11 +247,11 @@ pub const Couchbase = struct {
 
 // test "Couchbase create stores credentials and frees cleanly" {
 //     const alloc = std.testing.allocator;
-//     const cb = try Couchbase.create(alloc, .{
-//         .contact_points = "cp1:8093,cp2:8093",
-//         .bucket = "b",
-//         .user = "u",
-//         .password = "p",
+//     const cb = try Couchbase.create(alloc,.{
+//        .contact_points = "cp1:8093,cp2:8093",
+//        .bucket = "b",
+//        .user = "u",
+//        .password = "p",
 //     });
 //     cb.deinit(alloc);
 // }

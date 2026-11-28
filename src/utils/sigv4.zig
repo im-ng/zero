@@ -2,7 +2,6 @@ const std = @import("std");
 const root = @import("../zero.zig");
 
 /// AWS Signature Version 4 (pure, unit-testable, header + query variants).
-///
 /// Shared by every AWS-backed client (S3 / Supabase Storage, SQS) so the
 /// signing core lives in exactly one place. Mirrors the algorithm in
 /// `filestore/s3.zig` (which now delegates here) and the AWS "GET vanilla"

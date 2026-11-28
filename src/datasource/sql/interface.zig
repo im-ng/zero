@@ -104,11 +104,10 @@ pub const MockBackend = struct {
 };
 
 /// Unified, type-erased datasource interface.
-///
 /// Usage (mirrors `ctx.SQL`):
-///   const user = try ctx.SQL.queryRow(User, "SELECT ...", .{});
-///   const rows = try ctx.SQL.queryRows(User, alloc, "SELECT ...", .{});
-///   try ctx.SQL.selectSlice(User, &list, "SELECT ...", .{});
+///   const user = try ctx.SQL.queryRow(User, "SELECT...", .{});
+///   const rows = try ctx.SQL.queryRows(User, alloc, "SELECT...", .{});
+///   try ctx.SQL.selectSlice(User, &list, "SELECT...", .{});
 pub const Interface = struct {
     ptr: *anyopaque,
     dialect: Dialect,
@@ -627,8 +626,8 @@ pub const Interface = struct {
 
 //     // Native-free backend: exercises the dispatch without loading a real
 //     // database driver (which aborts under kcov's ptrace and blanks coverage).
-//     var mock: MockBackend = .{};
-//     const ds = Interface.init(&mock, .mock);
+//     var mock: MockBackend =.{};
+//     const ds = Interface.init(&mock,.mock);
 
 //     var ctx_storage: root.Context = undefined;
 //     ctx_storage.allocator = allocator;

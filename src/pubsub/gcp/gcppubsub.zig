@@ -28,7 +28,7 @@ pub const GCP = struct {
     token: ?[]const u8 = null,
     token_expires_at_ns: i128 = 0,
     // Serializes token refresh so concurrent publish/subscribe/poll threads can't
-    // free-and-replace `token` underneath each other (audit #9).
+    // free-and-replace `token` underneath each other.
     token_mutex: std.Io.Mutex = .init,
     subscription: []const u8,
     subscribers: std.array_list.Managed(Subscriber),
@@ -144,7 +144,7 @@ pub const GCP = struct {
         if (self.token) |old| {
             self.allocator.free(old);
         }
-        // Refresh 30s before the real `expires_in` lapses (audit #9: previously a
+        // Refresh 30s before the real `expires_in` lapses (previously a
         // hardcoded 3600s with the actual `expires_in` ignored).
         self.token_expires_at_ns = utils.nowMonotonic().nanoseconds +
             @as(i128, tok.expires_in) * 1_000_000_000 - 30_000_000_000;
@@ -234,7 +234,7 @@ pub const GCP = struct {
                 const union_msg: root.pubsubInterface.Message = .{ .gcp = &m };
                 // Only ACK once every subscriber hook has handled the message.
                 // On failure we leave it so GCP redelivers / applies its native
-                // dead-letter subscription instead of dropping it (audit #14).
+                // dead-letter subscription instead of dropping it.
                 if (dispatch.runHook(self.container.?, sub.hook, union_msg) == .handled) {
                     self.acknowledge(token, rm.ackId) catch {};
                 }

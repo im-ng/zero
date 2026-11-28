@@ -26,8 +26,8 @@ pub fn build(b: *std.Build) void {
 
     exe.root_module.addImport("zero", zero.module("zero"));
 
-    // Generate Zig structs from the .proto definitions under `proto/`. Run
-    // `zig build gen-proto` whenever the .proto changes. The first run downloads
+    // Generate Zig structs from the.proto definitions under `proto/`. Run
+    // `zig build gen-proto` whenever the.proto changes. The first run downloads
     // Google's protoc (cached in the zig global cache); pass a local binary via
     // `.protoc = b.path("protoc")` to build fully offline.
     const gen_proto = b.step("gen-proto", "Generate Zig structs from .proto definitions");

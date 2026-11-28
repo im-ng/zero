@@ -87,7 +87,6 @@ pub fn create(
     // Only advertise pub/sub as configured when we actually got a client. If
     // `rd_kafka_new` failed (client == null) we must not set the flag, otherwise
     // the dispatcher would route publishes to a null `client` and crash
-    // (audit #10).
     c.isPubSubSet = (client != null);
 
     return c;
@@ -161,7 +160,7 @@ pub fn destroy(self: *Self) void {
 
 pub fn publish(self: *Self, ctx: *Context, topic: *kafkaTopic, key: []const u8, payload: []const u8) !void {
     // Guard fan-in: Publish is called concurrently from HTTP handlers and cron
-    // jobs (audit #11). Serialize on the shared client state via the per-client
+    // jobs. Serialize on the shared client state via the per-client
     // mutex (also used by the subscriber dispatch path).
     self.mu.lockUncancelable(self.container.io);
     defer self.mu.unlock(self.container.io);
@@ -250,7 +249,7 @@ pub fn publishOnSubject(self: *Self, subject: []const u8, payload: []const u8, k
     };
     defer self.destroyChildAllocator(ca);
 
-    // A valid, non-socket response for the subscriber/handler Context (audit #15):
+    // A valid, non-socket response for the subscriber/handler Context:
     // `_res` is an undefined `*httpz.Response` and a hook touching it is UB.
     const res = root.context.makeSyntheticResponse(ca.allocator()) catch |err| {
         self.container.log.any(err);

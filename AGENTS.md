@@ -3,6 +3,7 @@
 ## Communication style
 
 When presenting changes, summaries, or any explanation to the user, follow `writing-style-guide.md`.
+
 - Simplify the language, not the technical idea.
 - Use short, active, spoken-style sentences.
 - Show the concrete case before the general rule.
@@ -26,7 +27,7 @@ write. The hard rules that get missed most often:
   genuinely infallible site (exact-size `bufPrint`, comptime parse) may keep
   `catch unreachable` but must say why in a comment. Best-effort sites
   (`std.Thread.yield() catch {}`, response writes at error time) are OK.
-- **Comments explain *why*, as full sentences.** Show your workings.
+- **Comments explain _why_, as full sentences.** Show your workings.
 - **Handle every error.** Never swallow a failure.
 - **Cap every unbounded collection** and assert pre/postconditions; fail fast.
 
@@ -137,30 +138,30 @@ downstream with a circuit breaker.
 
 ### Source layout
 
-| Directory | Purpose |
-|---|---|
+| Directory         | Purpose                                                                                                                                                                                                                       |
+| ----------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `src/datasource/` | Datasources: SQL (`postgres`/`mysql`/`sqlite`/`duckdb`/`supabase`), NoSQL (`cassandra`/`mongodb`/`couchbase`/`arangodb`), time-series (`influxdb`/`opentsdb`), search (`solr`/`meilisearch`), graph (`dgraph`), Redis (`rdz`) |
-| `src/pubsub/` | Pub/Sub backends: MQTT, Kafka, NATS, Redis, **AWS SQS** (`sqs.zig`), **GCP Pub/Sub** (`gcppubsub.zig`) behind `interface.zig` |
-| `src/filestore/` | File stores: local, S3, Supabase, **GCS** (`gcs.zig`) |
-| `src/aws/` | AWS SigV4 request signing (`sigv4.zig`), reused by S3 + SQS |
-| `src/gcp/` | GCP OAuth2 client-credentials (`oauth.zig`), reused by GCS + Pub/Sub |
-| `src/cronz/` | Cron scheduler and jobs |
-| `src/migration/` | DB migrations and seeding |
-| `src/mw/` | Middleware: auth, tracing (tracz), websocket, **rate limiting** (`rateLimiter.zig`) |
-| `src/service/` | HTTP client for external services |
-| `src/http/` | Error types |
-| `src/zsutil/` | System utils: memory, cpu, process, host |
-| `src/static/` | Embedded swagger UI assets |
+| `src/pubsub/`     | Pub/Sub backends: MQTT, Kafka, NATS, Redis, **AWS SQS** (`sqs.zig`), **GCP Pub/Sub** (`gcppubsub.zig`) behind `interface.zig`                                                                                                 |
+| `src/filestore/`  | File stores: local, S3, Supabase, **GCS** (`gcs.zig`)                                                                                                                                                                         |
+| `src/aws/`        | AWS SigV4 request signing (`sigv4.zig`), reused by S3 + SQS                                                                                                                                                                   |
+| `src/gcp/`        | GCP OAuth2 client-credentials (`oauth.zig`), reused by GCS + Pub/Sub                                                                                                                                                          |
+| `src/cronz/`      | Cron scheduler and jobs                                                                                                                                                                                                       |
+| `src/migration/`  | DB migrations and seeding                                                                                                                                                                                                     |
+| `src/mw/`         | Middleware: auth, tracing (tracz), websocket, **rate limiting** (`rateLimiter.zig`)                                                                                                                                           |
+| `src/service/`    | HTTP client for external services                                                                                                                                                                                             |
+| `src/http/`       | Error types                                                                                                                                                                                                                   |
+| `src/zsutil/`     | System utils: memory, cpu, process, host                                                                                                                                                                                      |
+| `src/static/`     | Embedded swagger UI assets                                                                                                                                                                                                    |
 
 ## Dependency import names
 
 Three dependency imports have non-obvious module names in `build.zig`:
 
 | Dependency | Import name | Module name |
-|---|---|---|
-| `okredis` | `rediz` | `okredis` |
-| `regexp` | `regexp` | `regex` |
-| `jwt` | `jwt` | `zig-jwt` |
+| ---------- | ----------- | ----------- |
+| `okredis`  | `rediz`     | `okredis`   |
+| `regexp`   | `regexp`    | `regex`     |
+| `jwt`      | `jwt`       | `zig-jwt`   |
 
 ## Config
 
@@ -198,11 +199,11 @@ A large set of example apps in `examples/` — each has its own `build.zig.zon` 
 
 ## Zig version compatibility
 
-| Version | Compiles | Tests | Runtime | Notes |
-|---|---|---|---|---|
-| 0.15.1 | Yes | 52/52 (7 leaks) | Full | Production baseline |
-| 0.15.2 | Yes | 52/52 (7 leaks) | **Broken** | No log output, no HTTP server — `std.fs.File.stdout()` I/O change in logger.zig breaks httpz |
-| 0.16.0 | Yes | 52+21+3 | Yes | Works in this env with vendored deps; benchmark HTTP server binds and serves |
+| Version | Compiles | Tests           | Runtime    | Notes                                                                                        |
+| ------- | -------- | --------------- | ---------- | -------------------------------------------------------------------------------------------- |
+| 0.15.1  | Yes      | 52/52 (7 leaks) | Full       | Production baseline                                                                          |
+| 0.15.2  | Yes      | 52/52 (7 leaks) | **Broken** | No log output, no HTTP server — `std.fs.File.stdout()` I/O change in logger.zig breaks httpz |
+| 0.16.0  | Yes      | 52+21+3         | Yes        | Works in this env with vendored deps; benchmark HTTP server binds and serves                 |
 
 - See `ZIG_LEARNINGS.md` for the 0.16.0 migration plan and upgrade notes
 - **0.15.2 runtime issue**: `src/logger.zig` uses `std.fs.File.stdout().writer(&stdout_buffer)` pattern which silently fails under 0.15.2 — stdout fd becomes a socket, HTTP server never binds

@@ -770,7 +770,7 @@ test "retrieveUserName strips Basic prefix and decodes user" {
     const header = try std.fmt.allocPrint(allocator, "Basic {s}", .{enc});
     defer allocator.free(header);
 
-    // Decoding the whole "Basic ..." header used to fail with InvalidPadding.
+    // Decoding the whole "Basic..." header used to fail with InvalidPadding.
     const user = try auth.retrieveUserName(allocator, header);
     defer if (user) |u| allocator.free(u);
     try std.testing.expectEqualStrings("alice", user.?);

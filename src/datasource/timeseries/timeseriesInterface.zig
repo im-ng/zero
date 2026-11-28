@@ -26,7 +26,6 @@ pub const Options = struct {
 };
 
 /// Unified, type-erased time-series interface.
-///
 /// Usage (mirrors `ctx.SQL`):
 ///   try ctx.Timeseries.write(ctx, "cpu,host=server1 usage=42.1");
 ///   const csv = try ctx.Timeseries.query(ctx, "SELECT * FROM cpu");
@@ -212,8 +211,8 @@ pub const MockBackend = struct {
 // ===================== Tests =====================
 
 // test "Timeseries dispatches through the type-erased handle" {
-//     var mock: MockBackend = .{};
-//     var ts = Timeseries.init(&mock, .mock, null, null);
+//     var mock: MockBackend =.{};
+//     var ts = Timeseries.init(&mock,.mock, null, null);
 //     var ctx_storage: root.Context = undefined;
 //     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
 //     defer arena.deinit();

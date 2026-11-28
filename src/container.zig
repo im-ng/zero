@@ -121,7 +121,6 @@ fn redisHealthCheck(c: *container) anyerror!void {
 }
 
 /// Runs a single health check and returns `true` only if it succeeds.
-///
 /// The check is a synchronous `anyerror!void` dispatched on the caller's thread,
 /// so this returns the actual dependency status (`true` = UP, `false` = DOWN) and
 /// does NOT enforce a timeout. Prefer health-snapshot mode
@@ -479,15 +478,15 @@ DuckGres: ?*root.DuckGres = null,
 // Columnar OLAP SQL engine (ClickHouse) over HTTP. No native driver / C lib.
 ClickHouse: ?*root.ClickHouse = null,
 
-// Specialized datasources (Round 1: time-series / search).
+// Specialized datasources (time-series / search).
 Timeseries: ?*root.Timeseries = null,
 Search: ?*root.Search = null,
 
-// NoSQL datasource (Round 1: document / wide-column).
+// NoSQL datasource (document / wide-column).
 NoSQL: ?*root.NoSQL = null,
 nosql_backend: ?root.nosqlInterface.Backend = null,
 
-// Graph datasource (Round 3: Dgraph over its HTTP query/mutate API).
+// Graph datasource (Dgraph over its HTTP query/mutate API).
 Graph: ?*root.Graph = null,
 services: ?std.StringHashMap(*zeroClient) = null,
 // Outbound websocket clients (App.addWebsocketClient). Tracked so each
@@ -692,7 +691,7 @@ pub fn destroy(self: *Self) void {
     }
 
     // Pub/sub clients: signal stop, join their background threads, and free the
-    // structures (audit #12). The unified PubSub wrapper is heap-allocated in
+    // structures. The unified PubSub wrapper is heap-allocated in
     // loadPubSub and freed here too. Runs before config/log teardown because the
     // client destroy paths log through `container.log`.
     if (comptime build_options.kafka) {

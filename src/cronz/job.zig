@@ -80,7 +80,7 @@ pub const Job: type = struct {
 
     /// Frees the six schedule hash-map buffers. The `Job` value itself lives in
     /// the cron `jobs` array list (bootstrap arena); only these heap buffers leak
-    /// without this (audit #15 job leak on `Cronz.destroy`).
+    /// without this (job leak on `Cronz.destroy`).
     pub fn deinit(self: *Job, allocator: std.mem.Allocator) void {
         _ = allocator;
         self.sec.deinit();

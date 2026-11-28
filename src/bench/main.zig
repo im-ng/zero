@@ -444,7 +444,7 @@ fn nosqlGetHandler(ctx: *Context) !void {
     }
 }
 
-// --- Round 2: ClickHouse (columnar OLAP SQL over HTTP) ---
+// --- ClickHouse (columnar OLAP SQL over HTTP) ---
 
 fn clickhouseWriteHandler(ctx: *Context) !void {
     if (ctx.container.ClickHouse) |_| {
@@ -473,7 +473,7 @@ fn clickhouseQueryHandler(ctx: *Context) !void {
     }
 }
 
-// --- Round 2: Couchbase (document over N1QL/HTTP) ---
+// --- Couchbase (document over N1QL/HTTP) ---
 
 fn couchbasePutHandler(ctx: *Context) !void {
     if (ctx.NoSQL) |n| {
@@ -968,10 +968,10 @@ pub fn main(init: std.process.Init) !void {
         .{ .name = "solr-query", .category = "search", .method = .GET, .path = "/solr/query", .expect_ct = "application/json", .gated_env = "SOLR_URL" },
         .{ .name = "nosql-put", .category = "nosql", .method = .GET, .path = "/nosql/put", .expect_ct = "application/json", .gated_env = "CASSANDRA_CONTACT_POINTS" },
         .{ .name = "nosql-get", .category = "nosql", .method = .GET, .path = "/nosql/get", .expect_ct = "application/json", .gated_env = "CASSANDRA_CONTACT_POINTS" },
-        // Round 2: ClickHouse (columnar OLAP SQL over HTTP).
+        // ClickHouse (columnar OLAP SQL over HTTP).
         .{ .name = "clickhouse-write", .category = "clickhouse", .method = .GET, .path = "/clickhouse/write", .expect_ct = "application/json", .gated_env = "CLICKHOUSE_URL" },
         .{ .name = "clickhouse-query", .category = "clickhouse", .method = .GET, .path = "/clickhouse/query", .expect_ct = "application/json", .gated_env = "CLICKHOUSE_URL" },
-        // Round 2: Couchbase (document over N1QL/HTTP).
+        // Couchbase (document over N1QL/HTTP).
         .{ .name = "couchbase-put", .category = "couchbase", .method = .GET, .path = "/couchbase/put", .expect_ct = "application/json", .gated_env = "COUCHBASE_CONTACT_POINTS" },
         .{ .name = "couchbase-get", .category = "couchbase", .method = .GET, .path = "/couchbase/get", .expect_ct = "application/json", .gated_env = "COUCHBASE_CONTACT_POINTS" },
     };

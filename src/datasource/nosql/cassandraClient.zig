@@ -138,7 +138,7 @@ pub const Connection = struct {
     const tls_buffer_size = 1 << 16;
 
     // Async-aware: `lock` suspends the Io task while contended instead of
-    // spinning the CPU across the network round-trip the lock guards (audit #27).
+    // spinning the CPU across the network round-trip the lock guards.
     fn lock(self: *Connection) void {
         self.mutex.lockUncancelable(utils.io);
     }

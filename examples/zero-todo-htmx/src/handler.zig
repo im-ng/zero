@@ -81,7 +81,7 @@ pub fn getTodo(ctx: *Context) !void {
         return;
     }
 
-    // const res = try row.?.to(models.Todo, .{});
+    // const res = try row.?.to(models.Todo,.{});
 
     var response = models.HandlerTodo{
         .id = try std.fmt.allocPrint(ctx.allocator, "{d}", .{row.?.id.?}),
@@ -205,7 +205,7 @@ pub fn updateTodo(ctx: *Context) !void {
         models.getTodoByID,
         .{todoID},
     );
-    // const res = try row.to(models.Todo, .{});
+    // const res = try row.to(models.Todo,.{});
 
     var response = models.HandlerTodo{
         .id = try std.fmt.allocPrint(
@@ -252,7 +252,7 @@ pub fn markDone(ctx: *Context) !void {
     ) orelse unreachable;
     // defer row.deinit() catch {};
 
-    // const res = try row.to(models.Todo, .{});
+    // const res = try row.to(models.Todo,.{});
 
     var response = models.HandlerTodo{
         .id = try std.fmt.allocPrint(
@@ -299,7 +299,7 @@ pub fn markUndone(ctx: *Context) !void {
     ) orelse unreachable;
     // defer row.deinit() catch {};
 
-    // const res = try row.to(models.Todo, .{});
+    // const res = try row.to(models.Todo,.{});
 
     var response = models.HandlerTodo{
         .id = try std.fmt.allocPrint(

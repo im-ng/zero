@@ -191,7 +191,6 @@ pub fn queryRowsContext(self: *SQLite, ctx: *root.Context, comptime Type: type, 
 }
 
 /// Append typed rows into `list` and return the count appended.
-///
 /// The vendored sqlitez duplicates text/blob values into `ctx.allocator`, so the
 /// rows are request-owned and stay valid until the request arena is reset.
 pub fn selectSlice(self: *SQLite, ctx: *root.Context, comptime Type: type, list: *std.array_list.Managed(Type), comptime query: []const u8, args: anytype) !i64 {

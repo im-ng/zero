@@ -36,8 +36,8 @@ fn hashValue(hasher: *std.hash.Wyhash, v: anytype) void {
         .int, .float => hasher.update(std.mem.asBytes(&v)),
         .@"enum" => hasher.update(std.mem.asBytes(&@backingInt(v))),
         .pointer => |p| if (p.size == .slice) {
-            // Hash the length before the bytes so `{ .a = "ab", .b = "c" }` and
-            // `{ .a = "a", .b = "bc" }` don't collide
+            // Hash the length before the bytes so `{.a = "ab",.b = "c" }` and
+            // `{.a = "a",.b = "bc" }` don't collide
             hasher.update(std.mem.asBytes(&v.len));
             hasher.update(std.mem.sliceAsBytes(v));
         } else {

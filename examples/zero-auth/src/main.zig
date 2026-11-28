@@ -110,11 +110,11 @@ pub fn oauthResponse(ctx: *Context) !void {
 //         },
 //     }
 
-//     const parsed = try res.json(publicKeys, ctx.allocator, .{});
+//     const parsed = try res.json(publicKeys, ctx.allocator,.{});
 //     defer parsed.deinit();
 
 //     ctx.info("oatuh keys refreshed");
 
 //     ctx.response.setStatus(.ok);
-//     try ctx.response.json(parsed.value, .{});
+//     try ctx.response.json(parsed.value,.{});
 // }

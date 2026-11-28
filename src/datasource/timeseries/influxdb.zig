@@ -42,7 +42,7 @@ pub const InfluxDB = struct {
     /// The server's database is selected with the v3 `bucket` query param.
     /// Write a single line-protocol point. `statement` is the full line protocol
     /// line (`measurement,tag=val field=val [ts]`); the database is selected via
-    /// the v3 `db` query param on the native `/api/v3/write_lp` .
+    /// the v3 `db` query param on the native `/api/v3/write_lp`.
     /// Mirrors `query`, which also takes a raw statement (SQL/InfluxQL).
     pub fn write(self: *InfluxDB, ctx: *root.Context, statement: []const u8) !void {
         self.last_status.store(0, .monotonic);

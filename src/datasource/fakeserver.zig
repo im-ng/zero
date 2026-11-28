@@ -12,7 +12,6 @@ const c = std.posix.system;
 /// with a canned response — so the client code's real network path is exercised
 /// end to end. Because it is just blocking sockets on its own OS thread, it does
 /// not depend on the test's `std.Io` event loop and cannot deadlock against it.
-///
 /// The accept loop is interruptible via a stop flag checked after each 50ms
 /// `poll` timeout (closing the listening socket from the test thread does not
 /// wake `accept` under the test runtime's io_uring, so we avoid that pattern).

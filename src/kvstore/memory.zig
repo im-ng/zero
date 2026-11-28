@@ -11,7 +11,7 @@ pub const KVMemory = struct {
     exp: std.StringHashMap(i128),
     mu: std.Io.Mutex,
     // Bounds the collection so a hot `set` with unique keys can't grow it
-    // unbounded (audit #13). 0 means unlimited; production callers should set it.
+    // unbounded. 0 means unlimited; production callers should set it.
     max_entries: usize = 100_000,
 
     pub fn create(allocator: std.mem.Allocator) !*KVMemory {
@@ -51,7 +51,7 @@ pub const KVMemory = struct {
     pub fn set(self: *KVMemory, _: *root.Context, key: []const u8, value: []const u8) !void {
         self.mu.lockUncancelable(utils.io);
         // Free a prior entry's duped key + value on overwrite so the old key
-        // allocation isn't leaked (audit #13).
+        // allocation isn't leaked.
         if (self.map.fetchRemove(key)) |old| {
             self.allocator.free(old.key);
             self.allocator.free(old.value);
@@ -73,7 +73,7 @@ pub const KVMemory = struct {
             self.allocator.free(ek);
         };
         // Bound the collection while still holding the lock: the hashmap isn't safe
-        // against a concurrent read while we mutate it (audit #13).
+        // against a concurrent read while we mutate it.
         self.enforceCap();
         self.mu.unlock(utils.io);
     }
@@ -132,7 +132,7 @@ pub const KVMemory = struct {
         self.mu.lockUncancelable(utils.io);
         // Dupe the key into the store's allocator: the caller's `key` may be a
         // request-arena borrow that is freed after this call, and storing it raw
-        // would leave `exp` holding a dangling pointer (audit #13 UAF).
+        // would leave `exp` holding a dangling pointer (UAF).
         const k = try self.allocator.dupe(u8, key);
         if (self.exp.fetchRemove(key)) |old| {
             self.allocator.free(old.key);

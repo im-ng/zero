@@ -13,7 +13,6 @@ pub const Message = union(enum) {
 };
 
 /// Unified pub/sub interface (type-erased VTable).
-///
 /// Wraps any configured backend (MQTT, Kafka, NATS) behind a stable
 /// function-pointer table. Handler code uses `ctx.pubsub.Publish(...)` /
 /// `ctx.pubsub.subscribe(...)` without knowing or reading the backend.
@@ -51,7 +50,7 @@ pub const Interface = struct {
         return self.vtable.publish(self.ptr, subject, payload, key);
     }
 
-    /// Bounded retry policy for outbound publishes (audit #32). On a transient
+    /// Bounded retry policy for outbound publishes. On a transient
     /// publish failure, retries up to `attempts` times, sleeping `backoff_ms`
     /// between tries. `attempts == 1` (the default) is equivalent to `Publish`.
     /// The caller's `io` is required so the backoff can suspend the task.

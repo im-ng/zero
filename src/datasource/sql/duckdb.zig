@@ -269,10 +269,10 @@ fn mapRow(comptime Type: type, result: *c.duckdb_result, row: c.idx_t, alloc: st
 
 //     {
 //         var r1: c.duckdb_result = undefined;
-//         try db.run("CREATE TABLE users (id INTEGER, name VARCHAR)", .{}, &r1);
+//         try db.run("CREATE TABLE users (id INTEGER, name VARCHAR)",.{}, &r1);
 //         c.duckdb_destroy_result(&r1);
 //         var r2: c.duckdb_result = undefined;
-//         try db.run("INSERT INTO users VALUES (1, 'alice'), (2, 'bob')", .{}, &r2);
+//         try db.run("INSERT INTO users VALUES (1, 'alice'), (2, 'bob')",.{}, &r2);
 //         c.duckdb_destroy_result(&r2);
 //     }
 
@@ -280,11 +280,11 @@ fn mapRow(comptime Type: type, result: *c.duckdb_result, row: c.idx_t, alloc: st
 //     ctx.allocator = allocator;
 
 //     const User = struct { id: i32, name: []const u8 };
-//     const one = (try db.queryRow(&ctx, User, "SELECT id, name FROM users WHERE id = 1", .{})).?;
+//     const one = (try db.queryRow(&ctx, User, "SELECT id, name FROM users WHERE id = 1",.{})).?;
 //     try std.testing.expectEqual(@as(i32, 1), one.id);
 //     try std.testing.expectEqualStrings("alice", one.name);
 
-//     const all = try db.queryRows(&ctx, User, "SELECT id, name FROM users ORDER BY id", .{});
+//     const all = try db.queryRows(&ctx, User, "SELECT id, name FROM users ORDER BY id",.{});
 //     try std.testing.expectEqual(@as(usize, 2), all.len);
 //     try std.testing.expectEqual(@as(i32, 2), all[1].id);
 // }
