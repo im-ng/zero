@@ -76,7 +76,7 @@ comptime {
     // _ = @import("service/client.zig");
 
     // test files split out of >500-line sources (see AGENTS.md test layout)
-    _ = @import("container_test.zig");
+    _ = @import("containers/container_test.zig");
     _ = @import("context_test.zig");
     _ = @import("app_test.zig");
     _ = @import("service/client_test.zig");

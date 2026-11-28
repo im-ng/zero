@@ -151,37 +151,43 @@ Start with [Getting Started](https://zerofmk.in/started) or jump straight to the
 
 See [feature parity](https://zerofmk.in/parity) for the full roadmap.
 
-## What's New
+## What's New in 0.5.4
 
-Recent additions (full detail on [zerofmk.in](https://zerofmk.in)):
+Zero 0.5.4 requires Zig 0.17.0. Full detail is in the
+[release notes](./RELEASE_NOTES_0.5.4.md).
 
-- **Zig 0.16 + `std.Io` injection**: `App.new(allocator, io, em)` routes the process I/O reactor through `container`/`Context`; tests now live at the end of each file. See [Migrating to 0.16](https://zerofmk.in/migrating-0.16).
+- **Zig 0.17**: `App.new(allocator, io, em)` passes the process I/O reactor into
+  `container` and `Context`. Examples and build scripts moved to the new
+  `std.Build` API. See [Getting Started](https://zerofmk.in/started).
 
-- **DuckDB in-process OLAP**: Register an embedded SQL engine with `app.addDuckDB(":memory:")`, no external service. See [DuckDB](https://zerofmk.in/duckdb).
+- **Security hardening**: MySQL escaping, constant-time API keys, strict Basic
+  auth, SigV4 vectors, and GraphQL literal checks. A signal now only sets a
+  flag. All teardown runs on the main thread.
 
-- **AutoCRUD for DuckDB**: `app.addRestHandlers` now targets DuckDB too.
+- **Outbound deadlines**: `SERVICE_<NAME>_TIMEOUT_MS` is enforced. A stalled
+  downstream returns `error.RequestTimeout`. `PublishWithKey` carries a
+  partition key for Kafka. See [Resilience](https://zerofmk.in/resilience).
+
+- **SQLite pool and WAL**: Requests borrow a pooled connection and queue when
+  all are busy. `SQLITE_POOL_SIZE` defaults to 4 and caps at 64. See
+  [SQLite](https://zerofmk.in/sqlite).
+
+- **AutoCRUD through `ctx.SQL`**: Handlers get the circuit breaker and
+  datasource metrics. The dialect dispatcher picks `$N` or `?` per request.
   See [Auto CRUD](https://zerofmk.in/auto-crud).
 
-- **CLI Application Mode**: Build one-shot jobs or long-running migrations with
-  `App.newCmd` + `app.SubCommand`, no HTTP server. See [CLI Mode](https://zerofmk.in/cli).
+- **OpenTelemetry is stable**: Set an OTLP endpoint to turn it on. The metrics
+  cap honors `METRICS_CARDINALITY_LIMIT=0` and stays fast on fixed routes. See
+  [Observability](https://zerofmk.in/observability).
 
-- **Kubernetes deployment**: Sample image build + manifests.
-  See [Kubernetes](https://zerofmk.in/kubernetes) and [Container](https://zerofmk.in/container).
+- **Transactional outbox**: `addOutbox` gives a dialect-aware table, enqueue,
+  and poller for reliable publishing.
 
-- **New data sources**: Cassandra, InfluxDB and Solr join the supported backends.
-  See [/cassandra](https://zerofmk.in/cassandra), [/influxdb](https://zerofmk.in/influxdb),
-  [/solr](https://zerofmk.in/solr).
+- **SBOM on tagged releases**: `final-sbom.json` is built from `build.zig.zon`.
+  The script fails if the dependency list comes back empty.
 
-- **Bootstrap arena**: Pre-allocated memory for framework bootstrap (bounded RSS). See [Architecture](https://zerofmk.in/architecture).
-
-- **Outbound rate limiting & REST handlers**: Per-service rate limits and struct-model REST handlers for external services. See [Rate Limiter](https://zerofmk.in/rate-limiter) and [REST Handler](https://zerofmk.in/rest-handler).
-- **Resilience**: Circuit breakers, request timeouts and bulkheads, and pub/sub reconnect with dead-letter. See [Resilience](https://zerofmk.in/resilience).
-
-- **Observability**: Distributed tracing and structured metrics wired in from the first request. See [Observability](https://zerofmk.in/observability).
-
-- **Benchmarks in CI**: Reproducible throughput/latency/RSS runs. See [Benchmark](https://zerofmk.in/benchmark).
-
-- **Soak & chaos in CI**: An independent soak run boots 12 services against their real backends on every commit: leak gate (RSS plateau), backend-blackhole chaos and functional round-trips, published as a full report. See [Soak & chaos tested](#soak--chaos-tested-per-commit).
+- **New examples**: `zero-starter`, `zero-vault-pg`, `zero-gcs`,
+  `zero-rate-limit`, and `zero-supabase`.
 
 ## Examples
 
@@ -484,4 +490,4 @@ See [`CONTRIBUTING.md`](./CONTRIBUTING.md).
 
 ## License
 
-Apache. See [LICENSE](LICENSE).
+Apache 2.0. See [LICENSE](LICENSE).

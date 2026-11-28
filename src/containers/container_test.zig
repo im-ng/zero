@@ -1,6 +1,6 @@
 const std = @import("std");
 const container = @import("container.zig");
-const utils = @import("utils.zig");
+const utils = @import("../utils.zig");
 
 const StaticMount = container.StaticMount;
 const staticResolve = container.staticResolve;
