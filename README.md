@@ -60,10 +60,7 @@ const utils = zero.utils;
 pub const std_options: std.Options = .{ .logFn = zero.logger.custom };
 
 pub fn main(init: std.process.Init) !void {
-    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
-    defer arena.deinit();
-
-    const app = try zero.App.new(arena.allocator(), init.io, init.environ_map);
+    const app = try zero.App.new(init.gpa, init.io, init.environ_map);
     try app.get("/json", jsonResponse);
     try app.run();
 }
