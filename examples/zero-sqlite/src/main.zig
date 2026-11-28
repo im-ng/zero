@@ -57,9 +57,15 @@ pub fn main(init: std.process.Init) !void {
 }
 
 fn enableWalMode(ctx: *Context) !void {
-    _ = try ctx.SQL.exec(ctx, "PRAGMA journal_mode=WAL", .{});
+    // journal_mode returns a row ("wal"), so read it with queryRow. exec is for
+    // statements that produce no rows and rejects this pragma with
+    // ExecReturnedData.
+    const JournalMode = struct { journal_mode: []const u8 };
+    _ = try ctx.SQL.queryRow(ctx, JournalMode, "PRAGMA journal_mode=WAL", .{});
     _ = try ctx.SQL.exec(ctx, "PRAGMA synchronous=NORMAL", .{});
-    _ = try ctx.SQL.exec(ctx, "PRAGMA busy_timeout=5000", .{});
+    // busy_timeout also returns a row (column "timeout").
+    const BusyTimeout = struct { timeout: i64 };
+    _ = try ctx.SQL.queryRow(ctx, BusyTimeout, "PRAGMA busy_timeout=5000", .{});
     _ = try ctx.SQL.exec(ctx, "PRAGMA foreign_keys=ON", .{});
 }
 
