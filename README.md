@@ -43,6 +43,8 @@
 | **stable-0.16.0** | 0.5.3        | 0.16.0      | stable features |
 | **stable-0.15.2** | 0.0.3        | 0.15.2      | older toolchain |
 
+For the latest stability evidence, see [Soak & chaos tested, per commit](#soak--chaos-tested-per-commit).
+
 See [`CHANGELOG.md`](./CHANGELOG.md) for what changed in each release.
 
 ---
@@ -274,21 +276,28 @@ See [Resilience](https://zerofmk.in/resilience) for timeouts, bulkheads and DLQ 
 
 ## Soak & chaos tested, per commit
 
-An independent soak pipeline runs against every commit and publishes the full
-report: [im-ng.github.io/zero-extended](https://im-ng.github.io/zero-extended/).
+An independent soak pipeline publishes its gate report at
+[zero-extended](https://im-ng.github.io/zero-extended/main/reports.html).
+The latest published run is dated 2026-11-25 and pins `zero @ experimental-0.17`
+at commit `717aff42`. It passed 13 of 13 services with no leak signals.
 
-Each run boots 12 example services against their real backends: Postgres,
-MySQL, SQLite, DuckDB, Cassandra, Redis, Solr, InfluxDB, and RustFS (S3). Some
+Each run boots 13 example services against real backends: Postgres, MySQL,
+SQLite, DuckDB, Cassandra, Redis, NATS, Solr, InfluxDB and RustFS (S3). Some
 run over TLS. The pipeline drives them under load in gate mode:
 
-- **Leak gate**: VmRSS is sampled every 10 seconds. A leak is flagged only
+- **Stability gate**: VmRSS is sampled every 10 seconds. A leak is flagged only
   when growth passes both a relative and an absolute threshold against a
   baseline plateau; passing services hold a flat RSS after startup.
-- **Chaos gate**: The backend's IP is blackholed (iptables) for 2 seconds
-  under live traffic. The server must survive, and the data route must
-  recover and serve again.
-- **Functional gate**: Health, GraphQL query and filestore
+- **Resilience gate**: The backend's IP is blackholed for the kill window under
+  live traffic. The server must survive, and the data route must recover and
+  serve again.
+- **Functional gate**: Health, rate limiting, GraphQL query and filestore
   upload→download→delete round-trips run under the same load.
+
+The same report carries framework probes for hot-path performance: 20
+allocations and 13,615 bytes per request, zero route-match allocations, and
+about 551 ns route matching. These measure dispatch and routing, not
+application throughput. For throughput, see [Benchmark](#benchmark).
 
 Per-service logs, RSS samples and the exact thresholds are in the report.
 
@@ -424,6 +433,8 @@ test "health responds ok" {
 ## Benchmark
 
 The bundled benchmark harness drives a concurrency ramp and reports throughput, latency percentiles and per-level RSS. CI runs it for regression. Reproduce in [Benchmark](https://zerofmk.in/benchmark).
+
+A [head-to-head gate smoke](https://im-ng.github.io/zero-extended/compare/report/report.md) compares zero with Golang, FastAPI and axum on a SQLite CRUD contract. The report labels its numbers as threshold checks, not publishable benchmarks, and lists every axis where zero loses.
 
 ## Container Deployment
 
