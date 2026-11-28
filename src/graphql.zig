@@ -18,7 +18,7 @@ pub const ErrorObject = struct {
 };
 
 // Cap on GraphQL query nesting depth. A deeper query is rejected with a field
-// error rather than recursing without bound (stack exhaustion / DoS, audit #29).
+// error rather than recursing without bound (stack exhaustion / DoS,).
 const max_query_depth: usize = 16;
 
 const GraphQLRequest = struct {
@@ -127,7 +127,7 @@ pub fn handle(
         dispatch(Query, query_root, op.selection_set.?, &ec)) catch {
         // A dispatch error (e.g. OOM or an unexpected resolver panic) must still
         // produce a spec-shaped `errors` payload rather than an empty `{data:{}}`
-        // so clients can tell the response failed (audit #29). The message is
+        // so clients can tell the response failed. The message is
         // generic — internal detail is never leaked.
         try ctx.container.metricz.graphqlOperation(.{ .operation = op_name, .kind = op_kind, .status = "error" }, utils.elapsedSeconds(start));
         ctx.response.setStatus(.internal_server_error);
@@ -263,19 +263,19 @@ fn resolve(comptime T: type, instance: T, ss: ast.SelectionSetNode, ec: anytype)
                 const name = f.name.value;
                 const key = if (f.alias) |a| a.value else name;
                 var matched: bool = false;
-                inline for (@typeInfo(T).@"struct".fields) |field| {
-                    if (std.mem.eql(u8, field.name, name)) {
+                inline for (@typeInfo(T).@"struct".field_names, @typeInfo(T).@"struct".field_types, @typeInfo(T).@"struct".field_attrs) |field_name, field_type, _| {
+                    if (std.mem.eql(u8, field_name, name)) {
                         matched = true;
-                        const FT = field.type;
+                        const FT = field_type;
                         const ft_info = @typeInfo(FT);
                         const is_resolver = ft_info == .pointer and @typeInfo(ft_info.pointer.child) == .@"fn";
                         if (is_resolver) {
                             const FnT = ft_info.pointer.child;
-                            const Args = @typeInfo(FnT).@"fn".params[1].type orelse
-                                @compileError("resolver '" ++ field.name ++ "' must take an args struct");
+                            const Args = @typeInfo(FnT).@"fn".param_types[1] orelse
+                                @compileError("resolver '" ++ field_name ++ "' must take an args struct");
                             const args_res = coerceArguments(f.arguments, Args, ec);
                             if (args_res) |args| {
-                                const ret_res = @call(.auto, @field(instance, field.name), .{ ec.ctx, args });
+                                const ret_res = @call(.auto, @field(instance, field_name), .{ ec.ctx, args });
                                 if (ret_res) |ret| {
                                     try obj.put(ec.alloc, key, try resolveValue(ret, f.selection_set, ec));
                                 } else |_| {
@@ -287,7 +287,7 @@ fn resolve(comptime T: type, instance: T, ss: ast.SelectionSetNode, ec: anytype)
                                 try obj.put(ec.alloc, key, .null);
                             }
                         } else {
-                            const val = @field(instance, field.name);
+                            const val = @field(instance, field_name);
                             try obj.put(ec.alloc, key, try resolveValue(val, f.selection_set, ec));
                         }
                     }
@@ -470,10 +470,10 @@ fn coerceArguments(
     if (Args == void) return {};
     var args: Args = std.mem.zeroes(Args);
     if (arguments) |args_nodes| {
-        inline for (@typeInfo(Args).@"struct".fields) |af| {
+        inline for (@typeInfo(Args).@"struct".field_names, @typeInfo(Args).@"struct".field_types, @typeInfo(Args).@"struct".field_attrs) |af_name, af_type, _| {
             for (args_nodes) |an| {
-                if (std.mem.eql(u8, an.name.value, af.name)) {
-                    @field(args, af.name) = try coerceValue(an.value, af.type, ec);
+                if (std.mem.eql(u8, an.name.value, af_name)) {
+                    @field(args, af_name) = try coerceValue(an.value, af_type, ec);
                     break;
                 }
             }
@@ -578,8 +578,10 @@ fn valueNodeToJson(obj: ast.ObjectValueNode, alloc: std.mem.Allocator) anyerror!
 
 fn valueNodeToJsonValue(node: ast.ValueNode, alloc: std.mem.Allocator) anyerror!std.json.Value {
     return switch (node) {
-        .Int => .{ .integer = std.fmt.parseInt(i64, node.Int.value, 10) catch 0 },
-        .Float => .{ .float = std.fmt.parseFloat(f64, node.Float.value) catch 0 },
+        // Propagate parse failures so malformed literals are rejected instead of
+        // silently becoming 0, which would hide invalid client input.
+        .Int => .{ .integer = try std.fmt.parseInt(i64, node.Int.value, 10) },
+        .Float => .{ .float = try std.fmt.parseFloat(f64, node.Float.value) },
         .String => .{ .string = try dequote(alloc, node.String.value) },
         .Boolean => .{ .bool = node.Boolean.value },
         .Null => .null,
@@ -678,5 +680,21 @@ test "graphql: resolve query with constant, resolver and arguments" {
     try testing.expectEqualSlices(u8, "42", user.object.get("id").?.string);
     try testing.expectEqualSlices(u8, "User 42", user.object.get("name").?.string);
 
+    // The test resolver allocated `name` from `std.testing.allocator`; free it so
+    // the leak checker stays clean (matches the arena-backed `data` lifetime).
+    std.testing.allocator.free(user.object.get("name").?.string);
+
     try testing.expect(ec.errors.items.len == 0);
+}
+
+test "graphql: malformed numeric literal returns an error instead of zero" {
+    const alloc = std.testing.allocator;
+
+    // A malformed integer must surface the parse error, not coerce to 0 and
+    // silently accept invalid input from the client.
+    const bad_int = ast.ValueNode{ .Int = .{ .value = "not-a-number" } };
+    try std.testing.expectError(error.InvalidCharacter, valueNodeToJsonValue(bad_int, alloc));
+
+    const bad_float = ast.ValueNode{ .Float = .{ .value = "1.2.3" } };
+    try std.testing.expectError(error.InvalidCharacter, valueNodeToJsonValue(bad_float, alloc));
 }

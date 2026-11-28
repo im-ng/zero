@@ -119,7 +119,7 @@ pub fn parseSpki(der: []const u8) Error!Key {
     return Key{ .n = integerBody(n.content), .e = integerBody(e.content) };
 }
 
-/// Decode a PEM "BEGIN ... END" block into the DER payload it wraps. Whitespace
+/// Decode a PEM "BEGIN... END" block into the DER payload it wraps. Whitespace
 /// inside the base64 body is ignored; a `null` return means no BEGIN marker was
 /// found (the caller can then try parsing the input as raw DER).
 pub fn pemDecode(allocator: std.mem.Allocator, text: []const u8) Error!?[]u8 {
@@ -236,7 +236,7 @@ fn hashEmptyLabel() [hashLen]u8 {
 }
 
 /// MGF1 (SHA-1), writing `out.len` mask bytes derived from `seed`. The mask
-/// stream is SHA1(seed || cnt_be32) for cnt = 0, 1, 2 ... until `out` is
+/// stream is SHA1(seed || cnt_be32) for cnt = 0, 1, 2... until `out` is
 /// filled; hashing is done incrementally so `seed` may be any length.
 fn mgf1(out: []u8, seed: []const u8) void {
     var cnt: u32 = 0;
@@ -468,7 +468,7 @@ test "rsa: encryptOaep rejects oversized message" {
     const alloc = std.testing.allocator;
     const key = Key{ .n = &testN, .e = &testE };
     // k - 2h - 2 = 256 - 40 - 2 = 214 usable bytes
-    const too_big = [_]u8{0} ** 215;
+    const too_big = @as([215]u8, @splat(0));
     const seed: [hashLen]u8 = undefined;
     try std.testing.expectError(Error.MessageTooLong, encryptOaep(alloc, key, &too_big, seed));
 }

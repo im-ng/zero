@@ -6,7 +6,6 @@ const constants = root.constants;
 
 /// GCS (Google Cloud Storage) object store over the JSON / resumable-upload
 /// REST API, authenticated with an OAuth2 bearer token.
-///
 /// The token is obtained via the OAuth2 client-credentials grant against
 /// `GCS_TOKEN_URL` (default `https://oauth2.googleapis.com/token`) using
 /// `GCS_CLIENT_ID` / `GCS_CLIENT_SECRET` / `GCS_SCOPE`. When `GCS_ACCESS_TOKEN`
@@ -28,7 +27,7 @@ pub const FileStoreGCS = struct {
     token: ?[]const u8 = null,
     token_expires_at_ns: i128 = 0,
     // Serializes token refresh so concurrent file ops can't free-and-replace
-    // `token` underneath each other (audit #9).
+    // `token` underneath each other.
     token_mutex: std.Io.Mutex = .init,
 
     max_bytes: usize = constants.DEFAULT_FILESTORE_MAX_BYTES_S3,
@@ -107,7 +106,7 @@ pub const FileStoreGCS = struct {
         if (self.access_token_override.len > 0) {
             return self.access_token_override;
         }
-        self.token_mutex.lock(utils.io) catch {};
+        self.token_mutex.lockUncancelable(utils.io);
         defer self.token_mutex.unlock(utils.io);
         // Re-check after taking the lock: another op may have refreshed.
         if (self.token) |t| {
@@ -131,7 +130,7 @@ pub const FileStoreGCS = struct {
         if (self.token) |old| {
             self.allocator.free(old);
         }
-        // Refresh 30s before the real `expires_in` lapses (audit #9: previously a
+        // Refresh 30s before the real `expires_in` lapses (previously a
         // hardcoded 3600s with the actual `expires_in` ignored).
         self.token_expires_at_ns = utils.nowMonotonic().nanoseconds +
             @as(i128, tok.expires_in) * 1_000_000_000 - 30_000_000_000;
@@ -242,7 +241,7 @@ pub const FileStoreGCS = struct {
     }
 
     // Paginate over `list` results without leaking non-returned keys. Native
-    // GCS pageToken paging is a follow-up (audit #31).
+    // GCS pageToken paging is a follow-up.
     pub fn listPaginated(
         self: *FileStoreGCS,
         ctx: *root.Context,

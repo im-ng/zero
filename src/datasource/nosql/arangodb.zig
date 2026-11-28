@@ -61,7 +61,7 @@ pub const ArangoDB = struct {
     /// Run an AQL statement (typically an INSERT/REMOVE) through `/_api/cursor`.
     pub fn put(self: *ArangoDB, ctx: *root.Context, statement: []const u8) !void {
         self.last_status.store(0, .monotonic);
-        self.last_kind.store(@intFromEnum(root.Error.ErrorKind.none), .monotonic);
+        self.last_kind.store(@backingInt(root.Error.ErrorKind.none), .monotonic);
 
         const url = try self.cursorUrl(ctx);
         defer ctx.allocator.free(url);
@@ -80,7 +80,7 @@ pub const ArangoDB = struct {
             const sb = try res.allocBody(ctx.allocator, .{});
             defer sb.deinit();
             self.last_status.store(res.status, .monotonic);
-            self.last_kind.store(@intFromEnum(root.Error.classifyHttpStatus(res.status)), .monotonic);
+            self.last_kind.store(@backingInt(root.Error.classifyHttpStatus(res.status)), .monotonic);
             return error.ArangoDBPutFailed;
         }
     }
@@ -90,7 +90,7 @@ pub const ArangoDB = struct {
     /// the server answers 404 or with an empty body. Caller frees.
     pub fn get(self: *ArangoDB, ctx: *root.Context, statement: []const u8) !?[]const u8 {
         self.last_status.store(0, .monotonic);
-        self.last_kind.store(@intFromEnum(root.Error.ErrorKind.none), .monotonic);
+        self.last_kind.store(@backingInt(root.Error.ErrorKind.none), .monotonic);
 
         const url = try self.cursorUrl(ctx);
         defer ctx.allocator.free(url);
@@ -108,14 +108,14 @@ pub const ArangoDB = struct {
         var res: zul.http.Response = try req.getResponse(.{});
         if (res.status == 404) {
             self.last_status.store(res.status, .monotonic);
-            self.last_kind.store(@intFromEnum(root.Error.classifyHttpStatus(res.status)), .monotonic);
+            self.last_kind.store(@backingInt(root.Error.classifyHttpStatus(res.status)), .monotonic);
             return null;
         }
         if (res.status < 200 or res.status > 299) {
             const sb = try res.allocBody(ctx.allocator, .{});
             defer sb.deinit();
             self.last_status.store(res.status, .monotonic);
-            self.last_kind.store(@intFromEnum(root.Error.classifyHttpStatus(res.status)), .monotonic);
+            self.last_kind.store(@backingInt(root.Error.classifyHttpStatus(res.status)), .monotonic);
             return error.ArangoDBGetFailed;
         }
         const sb = try res.allocBody(ctx.allocator, .{});
@@ -127,7 +127,7 @@ pub const ArangoDB = struct {
     /// Run an AQL REMOVE statement through `/_api/cursor`.
     pub fn delete(self: *ArangoDB, ctx: *root.Context, statement: []const u8) !void {
         self.last_status.store(0, .monotonic);
-        self.last_kind.store(@intFromEnum(root.Error.ErrorKind.none), .monotonic);
+        self.last_kind.store(@backingInt(root.Error.ErrorKind.none), .monotonic);
 
         const url = try self.cursorUrl(ctx);
         defer ctx.allocator.free(url);
@@ -146,7 +146,7 @@ pub const ArangoDB = struct {
             const sb = try res.allocBody(ctx.allocator, .{});
             defer sb.deinit();
             self.last_status.store(res.status, .monotonic);
-            self.last_kind.store(@intFromEnum(root.Error.classifyHttpStatus(res.status)), .monotonic);
+            self.last_kind.store(@backingInt(root.Error.classifyHttpStatus(res.status)), .monotonic);
             return error.ArangoDBDeleteFailed;
         }
     }
@@ -155,7 +155,7 @@ pub const ArangoDB = struct {
     /// response body (the `result` array), owned by `ctx.allocator`. Caller frees.
     pub fn query(self: *ArangoDB, ctx: *root.Context, statement: []const u8) ![]const u8 {
         self.last_status.store(0, .monotonic);
-        self.last_kind.store(@intFromEnum(root.Error.ErrorKind.none), .monotonic);
+        self.last_kind.store(@backingInt(root.Error.ErrorKind.none), .monotonic);
 
         const url = try self.cursorUrl(ctx);
         defer ctx.allocator.free(url);
@@ -175,7 +175,7 @@ pub const ArangoDB = struct {
             const sb = try res.allocBody(ctx.allocator, .{});
             defer sb.deinit();
             self.last_status.store(res.status, .monotonic);
-            self.last_kind.store(@intFromEnum(root.Error.classifyHttpStatus(res.status)), .monotonic);
+            self.last_kind.store(@backingInt(root.Error.classifyHttpStatus(res.status)), .monotonic);
             return error.ArangoDBQueryFailed;
         }
         const sb = try res.allocBody(ctx.allocator, .{});
@@ -185,7 +185,7 @@ pub const ArangoDB = struct {
 
     /// Thread-safe last-failure accessor. Returns `null` on recent success.
     pub fn lastError(self: *ArangoDB) ?root.Error.DataSourceError {
-        const kind = @as(root.Error.ErrorKind, @enumFromInt(self.last_kind.load(.monotonic)));
+        const kind = @as(root.Error.ErrorKind, @fromBackingInt(@intCast(self.last_kind.load(.monotonic))));
         if (kind == .none) return null;
         return .{
             .status = self.last_status.load(.monotonic),

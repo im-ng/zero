@@ -11,7 +11,6 @@ const crypto = std.crypto;
 /// OpenSSL library (`src/tls/openssl.zig`). Zig's `crypto.tls` ClientHello is
 /// rejected by OpenSSL 3.x servers (MongoDB 8), so we wrap OpenSSL and feed its
 /// `std.Io` reader/writer interfaces to the wire code. Auth is `SCRAM-SHA-256`.
-///
 /// Targets MongoDB 5.0+ (OP_MSG only); no OP_QUERY handshake, no OP_COMPRESSED.
 pub const Connection = struct {
     allocator: std.mem.Allocator,
@@ -50,9 +49,9 @@ pub const Connection = struct {
     const write_buffer_size = 1 << 16;
 
     // Async-aware: `lock` suspends the Io task while contended instead of
-    // spinning the CPU across the network round-trip the lock guards (audit #27).
+    // spinning the CPU across the network round-trip the lock guards.
     fn lock(self: *Connection) void {
-        self.mutex.lock(utils.io) catch {};
+        self.mutex.lockUncancelable(utils.io);
     }
 
     fn unlock(self: *Connection) void {
@@ -359,7 +358,7 @@ pub const Connection = struct {
         std.mem.writeInt(u32, header[12..16], 2013, .little); // OP_MSG
         try writer.writeAll(&header);
 
-        var flag_bits: [4]u8 = .{0} ** 4; // flagBits = 0, no checksum
+        var flag_bits: [4]u8 = @splat(0); // flagBits = 0, no checksum
         try writer.writeAll(&flag_bits);
         var kind: [1]u8 = .{0}; // section kind 0 (body)
         try writer.writeAll(&kind);
@@ -856,22 +855,21 @@ fn buildSaslContinue(alloc: std.mem.Allocator, conversation_id: i32, client_fina
 
 // ===================== Tests =====================
 // These tests breaks the kcov coverage, investigate further
-//
 // test "mongodb bson<->json roundtrip and field lookup" {
 //     const a = std.testing.allocator;
 //     const bson = try jsonToBson(a, "{\"a\":1,\"big\":9223372036854775807,\"b\":\"hi\",\"flag\":true,\"arr\":[1,2,3],\"n\":null}");
 //     defer a.free(bson);
 
 //     const a_v = bsonFind(bson, "a") orelse return error.TestExpected;
-//     try std.testing.expect(a_v == .int32 and a_v.int32 == 1);
+//     try std.testing.expect(a_v ==.int32 and a_v.int32 == 1);
 //     const big_v = bsonFind(bson, "big") orelse return error.TestExpected;
-//     try std.testing.expect(big_v == .int64 and big_v.int64 == 9223372036854775807);
+//     try std.testing.expect(big_v ==.int64 and big_v.int64 == 9223372036854775807);
 //     const b_v = bsonFind(bson, "b") orelse return error.TestExpected;
-//     try std.testing.expect(b_v == .string and std.mem.eql(u8, b_v.string, "hi"));
+//     try std.testing.expect(b_v ==.string and std.mem.eql(u8, b_v.string, "hi"));
 //     const flag_v = bsonFind(bson, "flag") orelse return error.TestExpected;
-//     try std.testing.expect(flag_v == .boolean and flag_v.boolean);
+//     try std.testing.expect(flag_v ==.boolean and flag_v.boolean);
 //     const n_v = bsonFind(bson, "n") orelse return error.TestExpected;
-//     try std.testing.expect(n_v == .null);
+//     try std.testing.expect(n_v ==.null);
 
 //     const json = try bsonToJson(a, bson);
 //     defer a.free(json);
@@ -885,7 +883,7 @@ fn buildSaslContinue(alloc: std.mem.Allocator, conversation_id: i32, client_fina
 //     const bson = try jsonToBson(a, "{\"_id\":{\"$oid\":\"507f1f77bcf86cd799439011\"}}");
 //     defer a.free(bson);
 //     const id = bsonFind(bson, "_id") orelse return error.TestExpected;
-//     try std.testing.expect(id == .object_id and id.object_id.len == 12);
+//     try std.testing.expect(id ==.object_id and id.object_id.len == 12);
 // }
 
 // test "mongodb saslStart command is well-formed BSON" {
@@ -893,7 +891,7 @@ fn buildSaslContinue(alloc: std.mem.Allocator, conversation_id: i32, client_fina
 //     const cmd = try buildSaslStart(a, "n,,n=user,r=abc", "admin");
 //     defer a.free(cmd);
 //     // length prefix must match the buffer
-//     const len = std.mem.readInt(u32, cmd[0..4], .little);
+//     const len = std.mem.readInt(u32, cmd[0..4],.little);
 //     try std.testing.expect(len == cmd.len);
 //     try std.testing.expect(bsonFind(cmd, "saslStart") != null);
 //     try std.testing.expect(bsonFind(cmd, "mechanism") != null);

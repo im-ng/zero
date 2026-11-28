@@ -47,7 +47,7 @@ pub const Couchbase = struct {
     /// `error.CouchbaseQueryFailed`.
     fn runN1ql(self: *Couchbase, ctx: *root.Context, statement: []const u8) !std.json.Value {
         self.last_status.store(0, .monotonic);
-        self.last_kind.store(@intFromEnum(root.Error.ErrorKind.none), .monotonic);
+        self.last_kind.store(@backingInt(root.Error.ErrorKind.none), .monotonic);
         const url = try std.fmt.allocPrint(ctx.allocator, "http://{s}/query", .{self.contact_point});
         var req = try self.client.allocRequest(ctx.allocator, url);
         defer {
@@ -78,7 +78,7 @@ pub const Couchbase = struct {
             const sb = try res.allocBody(ctx.allocator, .{});
             defer sb.deinit();
             self.last_status.store(res.status, .monotonic);
-            self.last_kind.store(@intFromEnum(root.Error.classifyHttpStatus(res.status)), .monotonic);
+            self.last_kind.store(@backingInt(root.Error.classifyHttpStatus(res.status)), .monotonic);
             return error.CouchbaseQueryFailed;
         }
         const sb = try res.allocBody(ctx.allocator, .{});
@@ -88,7 +88,7 @@ pub const Couchbase = struct {
             if (parsed.object.get("errors")) |errs| {
                 if (errs == .array and errs.array.items.len > 0) {
                     self.last_status.store(res.status, .monotonic);
-                    self.last_kind.store(@intFromEnum(root.Error.classifyHttpStatus(res.status)), .monotonic);
+                    self.last_kind.store(@backingInt(root.Error.classifyHttpStatus(res.status)), .monotonic);
                     return error.CouchbaseQueryFailed;
                 }
             }
@@ -147,7 +147,7 @@ pub const Couchbase = struct {
     /// and `status` is the last HTTP status (0 for non-HTTP). The returned
     /// struct is a copy with no shared heap buffer, so it is safe to read.
     pub fn lastError(self: *Couchbase) ?root.Error.DataSourceError {
-        const kind = @as(root.Error.ErrorKind, @enumFromInt(self.last_kind.load(.monotonic)));
+        const kind = @as(root.Error.ErrorKind, @fromBackingInt(@intCast(self.last_kind.load(.monotonic))));
         if (kind == .none) return null;
         return .{
             .status = self.last_status.load(.monotonic),
@@ -177,17 +177,17 @@ pub const Couchbase = struct {
 //     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
 //     defer arena.deinit();
 //     const alloc = arena.allocator();
-//     const cb = try Couchbase.create(alloc, .{ .contact_points = "localhost:8093", .bucket = "b" });
+//     const cb = try Couchbase.create(alloc,.{.contact_points = "localhost:8093",.bucket = "b" });
 //     defer cb.deinit(alloc);
 
 //     const resp = std.json.Value{
-//         .object = blk: {
+//        .object = blk: {
 //             var o = std.json.ObjectMap.empty;
 //             var arr = std.json.Array.init(alloc);
 //             var doc = std.json.ObjectMap.empty;
-//             try doc.put(alloc, "name", std.json.Value{ .string = "alice" });
-//             try arr.append(std.json.Value{ .object = doc });
-//             try o.put(alloc, "results", std.json.Value{ .array = arr });
+//             try doc.put(alloc, "name", std.json.Value{.string = "alice" });
+//             try arr.append(std.json.Value{.object = doc });
+//             try o.put(alloc, "results", std.json.Value{.array = arr });
 //             break :blk o;
 //         },
 //     };
@@ -204,16 +204,16 @@ pub const Couchbase = struct {
 //     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
 //     defer arena.deinit();
 //     const alloc = arena.allocator();
-//     const cb = try Couchbase.create(alloc, .{ .contact_points = "localhost:8093", .bucket = "b" });
+//     const cb = try Couchbase.create(alloc,.{.contact_points = "localhost:8093",.bucket = "b" });
 //     defer cb.deinit(alloc);
 
-//     const absent = try cb.results(std.json.Value{ .object = std.json.ObjectMap.empty });
+//     const absent = try cb.results(std.json.Value{.object = std.json.ObjectMap.empty });
 //     try std.testing.expectEqual(@as(usize, 0), absent.len);
 
 //     const empty = try cb.results(std.json.Value{
-//         .object = blk: {
+//        .object = blk: {
 //             var o = std.json.ObjectMap.empty;
-//             try o.put(alloc, "results", std.json.Value{ .array = std.json.Array.init(alloc) });
+//             try o.put(alloc, "results", std.json.Value{.array = std.json.Array.init(alloc) });
 //             break :blk o;
 //         },
 //     });
@@ -224,21 +224,21 @@ pub const Couchbase = struct {
 //     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
 //     defer arena.deinit();
 //     const alloc = arena.allocator();
-//     const cb = try Couchbase.create(alloc, .{ .contact_points = "localhost:8093", .bucket = "b" });
+//     const cb = try Couchbase.create(alloc,.{.contact_points = "localhost:8093",.bucket = "b" });
 //     defer cb.deinit(alloc);
 
-//     const s = try cb.dump(alloc, std.json.Value{ .string = "x" });
+//     const s = try cb.dump(alloc, std.json.Value{.string = "x" });
 //     defer alloc.free(s);
 //     try std.testing.expectEqualStrings("\"x\"", s);
 
-//     const n = try cb.dump(alloc, std.json.Value{ .integer = 42 });
+//     const n = try cb.dump(alloc, std.json.Value{.integer = 42 });
 //     defer alloc.free(n);
 //     try std.testing.expectEqualStrings("42", n);
 
-//     const arr = try cb.dump(alloc, std.json.Value{ .array = blk: {
+//     const arr = try cb.dump(alloc, std.json.Value{.array = blk: {
 //         var a = std.json.Array.init(alloc);
-//         try a.append(std.json.Value{ .string = "a" });
-//         try a.append(std.json.Value{ .string = "b" });
+//         try a.append(std.json.Value{.string = "a" });
+//         try a.append(std.json.Value{.string = "b" });
 //         break :blk a;
 //     } });
 //     defer alloc.free(arr);
@@ -247,11 +247,11 @@ pub const Couchbase = struct {
 
 // test "Couchbase create stores credentials and frees cleanly" {
 //     const alloc = std.testing.allocator;
-//     const cb = try Couchbase.create(alloc, .{
-//         .contact_points = "cp1:8093,cp2:8093",
-//         .bucket = "b",
-//         .user = "u",
-//         .password = "p",
+//     const cb = try Couchbase.create(alloc,.{
+//        .contact_points = "cp1:8093,cp2:8093",
+//        .bucket = "b",
+//        .user = "u",
+//        .password = "p",
 //     });
 //     cb.deinit(alloc);
 // }

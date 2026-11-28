@@ -12,7 +12,7 @@ jobs:
   unit_test_and_coverage:
     runs-on: ubuntu-latest
     container:
-      image: imng/zero-kcov:0.3.4
+      image: imng/zero-kcov:0.3.5
       options: --security-opt seccomp=unconfined
 
     services:
@@ -65,17 +65,23 @@ jobs:
         with:
           token: ${{ secrets.GH_TOKEN }}
 
-      - name: Set Zig 0.16.0 as active
+      - name: Set Zig 0.17.0 as active
         run: |
           zig version
           kcov --version
           more /etc/os-release
+
+      - name: Check formatting
+        run: zig fmt --check src/
 
       - name: Run tests with coverage
         run: |
           ls -alth /usr/local/lib
           mkdir -p ~/.cache/zig/tmp
           zig build test -Dcoverage --summary all
+
+      - name: Validate Context memory release
+        run: zig build test-validation --summary all
 
       - name: Run integration tests (real database)
         env:
@@ -106,10 +112,10 @@ jobs:
           if [ -f zig-out/kcov/test/coverage.json ]; then
             COVERAGE=$(jq -r '.percent_covered' zig-out/kcov/test/coverage.json)
             echo "coverage=$COVERAGE" >> $GITHUB_OUTPUT
-            echo "Coverage for Zig 0.16.0: $COVERAGE%"
+            echo "Coverage for Zig 0.17.0: $COVERAGE%"
           else
             echo "coverage=0" >> $GITHUB_OUTPUT
-            echo "Coverage for Zig 0.16.0: 0%"
+            echo "Coverage for Zig 0.17.0: 0%"
           fi
 
       - name: Update README with coverage
@@ -147,7 +153,7 @@ jobs:
   bench_regression:
     runs-on: ubuntu-latest
     container:
-      image: imng/zero-kcov:0.3.4
+      image: imng/zero-kcov:0.3.5
       options: --security-opt seccomp=unconfined
 
     steps:
@@ -156,7 +162,7 @@ jobs:
         with:
           token: ${{ secrets.GH_TOKEN }}
 
-      - name: Set Zig 0.16.0 as active
+      - name: Set Zig 0.17.0 as active
         run: zig version
 
       - name: Build bench harness
@@ -228,3 +234,17 @@ jobs:
           git add bench/baseline.json
           git commit -m "chore: update bench baseline" || echo "No changes to commit"
           git push
+
+  # helm_template:
+  #   runs-on: ubuntu-latest
+  #   steps:
+  #     - name: Checkout code
+  #       uses: actions/checkout@v4
+
+  #     - name: Install Helm
+  #       run: curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+
+  #     - name: Lint and template chart
+  #       run: |
+  #         helm lint charts/zero
+  #         helm template zero charts/zero > /dev/null

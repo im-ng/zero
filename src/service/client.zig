@@ -32,9 +32,9 @@ pub const ServiceOptions = struct {
     auth: ?OutboundAuth = null,
     circuitBreaker: ?CircuitBreakerConfig = null,
     rateLimiter: ?RateLimiterConfig = null,
-    /// Per-request connect timeout (ms) for this downstream. Bounds how long the
-    /// outbound call waits to establish the TCP/TLS connection before failing.
-    /// `null` (default) means no connect timeout.
+    /// Whole-request deadline (ms) for this downstream. Covers connect, headers
+    /// and body. null (default) means no deadline. Enforced by racing the HTTP
+    /// call against a timer on the Io reactor and cancelling on expiry.
     timeout_ms: ?u64 = null,
     /// Maximum number of additional attempts for transient failures (network
     /// errors and 5xx). 0 (default) = no retry.
@@ -65,7 +65,7 @@ auth: ?OutboundAuth = null,
 breaker: ?CircuitBreaker = null,
 /// Per-service fixed-window rate limiter (null = disabled).
 limiter: ?RateLimiter = null,
-/// Optional connect timeout (ms) applied to outbound requests to this service.
+/// Whole-request deadline (ms) for outbound calls to this service. See ServiceOptions.
 timeout_ms: ?u64 = null,
 /// Max additional attempts for transient failures (network errors + 5xx).
 max_retries: ?u32 = null,
@@ -104,7 +104,7 @@ pub fn createWithConfig(
 
     // `allocator.create` returns uninitialized memory, so assign the full
     // struct literal. This applies every field default (notably
-    // `oauth_token = null`, `oauth_client = null`, `oauth_mutex = .init`) —
+    // `oauth_token = null`, `oauth_client = null`, `oauth_mutex =.init`) —
     // without this, those fields are garbage and `deinit`'s `free(token)`
     // frees a dangling pointer and crashes at shutdown.
     c.* = .{
@@ -308,6 +308,20 @@ fn retryBackoffMs(self: *Self, attempt: u32) i64 {
     return @as(i64, base) * @as(i64, attempt);
 }
 
+/// Backoff before the next retry attempt. Honors a `Retry-After` hint (integer
+/// seconds) on 429/503 so we back off as the upstream asks, capped at 60s;
+/// otherwise falls back to the linear `base * attempt` backoff.
+fn retryDelayMs(self: *Self, attempt: u32, res: zul.http.Response) i64 {
+    if (res.header("Retry-After")) |ra| {
+        const secs = std.fmt.parseUnsigned(u64, std.mem.trim(u8, ra, " \r\n"), 10) catch 0;
+        if (secs > 0) {
+            const capped: u64 = if (secs > 60) 60 else secs;
+            return @as(i64, @intCast(capped)) * 1000;
+        }
+    }
+    return self.retryBackoffMs(attempt);
+}
+
 pub fn get(
     self: *Self,
     ctx: *Context,
@@ -334,10 +348,11 @@ pub fn get(
 pub fn ping(self: *Self, ctx: *Context, path: []const u8) !u16 {
     var url: []const u8 = undefined;
     url = try utils.combine(ctx.allocator, "{s}{s}", .{ self.url.?, path });
+    defer ctx.allocator.free(url);
 
-    var client = zul.http.Client.init(self.container.io, self.container.allocator);
-    defer client.deinit();
-    var req = try client.allocRequest(ctx.allocator, url);
+    // Reuse the persistent client created in `createWithConfig`
+    // instead of spinning up a fresh TCP/TLS connection per ping.
+    var req = try self.client.allocRequest(ctx.allocator, url);
     defer req.deinit();
     req.method = .GET;
 
@@ -441,6 +456,57 @@ fn isConnectionError(e: anyerror) bool {
     };
 }
 
+/// Run `getResponse` under a whole-request deadline. The pinned zul client has
+/// no request-timeout hook, so we race the call against an Io timer and cancel
+/// the in-flight task on expiry. Cancellation propagates through std.http's
+/// cancelable points and aborts the socket read/write.
+fn getResponseWithDeadline(
+    req: *zul.http.Request,
+    io: std.Io,
+    timeout_ms: u64,
+) !zul.http.Response {
+    const Result = union(enum) {
+        response: anyerror!zul.http.Response,
+        timeout: void,
+    };
+    var slots: [2]Result = undefined;
+    var select = std.Io.Select(Result).init(io, &slots);
+    defer select.cancelDiscard(); // cancels whichever task did not win
+
+    const Fetch = struct {
+        fn call(r: *zul.http.Request) anyerror!zul.http.Response {
+            return r.getResponse(.{});
+        }
+    };
+    const Timer = struct {
+        fn call(t_io: std.Io, ms: u64) void {
+            std.Io.sleep(t_io, .fromMilliseconds(@intCast(ms)), .awake) catch {};
+        }
+    };
+
+    const started = std.Io.Timestamp.now(io, .awake);
+    select.async(.response, Fetch.call, .{req});
+    select.async(.timeout, Timer.call, .{ io, timeout_ms });
+
+    const first = try select.await();
+    return switch (first) {
+        .response => |res| blk: {
+            // The response can win the Select race on runtimes whose timer
+            // task is scheduled late. Enforce the deadline from the clock as
+            // well so an over-deadline response is still rejected.
+            const elapsed_ns = std.Io.Timestamp.durationTo(
+                started,
+                std.Io.Timestamp.now(io, .awake),
+            ).nanoseconds;
+            if (elapsed_ns > @as(i128, timeout_ms) * std.time.ns_per_ms) {
+                break :blk error.RequestTimeout;
+            }
+            break :blk res;
+        },
+        .timeout => error.RequestTimeout,
+    };
+}
+
 fn createAndSendRequest(
     self: *Self,
     ctx: *Context,
@@ -455,7 +521,7 @@ fn createAndSendRequest(
     // the result of `utils.combine`, which returns an unfreeable subslice whose
     // 256-byte backing buffer is intentionally leaked by design. We must not free
     // either, so there is deliberately no `defer free` here: freeing `&absoluteURL`
-    // would corrupt the heap by destroying a stack-local slice header (audit #7).
+    // would corrupt the heap by destroying a stack-local slice header.
     var absoluteURL: []const u8 = self.url.?;
 
     if (path.len > 0) {
@@ -465,6 +531,9 @@ fn createAndSendRequest(
             .{ self.url.?, path },
         );
     }
+    // Free the combined URL only when we allocated it; the `self.url.?` fallthrough
+    // case points at container-owned memory and must not be freed.
+    defer if (path.len > 0) ctx.allocator.free(absoluteURL);
 
     var req: zul.http.Request = undefined;
     var req_owned = false;
@@ -477,14 +546,12 @@ fn createAndSendRequest(
     const max_attempts = self.max_retries orelse 0;
     var conn_retry: u8 = 0;
 
-    // A fresh HTTP client per logical request. std.http's connection pool hands
-    // back a dead idle socket without any liveness check, so a single stale
-    // connection would poison every request that reuses it. A per-request client
-    // starts with an empty pool, so the first connection is always freshly
-    // established rather than a reused, possibly-reset one.
-    var call_client = zul.http.Client.init(self.container.io, self.container.allocator);
-    defer call_client.deinit();
-    // `req` must be released back to the pool before `call_client` is torn down.
+    // Reuse the persistent client created in `createWithConfig`
+    // so keep-alive sockets are reused across requests instead of opening a new
+    // TCP/TLS connection every call. A stale idle keep-alive socket that resets on
+    // the first write is handled by `req.deinit()` in the retry path below, which
+    // evicts the dead connection from this client's pool before the next attempt.
+    // `req` must be released back to the pool before the function returns.
     defer if (req_owned) req.deinit();
 
     // Circuit breaker: consulted once per logical request, before the retry loop,
@@ -502,7 +569,7 @@ fn createAndSendRequest(
             req.deinit();
         }
         req_owned = false;
-        req = try call_client.allocRequest(ctx.allocator, absoluteURL);
+        req = try self.client.allocRequest(ctx.allocator, absoluteURL);
         req_owned = true;
 
         req.method = method;
@@ -555,21 +622,24 @@ fn createAndSendRequest(
 
         const start = utils.nowMonotonic();
 
-        res = req.getResponse(.{}) catch |e| {
+        const response_result = if (self.timeout_ms) |ms|
+            getResponseWithDeadline(&req, self.container.io, ms)
+        else
+            req.getResponse(.{});
+
+        res = response_result catch |e| {
             // A stale idle keep-alive socket resets on the first write after a
             // quiet period. That is a connection-level blip, not an upstream
             // fault: reconnect once and retry without counting it as a failure.
             if (isConnectionError(e) and conn_retry < 1) {
                 conn_retry += 1;
-                // The dead socket is still sitting in this client's pool. Tear the
-                // client down and open a new one so the retry gets a live connection
-                // instead of reusing the same reset one.
+                // The dead socket is still sitting in this client's pool. `req.deinit()`
+                // evicts it so the next `allocRequest` on the shared `self.client`
+                // opens a fresh connection instead of reusing the same reset one.
                 if (req_owned) {
                     req.deinit();
                     req_owned = false;
                 }
-                call_client.deinit();
-                call_client = zul.http.Client.init(self.container.io, self.container.allocator);
                 continue;
             }
             if (self.breaker) |*b| {
@@ -592,16 +662,31 @@ fn createAndSendRequest(
                 // The downstream clearly responded, so the circuit should treat
                 // it as healthy and close (a 404 is a business error, not an
                 // outage). Without this, a terminal 404 leaves the half-open
-                // trial unresolved and pins the breaker (audit #24).
+                // trial unresolved and pins the breaker.
                 if (self.breaker) |*b| {
                     b.recordSuccess();
                 }
                 return ClientError.EntityNotFound;
             },
+            429 => {
+                // Too Many Requests: a backpressure signal, not an outage. Retry
+                // honoring `Retry-After` so we pace ourselves to the upstream's
+                // ask instead of hammering it.
+                if (attempt < max_attempts) {
+                    attempt += 1;
+                    const backoff = self.retryDelayMs(attempt, res);
+                    std.Io.sleep(self.container.io, std.Io.Duration.fromMilliseconds(backoff), .awake) catch {};
+                    continue;
+                }
+                if (self.breaker) |*b| {
+                    b.recordFailure();
+                }
+                return ClientError.ServiceNotReachable;
+            },
             500...600 => {
                 if (attempt < max_attempts) {
                     attempt += 1;
-                    const backoff = self.retryBackoffMs(attempt);
+                    const backoff = self.retryDelayMs(attempt, res);
                     std.Io.sleep(self.container.io, std.Io.Duration.fromMilliseconds(backoff), .awake) catch {};
                     continue;
                 }
@@ -625,8 +710,8 @@ fn createAndSendRequest(
             replayed = true;
             // Clear the cached token under the oauth mutex so concurrent requests
             // reading `self.oauth_token` in `ensureOAuthToken` can't dereference a
-            // token we're about to free (use-after-free, audit #8).
-            self.oauth_mutex.lock(self.container.io) catch {};
+            // token we're about to free (use-after-free,).
+            self.oauth_mutex.lockUncancelable(self.container.io);
             if (self.oauth_token) |old| {
                 self.container.allocator.free(old);
             }
@@ -644,7 +729,7 @@ fn createAndSendRequest(
     // `traceID` is either the caller-owned buffer from `getResponseTraceIDBuffer`
     // (which we free) or the response header slice `_id` (owned by the response
     // and freed by `res.deinit`, so we must NOT free it). Destroying `&traceID`
-    // would corrupt the heap (it is a stack-local slice header), audit #7.
+    // would corrupt the heap (it is a stack-local slice header),.
     var free_trace: bool = false;
     var traceID: []const u8 = undefined;
     if (responseTraceID) |_id| {
@@ -690,7 +775,7 @@ fn createAndSendRequest(
     // On success we return `parsed.value`, whose slices point into the arena that
     // `std.json.parseFromSlice` built inside `parsed`. Deinitializing `parsed`
     // here would free that arena before the caller reads the value (use-after-free,
-    // audit #6). The arena lives in `ctx.allocator` and is reclaimed by the
+    //). The arena lives in `ctx.allocator` and is reclaimed by the
     // per-request arena at request end, so the returned value stays valid for the
     // caller and the memory is not leaked past the request.
 
@@ -741,7 +826,7 @@ const OAuthFetchResult = struct {
 
 /// Fetch a fresh OAuth token from the IdP. Does NOT touch `oauth_token` and does
 /// NOT take `oauth_mutex` — the caller handles caching/locking so the mutex is
-/// never held across the network round-trip (audit #24). On failure returns an
+/// never held across the network round-trip. On failure returns an
 /// error; the caller decides whether to fall back to a stale cached token.
 fn fetchOAuthToken(self: *Self) !OAuthFetchResult {
     const cfg = self.auth.?.oauth orelse return error.OAuthTokenFetchFailed;
@@ -868,7 +953,7 @@ fn fetchOAuthToken(self: *Self) !OAuthFetchResult {
         },
     ) catch {
         // The token endpoint returned a payload we can't shape into a token
-        // (e.g. an `{"error": ...}` body, or a missing `access_token`). Treat
+        // (e.g. an `{"error":...}` body, or a missing `access_token`). Treat
         // that as a fetch failure so the caller gets a meaningful client error
         // rather than an internal `MissingField`.
         if (self.oauth_breaker) |*b| {
@@ -888,13 +973,13 @@ fn fetchOAuthToken(self: *Self) !OAuthFetchResult {
 /// Uses double-checked locking: the fast path reads a still-valid cache under
 /// the mutex and returns without any I/O, and the slow path fetches the token
 /// WITHOUT holding the mutex so concurrent outbound calls aren't blocked on the
-/// IdP round-trip (audit #24). A newer token produced by a concurrent refresh
+/// IdP round-trip. A newer token produced by a concurrent refresh
 /// is preferred over the one just fetched.
 fn ensureOAuthToken(self: *Self) ![]const u8 {
     // Fast path: return a still-valid cached token. The mutex is held only long
     // enough to read the cache, never across the network.
     {
-        self.oauth_mutex.lock(self.container.io) catch {};
+        self.oauth_mutex.lockUncancelable(self.container.io);
         const now = utils.nowMonotonic().nanoseconds;
         if (self.oauth_token) |token| {
             // 5s skew baked into expires_at so we refresh slightly early.
@@ -909,7 +994,7 @@ fn ensureOAuthToken(self: *Self) ![]const u8 {
     const fetched = self.fetchOAuthToken() catch |e| {
         // Refresh failed: a concurrent refresh may have produced a valid token,
         // or we may have a stale one worth reusing. Re-check under the lock.
-        self.oauth_mutex.lock(self.container.io) catch {};
+        self.oauth_mutex.lockUncancelable(self.container.io);
         defer self.oauth_mutex.unlock(self.container.io);
         if (self.oauth_token) |token| {
             const now2 = utils.nowMonotonic().nanoseconds;
@@ -918,7 +1003,7 @@ fn ensureOAuthToken(self: *Self) ![]const u8 {
         return e;
     };
 
-    self.oauth_mutex.lock(self.container.io) catch {};
+    self.oauth_mutex.lockUncancelable(self.container.io);
     defer self.oauth_mutex.unlock(self.container.io);
     const now3 = utils.nowMonotonic().nanoseconds;
     // Prefer a newer token a concurrent refresh may have already stored, and free
@@ -956,4 +1041,34 @@ test "client: isConnectionError classifies transient socket resets" {
 
     // Real upstream problems (timeout, DNS) must NOT be swallowed as retries.
     try std.testing.expect(!isConnectionError(error.OutOfMemory));
+}
+
+test "client: getResponseWithDeadline times out a stalled downstream" {
+    const FakeServer = @import("../datasource/fakeserver.zig").FakeServer;
+    const std_io = @import("../utils.zig").io;
+
+    var fs = try FakeServer.start(.{
+        .body = "too late",
+        .delay_ms = 2000,
+    });
+    defer fs.stop();
+
+    var client = zul.http.Client.init(std_io, std.testing.allocator);
+    defer client.deinit();
+
+    const url = try std.fmt.allocPrint(
+        std.testing.allocator,
+        "http://127.0.0.1:{d}/slow",
+        .{fs.port},
+    );
+    defer std.testing.allocator.free(url);
+
+    var req = try client.allocRequest(std.testing.allocator, url);
+    defer req.deinit();
+
+    // The fake server stalls well past the deadline. The helper must reject the
+    // response with RequestTimeout regardless of which Select task wins on the
+    // current Io implementation.
+    const result = getResponseWithDeadline(&req, std_io, 50);
+    try std.testing.expectError(error.RequestTimeout, result);
 }

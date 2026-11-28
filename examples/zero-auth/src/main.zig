@@ -26,7 +26,6 @@ pub const std_options: std.Options = .{
 };
 
 pub fn main(init: std.process.Init) !void {
-
     var gpa: std.heap.DebugAllocator(.{}) = .init;
     const allocator = gpa.allocator();
     _ = gpa.detectLeaks();
@@ -111,11 +110,11 @@ pub fn oauthResponse(ctx: *Context) !void {
 //         },
 //     }
 
-//     const parsed = try res.json(publicKeys, ctx.allocator, .{});
+//     const parsed = try res.json(publicKeys, ctx.allocator,.{});
 //     defer parsed.deinit();
 
 //     ctx.info("oatuh keys refreshed");
 
 //     ctx.response.setStatus(.ok);
-//     try ctx.response.json(parsed.value, .{});
+//     try ctx.response.json(parsed.value,.{});
 // }

@@ -81,9 +81,9 @@ pub fn create(
 /// Establish (or re-establish) the request/response and push connections,
 /// authenticate, and select the target DB. Closes any prior sockets first.
 /// Held under `mu` so concurrent `Publish`/`addSubscriber` (which also lock)
-/// never observe a half-mutated connection during a reconnect (audit #23).
+/// never observe a half-mutated connection during a reconnect.
 fn connect(self: *Self) !void {
-    self.mu.lock(self.container.io) catch {};
+    self.mu.lockUncancelable(self.container.io);
     defer self.mu.unlock(self.container.io);
     self.disconnect();
 
@@ -162,9 +162,9 @@ pub fn destroy(self: *Self) void {
 }
 
 pub fn Publish(self: *Self, subject: []const u8, payload: []const u8) !void {
-    // Serialize concurrent publishes from HTTP handlers / cron (audit #11), and
+    // Serialize concurrent publishes from HTTP handlers / cron, and
     // exclude the reconnect path which also takes `mu`.
-    self.mu.lock(self.container.io) catch {};
+    self.mu.lockUncancelable(self.container.io);
     defer self.mu.unlock(self.container.io);
     // Connection may be mid-reconnect or failed; never unwrap a null socket.
     // `writer`/`reader` are value-type optionals; hand the callees pointers to
@@ -181,13 +181,13 @@ pub fn Publish(self: *Self, subject: []const u8, payload: []const u8) !void {
 }
 
 pub fn addSubscriber(self: *Self, topic: []const u8, hook: *const fn (*root.Context) anyerror!void) !void {
-    self.mu.lock(self.container.io) catch {};
+    self.mu.lockUncancelable(self.container.io);
     try self.subscriber.append(.{ .topic = topic, .exec = hook });
     self.mu.unlock(self.container.io);
 
     // Held under `mu` so a concurrent reconnect can't null the push socket while
     // we write to it. Bail if the connection isn't up rather than unwrapping null.
-    self.mu.lock(self.container.io) catch {};
+    self.mu.lockUncancelable(self.container.io);
     defer self.mu.unlock(self.container.io);
     const w = if (self.sub_writer) |*sw| sw else return;
     try encodeCommand(w, &.{ "SUBSCRIBE", topic });
@@ -200,6 +200,7 @@ pub fn addSubscriber(self: *Self, topic: []const u8, hook: *const fn (*root.Cont
 
     const msg = utils.combine(self.allocator, "topic:{s} redis subscriber added", .{topic}) catch return;
     self.container.log.info(msg);
+    self.allocator.free(msg);
 }
 
 pub fn startSubscription(self: *Self) !void {
@@ -248,7 +249,7 @@ fn consume(self: *Self) !void {
     while (self.signal.load(.monotonic)) {
         // The push socket is only mutated by the reconnect path, which runs after
         // this returns an error. If it's null the connection isn't up — signal a
-        // reconnect rather than unwrapping null (audit #23).
+        // reconnect rather than unwrapping null.
         const r = if (self.sub_reader) |*rd| rd else return error.RedisNotConnected;
         const frame = try readSubFrame(r, self.allocator) orelse continue;
         if (std.mem.eql(u8, frame.kind, "message") and frame.elements.len >= 3) {
@@ -262,10 +263,10 @@ fn dispatch(self: *Self, channel: []const u8, payload: []const u8) void {
     // Snapshot the matching hooks under the lock, then release before invoking
     // them. `addSubscriber` appends under the same lock, and a hook may
     // republish via `Publish` (which also takes `mu`), so we must not hold the
-    // lock across the invocation (audit #23).
+    // lock across the invocation.
     var matched = std.array_list.Managed(*const fn (*root.Context) anyerror!void).init(self.allocator);
     {
-        self.mu.lock(self.container.io) catch {};
+        self.mu.lockUncancelable(self.container.io);
         for (self.subscriber.items) |sub| {
             if (std.mem.eql(u8, sub.topic, channel)) {
                 matched.append(sub.exec) catch {};
@@ -282,12 +283,14 @@ fn dispatch(self: *Self, channel: []const u8, payload: []const u8) void {
 fn runHook(self: *Self, hook: *const fn (*root.Context) anyerror!void, channel: []const u8, payload: []const u8) void {
     const ca = self.allocator.create(arena_t) catch return;
     ca.* = arena_t.init(self.allocator);
-    errdefer {
+    // `runHook` returns `void`, so `errdefer` would never fire on the normal path
+    // and leak the per-message arena on every message. Use `defer`
+    defer {
         ca.deinit();
         self.allocator.destroy(ca);
     }
 
-    // A valid, non-socket response for the subscriber hook's Context (audit #15):
+    // A valid, non-socket response for the subscriber hook's Context:
     // an undefined `*httpz.Response` is UB if the hook touches it. Backed by the
     // per-message arena, freed when `ca` is deinited.
     const res = root.context.makeSyntheticResponse(ca.allocator()) catch return;
@@ -405,7 +408,7 @@ const Frame = struct {
 /// Type-erased VTable conforming to `pubsubInterface.Interface.VTable`.
 pub const vtable = root.pubsubInterface.Interface.VTable{
     .publish = struct {
-        fn call(ptr: *anyopaque, subject: []const u8, payload: []const u8) anyerror!void {
+        fn call(ptr: *anyopaque, subject: []const u8, payload: []const u8, _: ?[]const u8) anyerror!void {
             const self: *Redis = @ptrCast(@alignCast(ptr));
             try self.Publish(subject, payload);
         }

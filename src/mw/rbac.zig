@@ -12,7 +12,7 @@ registry: ?*RBAC = undefined,
 /// A single allow-rule: `role` may call `method` on `path`. When `exempt` is
 /// true the rule bypasses RBAC entirely for its `method`/`path` (see `addExempt`).
 /// When `deny` is true the rule explicitly forbids `role` on `method`/`path`;
-/// a deny wins over any allow (audit #33).
+/// a deny wins over any allow.
 pub const Permission = struct {
     role: []const u8,
     method: []const u8,
@@ -28,7 +28,7 @@ pub const RBAC = struct {
     allocator: std.mem.Allocator,
     permissions: std.array_list.Managed(Permission),
     /// When true, any route with no matching rule is denied instead of public
-    /// (audit #33). Defaults to false to preserve the legacy public-by-default
+    ///. Defaults to false to preserve the legacy public-by-default
     /// contract; operators opting into zero-trust set this.
     default_deny: bool = false,
 
@@ -50,7 +50,7 @@ pub const RBAC = struct {
     }
 
     /// Adds an explicit deny: `role` is forbidden on `method`/`path` even if an
-    /// allow rule would otherwise grant it. Deny takes precedence (audit #33).
+    /// allow rule would otherwise grant it. Deny takes precedence.
     pub fn addDeny(self: *RBAC, role: []const u8, method: []const u8, path: []const u8) !void {
         try self.permissions.append(.{ .role = role, .method = method, .path = path, .deny = true });
     }
@@ -161,7 +161,7 @@ pub const RBAC = struct {
         }
 
         // Optional `deny` flag: the generated rules explicitly forbid the role
-        // (audit #33). `deny` and `exempt` are mutually exclusive per rule.
+        // `deny` and `exempt` are mutually exclusive per rule.
         var deny = false;
         if (obj.get("deny")) |d| {
             if (d != .bool) {
@@ -210,7 +210,7 @@ fn methodMatches(rule_method: []const u8, req_method: []const u8) bool {
 
 fn pathMatches(rule_path: []const u8, req_path: []const u8) bool {
     // Collapse a single trailing slash on both sides so `/api/users` and
-    // `/api/users/` resolve to the same rule (audit #33). A trailing slash was
+    // `/api/users/` resolve to the same rule. A trailing slash was
     // a trivial bypass of exact-match rules.
     const rp = stripTrailingSlash(rule_path);
     const rq = stripTrailingSlash(req_path);
@@ -272,7 +272,7 @@ pub fn execute(self: *const rbac, req: *httpz.Request, res: *httpz.Response, exe
     res.setStatus(.forbidden);
 }
 
-/// Emits an audit-log line for a denied request (audit #33). The message is
+/// Emits an audit-log line for a denied request. The message is
 /// allocated, logged synchronously, then freed — logging does not retain it.
 fn auditDenial(self: *const rbac, req: *httpz.Request, role: []const u8) void {
     const msg = std.fmt.allocPrint(self.allocator, "RBAC deny: role={s} {s} {s}", .{
@@ -419,7 +419,7 @@ test "rbac exempt bypasses role check" {
     try std.testing.expect(!rb.allows("anonymous", "POST", "/healthz"));
 }
 
-test "rbac explicit deny overrides allow (audit #33)" {
+test "rbac explicit deny overrides allow" {
     var rb = RBAC.init(std.testing.allocator);
     defer rb.deinit();
     try rb.add("admin", "GET", "/api/secret");
@@ -430,7 +430,7 @@ test "rbac explicit deny overrides allow (audit #33)" {
     try std.testing.expect(!rb.allows("user", "GET", "/api/secret"));
 }
 
-test "rbac default_deny blocks unruled routes (audit #33)" {
+test "rbac default_deny blocks unruled routes" {
     var rb = RBAC.init(std.testing.allocator);
     defer rb.deinit();
     rb.default_deny = true;
@@ -445,7 +445,7 @@ test "rbac default_deny blocks unruled routes (audit #33)" {
     try std.testing.expect(open.allows("admin", "GET", "/never/configured"));
 }
 
-test "rbac trailing slash cannot bypass exact rule (audit #33)" {
+test "rbac trailing slash cannot bypass exact rule" {
     var rb = RBAC.init(std.testing.allocator);
     defer rb.deinit();
     try rb.add("admin", "GET", "/api/users");

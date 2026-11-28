@@ -27,7 +27,7 @@ const StringKeyValue = httpz.key_value.StringKeyValue;
 pub const ProbeOpts = struct {
     /// Number of timed/measured requests driven through the handler.
     iterations: usize = 5000,
-    /// Respond with `ctx.json(.{ .message = "pong" })` instead of a static body,
+    /// Respond with `ctx.json(.{.message = "pong" })` instead of a static body,
     /// so the probe also surfaces the JSON body-serialization cost.
     json_body: bool = false,
     /// Which allocator backs `req.arena` (approach b):
@@ -241,7 +241,6 @@ fn buildReqRes(req_alloc: Allocator) !struct { *httpz.Request, *httpz.Response }
 /// drives `iterations` requests through `Handler.dispatch` with a counting
 /// allocator substituted for `req.arena`. Returns the per-request allocation
 /// budget and a call-site breakdown.
-///
 /// Two refinements versus a naive loop:
 ///  - (a) the Request/Response scaffolding is allocated ON the counting arena
 ///    (not the general heap), so its cost is attributed and `latency -

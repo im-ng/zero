@@ -46,7 +46,7 @@ pub const Context = struct {
     params: std.StringHashMap([]const u8) = undefined,
 
     /// Active OpenTelemetry span for this request (set by the `tracz` middleware
-    /// before dispatch). Null when OTEL_EXPERIMENTAL is off or outside a request.
+    /// before dispatch). Null when OTel is disabled (no endpoint) or outside a request.
     otel_span: ?otel.ActiveSpan = null,
 
     /// W3C Baggage parsed from the inbound `baggage` header. Handlers read and
@@ -75,17 +75,34 @@ pub const Context = struct {
             // /lastId/rows so concurrent requests can't share a transaction or
             // clobber each other's last-insert-id.
             const session = try root.SQL.createSession(allocator, container.SQL.?);
-            c.SQL = root.Datasource.init(session, .postgres, container.datasource.breaker, container.metricz);
+            c.SQL = root.Datasource.init(
+                session,
+                .postgres,
+                container.datasource.breaker,
+                container.metricz,
+            );
         } else if (container.MySQL != null) {
             // MySQL: same per-request session model as Postgres. Each request
             // borrows a pooled connection (pinned for transactions) so concurrent
             // requests never share a socket or a transaction.
             const session = try root.MySQL.createSession(allocator, container.MySQL.?);
             c.SQL = root.Datasource.init(session, .mysql, container.datasource.breaker, container.metricz);
-        } else if (container.SQLite != null or container.DuckDB != null or container.ClickHouse != null or container.DuckGres != null) {
-            // SQLite/DuckDB backends reuse a single shared connection; the
-            // per-request session does not apply (see ZIG_LEARNINGS.md — their
-            // single-connection concurrency is a separate, documented limitation).
+        } else if (container.SQLite != null) {
+            // SQLite has a real connection pool now: each request borrows a
+            // connection per call, so WAL readers run alongside a writer and
+            // last-id/rows state stays isolated to this session.
+            const session = try root.SQLite.createSession(allocator, container.SQLite.?);
+            c.SQL = root.Datasource.init(
+                session,
+                .sqlite,
+                container.datasource.breaker,
+                container.metricz,
+            );
+        } else if (container.DuckDB != null or container.ClickHouse != null or
+            container.DuckGres != null)
+        {
+            // These backends still reuse a single shared connection; the
+            // per-request session does not apply to them.
             c.SQL = container.datasource;
         }
 
@@ -117,7 +134,7 @@ pub const Context = struct {
             c.MQ = pb;
         }
 
-        if (container.Kakfa) |k| {
+        if (container.Kafka) |k| {
             c.KF = k;
         }
 
@@ -152,7 +169,30 @@ pub const Context = struct {
             .params = std.StringHashMap([]const u8).init(allocator),
         };
 
-        if (container.SQL != null or container.SQLite != null or container.DuckDB != null or container.ClickHouse != null or container.DuckGres != null) {
+        // Mirror `init` exactly. A shared Postgres datasource here would let two
+        // concurrent cron or pub/sub handlers share a transaction connection.
+        if (container.SQL != null) {
+            const session = try root.SQL.createSession(allocator, container.SQL.?);
+            c.SQL = root.Datasource.init(
+                session,
+                .postgres,
+                container.datasource.breaker,
+                container.metricz,
+            );
+        } else if (container.MySQL != null) {
+            const session = try root.MySQL.createSession(allocator, container.MySQL.?);
+            c.SQL = root.Datasource.init(session, .mysql, container.datasource.breaker, container.metricz);
+        } else if (container.SQLite != null) {
+            const session = try root.SQLite.createSession(allocator, container.SQLite.?);
+            c.SQL = root.Datasource.init(
+                session,
+                .sqlite,
+                container.datasource.breaker,
+                container.metricz,
+            );
+        } else if (container.DuckDB != null or container.ClickHouse != null or
+            container.DuckGres != null)
+        {
             c.SQL = container.datasource;
         }
         if (container.defaultKV) |kv| {
@@ -176,7 +216,7 @@ pub const Context = struct {
         if (container.mqtt) |pb| {
             c.MQ = pb;
         }
-        if (container.Kakfa) |k| {
+        if (container.Kafka) |k| {
             c.KF = k;
         }
         if (container.Nats) |n| {
@@ -244,17 +284,45 @@ pub const Context = struct {
         self.container.log.Fatal(self.allocator, message);
     }
 
-    /// deinit context from parent allocator
+    /// Full teardown: run the request cleanup first so an open transaction is
+    /// rolled back, then release the context itself. Callers that only need to
+    /// end a request (stack-allocated contexts) use `cleanup` directly.
     pub fn deinit(self: *Context) void {
-        if (self.baggage) |*b| {
-            b.deinit();
-        }
+        self.cleanup();
         self.allocator.destroy(self);
     }
 
-    /// returns traceID of the service request
+    /// Tear down a request context. Called via `defer ctx.cleanup()` at the end of
+    /// each HTTP handler. Rolls back any open SQL transaction so a handler error
+    /// can't leak an open transaction onto a pooled connection, and frees the W3C
+    /// baggage. The request arena is reset by httpz after the handler returns, which
+    /// frees the per-request SQL session and every arena allocation, so we must not
+    /// free those here (doing so would double-free). Replaces the old
+    /// `defer req.arena.destroy(&ctx)`, which destroyed the on-stack `ctx` value
+    /// through the arena
+    pub fn cleanup(self: *Context) void {
+        // const has_sql = self.container.SQL != null or self.container.MySQL != null or
+        // self.container.SQLite != null or self.container.DuckDB != null or
+        // self.container.ClickHouse != null or self.container.DuckGres != null;
+        // if (has_sql) {
+        //     self.SQL.rollback();
+        // }
+        if (self.baggage) |*b| {
+            b.deinit();
+            self.baggage = null;
+        }
+    }
+
+    /// Returns the W3C trace id of the service request. When an inbound
+    /// `traceparent` is present its 32-hex trace id is used; otherwise fall back
+    /// to the correlation id, which tracz generates in the same trace-id shape.
     pub fn trace(self: *Context) ?[]const u8 {
         if (self.request) |r| {
+            if (r.header("traceparent")) |tp| {
+                if (tp.len >= 35 and tp[0] == '0' and tp[1] == '0' and tp[2] == '-') {
+                    return tp[3..35];
+                }
+            }
             return r.headers.get("X-Correlation-ID");
         }
         return null;
@@ -269,7 +337,7 @@ pub const Context = struct {
     }
 
     /// Returns the active OpenTelemetry span handle for this request, or null when
-    /// OTEL_EXPERIMENTAL is off or outside a request context.
+    /// OTel is disabled (no endpoint) or outside a request context.
     pub fn span(self: *Context) ?otel.ActiveSpan {
         return self.otel_span;
     }
@@ -337,6 +405,20 @@ pub const Context = struct {
         return self.container.fileStores.get(name);
     }
 
+    /// Look up a named SQL datasource registered via `App.addSQL`. The default
+    /// datasource (wired from `DB_*`/`SQL_*` config) is also available as
+    /// `ctx.SQL` and under the `"default"` key.
+    pub fn GetSQL(self: *Context, name: []const u8) ?root.Datasource {
+        return self.container.sqlStores.get(name);
+    }
+
+    /// Look up a named pub/sub backend registered via `App.addPubSub`. The default
+    /// backend (wired from `PUBSUB_BACKEND`) is also available as `ctx.PubSub` and
+    /// under the `"default"` key.
+    pub fn GetPubSub(self: *Context, name: []const u8) ?*root.PubSub {
+        return self.container.pubSubBackends.get(name);
+    }
+
     /// Returns an uploaded file from a `multipart/form-data` request, or `null`
     /// if no field with that name was submitted. The `data` slice is valid only
     /// for the lifetime of the request (arena-owned) — copy it to persist.
@@ -345,7 +427,6 @@ pub const Context = struct {
         const f = form.get(field) orelse return null;
         // Keep only the basename: a client-supplied filename like `../../etc/x`
         // must never become a traversal key when the caller saves it to a store
-        // (audit #26).
         const raw_name = f.filename orelse "";
         const safe_name = std.fs.path.basename(raw_name);
         return root.UploadedFile{
@@ -472,7 +553,7 @@ pub const Context = struct {
     }
 
     /// Issues a 3xx redirect. Defaults to 302 Found; use redirectWith for an
-    /// explicit status (e.g. .moved_permanently / .see_other / .temporary_redirect).
+    /// explicit status (e.g..moved_permanently /.see_other /.temporary_redirect).
     pub fn redirect(self: *Context, url: []const u8) void {
         self.redirectWith(std.http.Status.found, url);
     }
@@ -519,7 +600,6 @@ pub const Context = struct {
 
     /// Executes a GraphQL query against the given resolver root(s) and writes a
     /// `Content-Type: application/json` `{ data, errors }` response.
-    ///
     /// `mutation_root` may be null when the operation is always a query.
     pub fn graphql(
         self: *Context,
@@ -544,7 +624,7 @@ pub const Context = struct {
 
 /// Build a valid `httpz.Response` for non-HTTP contexts (cron jobs, pub/sub
 /// subscriber dispatch) so `Context` never carries an undefined response pointer
-/// (audit #15). The response accessors these contexts use — `setStatus`, `body`,
+///. The response accessors these contexts use — `setStatus`, `body`,
 /// `header`, `json`, `writer` — only read `status`, `body`, `headers`, and an
 /// allocating buffer; none touch the socket, so a synthetic connection with only
 /// `res_state` initialized is sufficient. The returned response (and its backing

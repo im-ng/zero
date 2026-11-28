@@ -23,7 +23,6 @@ pub const Options = struct {
 };
 
 /// Unified, type-erased graph interface.
-///
 /// Usage (mirrors `ctx.Search` / `ctx.SQL`):
 ///   const res = try ctx.Graph.query(ctx, "query { me { name } }");
 ///   const res = try ctx.Graph.mutate(ctx, "{\"set\":[{\"name\":\"Alice\"}]}");

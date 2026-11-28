@@ -58,7 +58,7 @@ fn userResolver(ctx: *Context, args: UserArgs) anyerror!?User {
 }
 
 fn createUserResolver(ctx: *Context, args: CreateUserArgs) anyerror!User {
-    // INSERT ... RETURNING returns the row, which we map straight back to User.
+    // INSERT... RETURNING returns the row, which we map straight back to User.
     return (try ctx.SQL.queryRow(ctx, User,
         \\INSERT INTO users (name, email) VALUES ($1, $2) RETURNING id, name, email
     , .{ args.name, args.email })).?;

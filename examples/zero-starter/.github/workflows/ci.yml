@@ -1,0 +1,37 @@
+name: ci
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: goto-bus-stop/setup-zig@v2
+        with:
+          version: "0.17.0"
+      - name: Unit tests
+        run: zig build test
+      - name: Build starter
+        working-directory: examples/zero-starter
+        run: zig build -Dkafka=false -Dduckdb=false --release=fast
+
+  docker:
+    runs-on: ubuntu-latest
+    needs: test
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build image
+        working-directory: examples/zero-starter
+        run: docker build -t zero-starter:ci .
+
+  helm:
+    runs-on: ubuntu-latest
+    needs: test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/setup-helm@v4
+      - name: Template chart
+        run: helm template zero ./charts/zero > /dev/null

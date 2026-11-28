@@ -4,7 +4,6 @@ const client = @import("cassandraClient.zig");
 
 /// Cassandra wide-column backend. Talks the native CQL binary protocol v4 via the
 /// self-contained `cassandraClient.zig` (no external driver dependency).
-///
 /// Unlike `SQL`, this backend does not build statements. Callers pass a full
 /// CQL string to `get`/`put`/`delete`/`query`, so the query lives with the
 /// caller (the route handler), never in the datasource layer. The configured

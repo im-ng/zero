@@ -10,14 +10,13 @@ pub const std_options: std.Options = .{
 };
 
 pub fn main(init: std.process.Init) !void {
-
     var gpa: std.heap.DebugAllocator(.{}) = .init;
     const allocator = gpa.allocator();
     _ = gpa.detectLeaks();
 
     const app = try App.new(allocator, init.io, init.environ_map);
 
-    // Register a local file store rooted at ./data/uploads. With FILE_STORE_ROOT
+    // Register a local file store rooted at./data/uploads. With FILE_STORE_ROOT
     // set in config this is also auto-registered as the default store.
     try app.addFileStore("uploads", .local, .{ .root = "./data/uploads" });
 

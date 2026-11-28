@@ -1,5 +1,6 @@
 const std = @import("std");
 const root = @import("../zero.zig");
+const build_options = @import("build_options");
 const constants = root.constants;
 
 /// Outcome of dispatching one message to its subscriber hook(s). Backends use
@@ -24,12 +25,15 @@ pub fn runHook(
     const allocator = container.allocator;
     const ca = allocator.create(std.heap.ArenaAllocator) catch return .failed;
     ca.* = std.heap.ArenaAllocator.init(allocator);
-    errdefer {
+    // `runHook` returns a non-error enum (`DispatchStatus`), so `errdefer` would
+    // never fire on the success/handled path and leak the per-message arena on
+    // every message. Use `defer` so the arena is always released
+    defer {
         ca.deinit();
         allocator.destroy(ca);
     }
 
-    // A valid, non-socket response for the subscriber hook's Context (audit #15):
+    // A valid, non-socket response for the subscriber hook's Context:
     // an undefined `*httpz.Response` is UB if the hook touches it. Backed by the
     // per-message arena, freed when `ca` is deinited at the end of this function.
     const res = root.context.makeSyntheticResponse(ca.allocator()) catch return .failed;
@@ -45,7 +49,7 @@ pub fn runHook(
         .nats => |m| .{ m.subject, m.payload },
         .redis => |m| .{ m.subject, m.payload },
         .mqtt => |m| .{ @as([]const u8, ""), m.payload orelse "" },
-        .kafka => |m| .{ @as([]const u8, ""), m.payload orelse "" },
+        .kafka => |m| if (comptime build_options.kafka) .{ @as([]const u8, ""), m.payload orelse "" } else unreachable,
     };
     const subject = extracted[0];
     const payload = extracted[1];
@@ -62,7 +66,7 @@ pub fn runHook(
             }
             // Final failure. Native-DLQ backends (SQS/GCP) rely on their own
             // redrive policy; app-level republish would re-enter the same queue
-            // and loop (audit #14). Leave the message for native redelivery.
+            // and loop. Leave the message for native redelivery.
             if (container.pubSub) |ps| {
                 if (ps.native_dlq) {
                     container.metricz.dlq(.{ .topic = subject, .consumer = "dlq" }) catch {};

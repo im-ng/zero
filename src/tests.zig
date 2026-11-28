@@ -76,7 +76,7 @@ comptime {
     // _ = @import("service/client.zig");
 
     // test files split out of >500-line sources (see AGENTS.md test layout)
-    _ = @import("container_test.zig");
+    _ = @import("containers/container_test.zig");
     _ = @import("context_test.zig");
     _ = @import("app_test.zig");
     _ = @import("service/client_test.zig");
@@ -86,4 +86,12 @@ comptime {
     _ = @import("datasource/fakeserver.zig");
     _ = @import("datasource/search/meili_test.zig");
     _ = @import("datasource/search/solr_test.zig");
+
+    // Inline `test` blocks in these modules are not pulled into the test binary
+    // by the transitive `zero` import alone: their `pub const` in `zero.zig`
+    // is unreachable, so Zig lazily skips analyzing the file (and its tests).
+    // Force analysis explicitly so `zig build test` actually runs them.
+    _ = @import("autocrud.zig");
+    _ = @import("graphql.zig");
+    _ = @import("filestore/local.zig");
 }

@@ -68,6 +68,7 @@ pub fn create(
             .{c.err_message},
         );
         container.log.err(msg);
+        container.allocator.free(msg);
     }
 
     if (client != null) {
@@ -77,6 +78,7 @@ pub fn create(
             .{},
         );
         container.log.info(msg);
+        container.allocator.free(msg);
     }
 
     c.client = client;
@@ -85,7 +87,6 @@ pub fn create(
     // Only advertise pub/sub as configured when we actually got a client. If
     // `rd_kafka_new` failed (client == null) we must not set the flag, otherwise
     // the dispatcher would route publishes to a null `client` and crash
-    // (audit #10).
     c.isPubSubSet = (client != null);
 
     return c;
@@ -109,6 +110,7 @@ pub fn getTopicHandler(self: *Self, ctx: *Context, name: []const u8) !*kafkaTopi
             .{rdkafka.rd_kafka_err2str(err_code)},
         );
         ctx.err(msg);
+        ctx.allocator.free(msg);
     }
 
     const topic = rdkafka.rd_kafka_topic_new(
@@ -123,6 +125,7 @@ pub fn getTopicHandler(self: *Self, ctx: *Context, name: []const u8) !*kafkaTopi
             .{rdkafka.rd_kafka_err2str(err_code)},
         );
         ctx.err(msg);
+        ctx.allocator.free(msg);
     }
 
     return topic.?;
@@ -157,9 +160,9 @@ pub fn destroy(self: *Self) void {
 
 pub fn publish(self: *Self, ctx: *Context, topic: *kafkaTopic, key: []const u8, payload: []const u8) !void {
     // Guard fan-in: Publish is called concurrently from HTTP handlers and cron
-    // jobs (audit #11). Serialize on the shared client state via the per-client
+    // jobs. Serialize on the shared client state via the per-client
     // mutex (also used by the subscriber dispatch path).
-    self.mu.lock(self.container.io) catch {};
+    self.mu.lockUncancelable(self.container.io);
     defer self.mu.unlock(self.container.io);
 
     const message_ptr: ?*anyopaque = @constCast(payload.ptr);
@@ -220,6 +223,7 @@ pub fn publish(self: *Self, ctx: *Context, topic: *kafkaTopic, key: []const u8, 
         );
 
         ctx.info(msg);
+        ctx.allocator.free(msg);
 
         self.container.metricz.publisherSuccess(.{ .topic = self.getTopicName(topic) }) catch |e| std.debug.print("kafka publisherSuccess metric failed: {}\n", .{e});
     } else {
@@ -230,6 +234,7 @@ pub fn publish(self: *Self, ctx: *Context, topic: *kafkaTopic, key: []const u8, 
         );
 
         ctx.err(msg);
+        ctx.allocator.free(msg);
     }
 
     self.container.metricz.publisherTotal(.{ .topic = self.getTopicName(topic) }) catch |e| std.debug.print("kafka publisherTotal metric failed: {}\n", .{e});
@@ -237,14 +242,14 @@ pub fn publish(self: *Self, ctx: *Context, topic: *kafkaTopic, key: []const u8, 
 
 /// Convenience for the unified `PubSub` interface: publish to a subject
 /// using a throwaway context (Kafka's `publish` requires a `*Context`).
-pub fn publishOnSubject(self: *Self, subject: []const u8, payload: []const u8) !void {
+pub fn publishOnSubject(self: *Self, subject: []const u8, payload: []const u8, key: ?[]const u8) !void {
     const ca = self.prepareChildAllocator() catch |err| {
         self.container.log.any(err);
         return;
     };
-    defer self.destroryChildAllocator(ca);
+    defer self.destroyChildAllocator(ca);
 
-    // A valid, non-socket response for the subscriber/handler Context (audit #15):
+    // A valid, non-socket response for the subscriber/handler Context:
     // `_res` is an undefined `*httpz.Response` and a hook touching it is UB.
     const res = root.context.makeSyntheticResponse(ca.allocator()) catch |err| {
         self.container.log.any(err);
@@ -267,7 +272,7 @@ pub fn publishOnSubject(self: *Self, subject: []const u8, payload: []const u8) !
     };
     defer rdkafka.rd_kafka_topic_destroy(topic);
 
-    try self.publish(context, topic, "", payload);
+    try self.publish(context, topic, key orelse "", payload);
 }
 
 pub inline fn wait(self: Self, comptime timeout_ms: u16) void {
@@ -286,7 +291,7 @@ fn prepareChildAllocator(self: *Self) !*arena {
     return ca;
 }
 
-fn destroryChildAllocator(self: *Self, ca: *arena) void {
+fn destroyChildAllocator(self: *Self, ca: *arena) void {
     const caPtr: *arena = @ptrCast(@alignCast(ca.allocator().ptr));
     caPtr.deinit();
 
@@ -321,7 +326,7 @@ fn processMessage(self: *Self, context: *Context, msg: *kafkaMessage, subscriber
             const dlq = std.fmt.allocPrint(self.container.allocator, "{s}__dlq", .{msg.topic}) catch return;
             defer self.container.allocator.free(dlq);
             self.container.metricz.dlq(.{ .topic = msg.topic, .consumer = "dlq" }) catch {};
-            self.publishOnSubject(dlq, msg.payload orelse &[_]u8{}) catch |dlerr| {
+            self.publishOnSubject(dlq, msg.payload orelse &[_]u8{}, null) catch |dlerr| {
                 self.container.log.Any(self.container.allocator, dlerr);
             };
             break;
@@ -394,7 +399,7 @@ fn subscriptions(self: *Self) !void {
                 self.container.log.Any(self.container.allocator, err);
                 continue;
             };
-            defer self.destroryChildAllocator(ca);
+            defer self.destroyChildAllocator(ca);
 
             const res = root.context.makeSyntheticResponse(ca.allocator()) catch |err| {
                 self.container.log.Any(self.container.allocator, err);
@@ -471,6 +476,7 @@ pub fn addSubscriber(self: *Self, topic: []const u8, hook: *const fn (*root.Cont
             return;
         };
         self.container.log.info(msg);
+        self.container.allocator.free(msg);
     }
 
     for (topics) |topic_name| {
@@ -484,7 +490,7 @@ pub fn addSubscriber(self: *Self, topic: []const u8, hook: *const fn (*root.Cont
         .exec = hook,
     };
 
-    self.mu.lock(self.container.io) catch {};
+    self.mu.lockUncancelable(self.container.io);
     try self.subscriber.append(s);
     self.mu.unlock(self.container.io);
 
@@ -498,6 +504,7 @@ pub fn addSubscriber(self: *Self, topic: []const u8, hook: *const fn (*root.Cont
     };
 
     self.container.log.info(msg);
+    self.container.allocator.free(msg);
 }
 
 inline fn getTopicName(_: *Self, topic: *kafkaTopic) []const u8 {
@@ -508,9 +515,9 @@ inline fn getTopicName(_: *Self, topic: *kafkaTopic) []const u8 {
 /// Type-erased VTable conforming to `pubsubInterface.Interface.VTable`.
 pub const vtable = root.pubsubInterface.Interface.VTable{
     .publish = struct {
-        fn call(ptr: *anyopaque, subject: []const u8, payload: []const u8) anyerror!void {
+        fn call(ptr: *anyopaque, subject: []const u8, payload: []const u8, key: ?[]const u8) anyerror!void {
             const self: *Kafka = @ptrCast(@alignCast(ptr));
-            try self.publishOnSubject(subject, payload);
+            try self.publishOnSubject(subject, payload, key);
         }
     }.call,
     .subscribe = struct {

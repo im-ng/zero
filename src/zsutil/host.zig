@@ -5,10 +5,8 @@ const utils = root.utils;
 const Context = root.Context;
 
 /// Retrieves the current host statistics.
-///
 /// Cross-platform: delegates to `zf.gather` so this works on macOS as well as
 /// Linux, instead of reading /etc/os-release and /etc/hostname directly.
-///
 /// Returns a `Host` struct with the current host info.
 pub fn usage(ctx: *Context) !Host {
     var sys = root.sysinfo.gather.gather(ctx.allocator, utils.io);
@@ -30,7 +28,6 @@ fn dupeOrEmpty(allocator: std.mem.Allocator, value: ?[]const u8) []const u8 {
 }
 
 /// Sets the value of a field in the `MemUsage` struct.
-///
 /// - `value`: A pointer to the field to be set.
 /// - `line`: The line of text containing the field value.
 /// - `section`: The section of the line that contains the field name.

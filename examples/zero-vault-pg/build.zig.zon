@@ -1,0 +1,14 @@
+.{
+    .name = .vaultpg,
+    .version = "0.0.1",
+    .fingerprint = 0x3eaf8c151d679844,
+    .minimum_zig_version = "0.17.0",
+    .dependencies = .{
+        .zero = .{ .path = "../../." },
+    },
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "src",
+    },
+}

@@ -30,7 +30,7 @@ fn mockContainer(allocator: std.mem.Allocator) root.container {
         .datasource = undefined,
         .services = null,
         .mqtt = null,
-        .Kakfa = null,
+        .Kafka = null,
         .Nats = null,
         .pubSub = null,
     };
@@ -73,7 +73,7 @@ test "http request context reclaims all allocations via req.arena" {
 
 // Cron flow: each job execution builds a fresh child ArenaAllocator
 // (prepareChildAllocator) and destroys it after the job returns
-// (destroryChildAllocator). Allocations via ctx.allocator must return to baseline.
+// (destroyChildAllocator). Allocations via ctx.allocator must return to baseline.
 test "cron job context reclaims all allocations via per-job child arena" {
     var da = std.heap.DebugAllocator(.{}){};
     var ca = CountingAllocator.init(da.allocator());

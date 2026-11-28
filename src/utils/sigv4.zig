@@ -2,13 +2,14 @@ const std = @import("std");
 const root = @import("../zero.zig");
 
 /// AWS Signature Version 4 (pure, unit-testable, header + query variants).
-///
 /// Shared by every AWS-backed client (S3 / Supabase Storage, SQS) so the
 /// signing core lives in exactly one place. Mirrors the algorithm in
 /// `filestore/s3.zig` (which now delegates here) and the AWS "GET vanilla"
 /// test vector.
 /// Lowercase big-endian hex encoding of a byte slice into a caller-owned buffer.
+/// Precondition: at most 32 input bytes, otherwise the 64-byte output overflows.
 pub fn toHexLower(out: *[64]u8, bytes: []const u8) void {
+    std.debug.assert(bytes.len <= 32);
     const set = "0123456789abcdef";
     var i: usize = 0;
     while (i < bytes.len) : (i += 1) {
@@ -31,9 +32,18 @@ pub fn sha256Hex(data: []const u8) [64]u8 {
     return hex;
 }
 
-pub fn signingKey(allocator: std.mem.Allocator, secret: []const u8, date_stamp: []const u8, region: []const u8, service: []const u8) [32]u8 {
-    const aws4_secret = std.fmt.allocPrint(allocator, "AWS4{s}", .{secret}) catch "AWS4";
-    defer if (aws4_secret.len > 4) allocator.free(aws4_secret);
+/// Derives the per-request signing key through the four SigV4 HMAC stages.
+/// The "AWS4" prefix is part of the secret, so an allocation failure must
+/// propagate: falling back to a wrong key would silently sign invalid requests.
+pub fn signingKey(
+    allocator: std.mem.Allocator,
+    secret: []const u8,
+    date_stamp: []const u8,
+    region: []const u8,
+    service: []const u8,
+) ![32]u8 {
+    const aws4_secret = try std.fmt.allocPrint(allocator, "AWS4{s}", .{secret});
+    defer allocator.free(aws4_secret);
     var k = hmacSha256(aws4_secret, date_stamp);
     k = hmacSha256(&k, region);
     k = hmacSha256(&k, service);
@@ -98,13 +108,17 @@ pub fn signAuthorization(
     defer allocator.free(cr);
 
     const cr_hash = sha256Hex(cr);
-    const scope = try std.fmt.allocPrint(allocator, "{s}/{s}/{s}/aws4_request", .{ amz_date[0..8], region, service });
+    const scope = try std.fmt.allocPrint(allocator, "{s}/{s}/{s}/aws4_request", .{
+        amz_date[0..8], region, service,
+    });
     defer allocator.free(scope);
 
-    const sts = try std.fmt.allocPrint(allocator, "AWS4-HMAC-SHA256\n{s}\n{s}\n{s}", .{ amz_date, scope, cr_hash });
+    const sts = try std.fmt.allocPrint(allocator, "AWS4-HMAC-SHA256\n{s}\n{s}\n{s}", .{
+        amz_date, scope, cr_hash,
+    });
     defer allocator.free(sts);
 
-    const key = signingKey(allocator, secret_key, amz_date[0..8], region, service);
+    const key = try signingKey(allocator, secret_key, amz_date[0..8], region, service);
     const sig = hmacSha256(&key, sts);
     var sig_hex_buf: [64]u8 = undefined;
     toHexLower(&sig_hex_buf, &sig);
@@ -125,7 +139,7 @@ pub fn amzDate(allocator: std.mem.Allocator) ![]const u8 {
     const md = yd.calculateMonthDay();
     const ds = es.getDaySeconds();
     const year: u16 = @intCast(yd.year);
-    const month: u8 = @intFromEnum(md.month);
+    const month: u8 = @backingInt(md.month);
     const day: u8 = md.day_index + 1;
     const hour = ds.getHoursIntoDay();
     const minute = ds.getMinutesIntoHour();
@@ -170,7 +184,7 @@ pub fn encodePath(allocator: std.mem.Allocator, path: []const u8) ![]const u8 {
 // ===================== Tests =====================
 
 test "sigv4: hmac-sha256 (RFC 4231 case 2)" {
-    const key = [_]u8{0x0b} ** 20;
+    const key = @as([20]u8, @splat(0x0b));
     const data = "Hi There";
     const got = hmacSha256(&key, data);
     var got_hex: [64]u8 = undefined;
@@ -212,6 +226,79 @@ test "sigv4: signAuthorization matches AWS S3 GET Object vector" {
     );
     defer std.testing.allocator.free(auth);
 
-    const expected = "AWS4-HMAC-SHA256 Credential=AKIAIOSFODNN7EXAMPLE/20130524/us-east-1/s3/aws4_request, SignedHeaders=host;range;x-amz-content-sha256;x-amz-date, Signature=f0e8bdb87c964420e857bd35b5d6ed310bd44f0170aba48dd91039c6036bdb41";
+    const expected = "AWS4-HMAC-SHA256 Credential=AKIAIOSFODNN7EXAMPLE/20130524/" ++
+        "us-east-1/s3/aws4_request, " ++
+        "SignedHeaders=host;range;x-amz-content-sha256;x-amz-date, " ++
+        "Signature=f0e8bdb87c964420e857bd35b5d6ed310bd44f0170aba48dd91039c6036bdb41";
+    try std.testing.expectEqualStrings(expected, auth);
+}
+
+test "sigv4: signingKey matches AWS get-vanilla derived key" {
+    // AWS SigV4 test-suite "get-vanilla" credentials. The derived key is the
+    // fixed point that every later signature stage builds on.
+    const key = try signingKey(
+        std.testing.allocator,
+        "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY",
+        "20150830",
+        "us-east-1",
+        "service",
+    );
+    var hex: [64]u8 = undefined;
+    toHexLower(&hex, &key);
+    try std.testing.expectEqualStrings(
+        "938127b5336810ddb6a5d6af445fcac9e371f9ed418ed386b022aed82901be75",
+        &hex,
+    );
+}
+
+test "sigv4: signingKey with an empty secret matches the direct HMAC chain" {
+    // With an empty secret the "AWS4" allocation is exactly 4 bytes, so the old
+    // len>4 free heuristic leaked it; std.testing.allocator catches that leak.
+    const key = try signingKey(std.testing.allocator, "", "20150830", "us-east-1", "service");
+    var k = hmacSha256("AWS4", "20150830");
+    k = hmacSha256(&k, "us-east-1");
+    k = hmacSha256(&k, "service");
+    k = hmacSha256(&k, "aws4_request");
+    try std.testing.expectEqualSlices(u8, &k, &key);
+}
+
+test "sigv4: toHexLower encodes a known 32-byte hash" {
+    var hash: [32]u8 = undefined;
+    std.crypto.hash.sha2.Sha256.hash("abc", &hash, .{});
+    var hex: [64]u8 = undefined;
+    toHexLower(&hex, &hash);
+    try std.testing.expectEqualStrings(
+        "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
+        &hex,
+    );
+}
+
+test "sigv4: signAuthorization matches AWS SigV4 get-vanilla vector" {
+    // Authoritative test-suite vector: GET / on example.amazonaws.com for
+    // service "service"; the published signature starts with 5fa00fa3.
+    const empty = sha256Hex("");
+    const signed = [_]Header{
+        .{ .name = "host", .value = "example.amazonaws.com" },
+        .{ .name = "x-amz-date", .value = "20150830T123600Z" },
+    };
+    const auth = try signAuthorization(
+        std.testing.allocator,
+        "GET",
+        "/",
+        "",
+        "us-east-1",
+        "service",
+        "AKIDEXAMPLE",
+        "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY",
+        &empty,
+        "20150830T123600Z",
+        &signed,
+    );
+    defer std.testing.allocator.free(auth);
+
+    const expected = "AWS4-HMAC-SHA256 Credential=AKIDEXAMPLE/20150830/" ++
+        "us-east-1/service/aws4_request, " ++
+        "SignedHeaders=host;x-amz-date, " ++
+        "Signature=5fa00fa31553b73ebf1942676e86291e8372ff2a2260956d9b8aae1d763fbf31";
     try std.testing.expectEqualStrings(expected, auth);
 }

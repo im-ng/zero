@@ -1,5 +1,6 @@
 const std = @import("std");
 const zero = @import("zero");
+const build_options = @import("build_options");
 const zul = @import("zul");
 const protobuf = @import("zero").protobuf;
 const alloc_probe = @import("allocProbe.zig");
@@ -47,7 +48,7 @@ const BucketUpperNs = [_]u64{
 };
 
 const Histogram = struct {
-    counts: [BucketUpperNs.len]u64 = [_]u64{0} ** BucketUpperNs.len,
+    counts: [BucketUpperNs.len]u64 = @as([BucketUpperNs.len]u64, @splat(0)),
     total: u64 = 0,
     sum_ns: u64 = 0,
     min_ns: u64 = std.math.maxInt(u64),
@@ -179,7 +180,17 @@ fn fire(client: *zul.http.Client, req: Req) bool {
     // Optional response content-type assertion (e.g. JSON vs HTML health check).
     if (req.expect_ct) |want| {
         const got_ct = res.header("content-type") orelse "";
-        if (std.ascii.indexOfIgnoreCase(got_ct, want) == null) {
+        const got_lower = std.ascii.allocLowerString(std.heap.page_allocator, got_ct) catch "";
+        const want_lower = std.ascii.allocLowerString(std.heap.page_allocator, want) catch "";
+        defer {
+            if (got_lower.len > 0) {
+                std.heap.page_allocator.free(got_lower);
+            }
+            if (want_lower.len > 0) {
+                std.heap.page_allocator.free(want_lower);
+            }
+        }
+        if (std.mem.indexOf(u8, got_lower, want_lower) == null) {
             if (!first_ct_printed.swap(true, .monotonic)) {
                 std.debug.print("content-type mismatch: expected '{s}', got '{s}' (url={s})\n", .{ want, got_ct, req.url });
             }
@@ -433,7 +444,7 @@ fn nosqlGetHandler(ctx: *Context) !void {
     }
 }
 
-// --- Round 2: ClickHouse (columnar OLAP SQL over HTTP) ---
+// --- ClickHouse (columnar OLAP SQL over HTTP) ---
 
 fn clickhouseWriteHandler(ctx: *Context) !void {
     if (ctx.container.ClickHouse) |_| {
@@ -462,7 +473,7 @@ fn clickhouseQueryHandler(ctx: *Context) !void {
     }
 }
 
-// --- Round 2: Couchbase (document over N1QL/HTTP) ---
+// --- Couchbase (document over N1QL/HTTP) ---
 
 fn couchbasePutHandler(ctx: *Context) !void {
     if (ctx.NoSQL) |n| {
@@ -537,6 +548,9 @@ fn runScenario(
     var errors = std.atomic.Value(usize).init(0);
     const rss0 = readRss();
     var scenario_peak: u64 = rss0;
+    // Settled RSS after the first (warmed-up) level; the leak heuristic measures
+    // growth *past* this, not past the pre-first-request `rss0`.
+    var first_level_rss: ?u64 = null;
 
     std.debug.print("\n=== {s} ===\n", .{name});
     std.debug.print("concurrency   req/s        p50(us)   p95(us)   p99(us)   max(us)   errors   rss(MiB)   dRss(KiB)\n", .{});
@@ -582,6 +596,9 @@ fn runScenario(
         const max_us = global.max_ns / 1000;
 
         const rss1 = readRss();
+        if (first_level_rss == null) {
+            first_level_rss = rss1;
+        }
         if (rss1 > scenario_peak) {
             scenario_peak = rss1;
         }
@@ -599,15 +616,22 @@ fn runScenario(
 
     const peak_mib = @as(f64, @floatFromInt(scenario_peak)) / (1024 * 1024);
     const drss_kib = @as(f64, @floatFromInt(scenario_peak -% rss0)) / 1024;
-    // Leak heuristic: peak RSS grew more than 8 MiB above the scenario baseline.
-    var leak = (scenario_peak - rss0) > 8 * 1024 * 1024;
+    // Leak heuristic: RSS must keep *climbing* past the first (warmed-up) level,
+    // not merely exceed the pre-first-request baseline. The first scenario absorbs
+    // one-time lazy initialization (HTTP worker pool, DB connection pools, …) as a
+    // single spike at level 1; that plateaus and is not a leak. A genuine leak
+    // grows monotonically across levels, so the delta between the scenario peak
+    // and the settled level-1 RSS stays above the threshold.
+    const leak_base = first_level_rss orelse rss0;
+    var leak = (scenario_peak - leak_base) > 8 * 1024 * 1024;
     // DuckDB's native buffer pool grows with concurrency and is not a framework
     // leak; the project already excludes the duckdb *write* path from the suite
     // for the same reason. Exempt the duckdb scenarios from the leak gate so the
     // CI regression job doesn't trip on expected native-DB memory behavior.
     if (leak and std.mem.startsWith(u8, name, "duckdb")) leak = false;
     if (leak) {
-        std.debug.print("⚠ {s}: possible leak (peak RSS grew {d:.1} MiB)\n", .{ name, drss_kib / 1024 });
+        const climb_kib = @as(f64, @floatFromInt(scenario_peak -% leak_base)) / 1024;
+        std.debug.print("⚠ {s}: possible leak (RSS climbed {d:.1} MiB after warmup)\n", .{ name, climb_kib / 1024 });
     }
     if (scenario_peak > peak_rss.*) {
         peak_rss.* = scenario_peak;
@@ -849,9 +873,11 @@ pub fn main(init: std.process.Init) !void {
         try app.post("/filestore", filestorePostHandler);
 
         // Round-1 datasource routes (501 when the backend isn't configured).
-        try app.addDuckDB(":memory:");
-        try app.get("/duckdb/write", duckdbWriteHandler);
-        try app.get("/duckdb/query", duckdbQueryHandler);
+        if (build_options.duckdb) {
+            try app.addDuckDB(":memory:");
+            try app.get("/duckdb/write", duckdbWriteHandler);
+            try app.get("/duckdb/query", duckdbQueryHandler);
+        }
         try app.get("/ts/write", tsWriteHandler);
         try app.get("/ts/query", tsQueryHandler);
         try app.get("/solr/index", solrIndexHandler);
@@ -942,10 +968,10 @@ pub fn main(init: std.process.Init) !void {
         .{ .name = "solr-query", .category = "search", .method = .GET, .path = "/solr/query", .expect_ct = "application/json", .gated_env = "SOLR_URL" },
         .{ .name = "nosql-put", .category = "nosql", .method = .GET, .path = "/nosql/put", .expect_ct = "application/json", .gated_env = "CASSANDRA_CONTACT_POINTS" },
         .{ .name = "nosql-get", .category = "nosql", .method = .GET, .path = "/nosql/get", .expect_ct = "application/json", .gated_env = "CASSANDRA_CONTACT_POINTS" },
-        // Round 2: ClickHouse (columnar OLAP SQL over HTTP).
+        // ClickHouse (columnar OLAP SQL over HTTP).
         .{ .name = "clickhouse-write", .category = "clickhouse", .method = .GET, .path = "/clickhouse/write", .expect_ct = "application/json", .gated_env = "CLICKHOUSE_URL" },
         .{ .name = "clickhouse-query", .category = "clickhouse", .method = .GET, .path = "/clickhouse/query", .expect_ct = "application/json", .gated_env = "CLICKHOUSE_URL" },
-        // Round 2: Couchbase (document over N1QL/HTTP).
+        // Couchbase (document over N1QL/HTTP).
         .{ .name = "couchbase-put", .category = "couchbase", .method = .GET, .path = "/couchbase/put", .expect_ct = "application/json", .gated_env = "COUCHBASE_CONTACT_POINTS" },
         .{ .name = "couchbase-get", .category = "couchbase", .method = .GET, .path = "/couchbase/get", .expect_ct = "application/json", .gated_env = "COUCHBASE_CONTACT_POINTS" },
     };

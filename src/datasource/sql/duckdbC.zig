@@ -8,10 +8,10 @@ pub const idx_t = u64;
 pub const duckdb_state = c_int;
 pub const duckdb_type = c_int;
 
-/// `typedef struct _duckdb_database { ... } *duckdb_database;` — a pointer type.
+/// `typedef struct _duckdb_database {... } *duckdb_database;` — a pointer type.
 pub const duckdb_database = ?*anyopaque;
 
-/// `typedef struct _duckdb_connection { ... } *duckdb_connection;`
+/// `typedef struct _duckdb_connection {... } *duckdb_connection;`
 pub const duckdb_connection = ?*anyopaque;
 
 /// `duckdb_result` is a struct passed by value.
@@ -62,5 +62,5 @@ pub extern fn duckdb_bind_null(stmt: duckdb_prepared_statement, idx: idx_t) duck
 
 /// Allocate a null-terminated C string copy of `s` (caller frees with `allocator`).
 pub fn toCStr(allocator: std.mem.Allocator, s: []const u8) ![:0]const u8 {
-    return try allocator.dupeZ(u8, s);
+    return try allocator.dupeSentinel(u8, s, 0);
 }

@@ -5,7 +5,6 @@ const constants = root.constants;
 const pgz = root.pgz;
 
 /// Wired (network) DuckDB client.
-///
 /// DuckDB core ships no first-party wire-protocol server, so this client speaks the
 /// PostgreSQL wire protocol to a DuckDB PG-wire front-end (e.g. duckgres / PostDuck)
 /// using zero's pure-Zig `pgz` Postgres client. That keeps the duckdb C library out

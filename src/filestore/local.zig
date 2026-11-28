@@ -9,7 +9,6 @@ const constants = root.constants;
 const max_walk_depth: usize = 64;
 // Hard cap on the number of keys `list` will return. An unbounded listing lets
 // a store with many files OOM the request; callers that need more must page
-// (audit #26).
 const max_list_entries: usize = 100_000;
 
 /// Local-disk file store. Keys are treated as posix-style relative paths under
@@ -111,7 +110,7 @@ pub const FileStoreLocal = struct {
     }
 
     pub fn list(self: *FileStoreLocal, ctx: *root.Context, prefix: []const u8) ![][]const u8 {
-        var out = std.ArrayList([]const u8).init(ctx.allocator);
+        var out = std.array_list.Managed([]const u8).init(ctx.allocator);
         errdefer {
             for (out.items) |k| {
                 ctx.allocator.free(k);
@@ -124,7 +123,7 @@ pub const FileStoreLocal = struct {
 
     // Bounded, sorted pagination over the same key set as `list`. Sorting makes
     // the offset/limit window deterministic across requests; the `max_list_entries`
-    // cap in `walk` still bounds total keys (audit #31).
+    // cap in `walk` still bounds total keys.
     pub fn listPaginated(
         self: *FileStoreLocal,
         ctx: *root.Context,
@@ -132,7 +131,7 @@ pub const FileStoreLocal = struct {
         limit: usize,
         offset: usize,
     ) ![][]const u8 {
-        var out = std.ArrayList([]const u8).init(ctx.allocator);
+        var out = std.array_list.Managed([]const u8).init(ctx.allocator);
         errdefer {
             for (out.items) |k| {
                 ctx.allocator.free(k);
@@ -166,12 +165,12 @@ pub const FileStoreLocal = struct {
         allocator: std.mem.Allocator,
         dir: []const u8,
         prefix: []const u8,
-        out: *std.ArrayList([]const u8),
+        out: *std.array_list.Managed([]const u8),
         depth: usize,
     ) !void {
         // Fail fast on an unexpectedly deep tree instead of recursing forever.
         // A runtime check (not `std.debug.assert`) so the guard holds in
-        // ReleaseFast too (audit #26).
+        // ReleaseFast too.
         if (depth > max_walk_depth) return error.FileStoreTooDeep;
         var d = std.Io.Dir.cwd().openDir(root.utils.io, dir, .{ .iterate = true }) catch |err| {
             if (err == error.FileNotFound) return;
@@ -210,6 +209,7 @@ test "FileStoreLocal: create/get/delete/list + path-traversal guard" {
 
     var ctx: root.Context = undefined;
     ctx.allocator = ta.allocator;
+    ctx.io = std.testing.io;
 
     const store = try FileStoreLocal.open(ta.allocator, root_dir);
     defer ta.allocator.destroy(store);

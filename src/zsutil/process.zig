@@ -4,10 +4,8 @@ const root = @import("../zero.zig");
 const utils = root.utils;
 
 /// Retrieves the current process statistics.
-///
 /// This function reads the process usage statistics from the `/proc/process-id/status` file and returns a `ProcessStatus`
 /// struct containing the values.
-///
 /// Returns a `ProcessStatus` struct with the current memory usage statistics.
 pub fn usage(allocator: std.mem.Allocator, path: []const u8) !ProcessStatus {
     const file = try std.Io.Dir.openFileAbsolute(utils.io, path, .{});
@@ -32,7 +30,6 @@ pub fn usage(allocator: std.mem.Allocator, path: []const u8) !ProcessStatus {
 }
 
 /// Sets the value of a field in the `MemUsage` struct.
-///
 /// - `value`: A pointer to the field to be set.
 /// - `line`: The line of text containing the field value.
 /// - `section`: The section of the line that contains the field name.

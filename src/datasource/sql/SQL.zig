@@ -31,7 +31,6 @@ transaction_conn: ?*pgz.Conn = null,
 /// Per-statement timeout (ms) applied to every query/exec. null = no timeout.
 statement_timeout_ms: ?u32 = constants.DEFAULT_STATEMENT_TIMEOUT_MS,
 
-// is this neccessary?
 pub const dbConfig = struct {
     databaseName: []const u8 = undefined,
     hostname: []const u8 = undefined,
@@ -87,14 +86,15 @@ pub fn Dialect(self: *Self) []const u8 {
 }
 
 pub fn recordMetrics(self: *Self, duration: f32, query: []const u8, queryType: []const u8) void {
+    // Raw SQL text is unbounded: one series per query shape. It is never a
+    // label. The operation is a small fixed set and is the useful dimension.
     _ = query;
-    _ = queryType;
-    self.*.metricz.sqlResponse(
+    self.metricz.sqlResponse(
         .{
             .hostname = "",
             .database = "",
             .query = "",
-            .operation = "",
+            .operation = queryType,
         },
         duration,
         // Metrics emission must never fail a request; a dropped sample is acceptable.
@@ -184,7 +184,7 @@ pub fn exec(self: *Self, comptime query: []const u8, args: anytype) !i64 {
 
     self.lastId = id orelse 0;
     // `execOpts` returns the server's affected-row count for Postgres; surface
-    // it as `rowsAffected` (it was hardcoded to 0, audit #22).
+    // it as `rowsAffected` (it was hardcoded to 0,).
     self.rows = @intCast(id orelse 0);
     return self.lastId;
 }
@@ -241,7 +241,7 @@ pub fn select(self: *Self, comptime _type: anytype, comptime query: []const u8, 
     self.recordMetrics(duration, query, "select");
 
     // Zero rows would otherwise hand the caller `undefined` memory wrapped in a
-    // non-null optional (audit #22).
+    // non-null optional.
     if (!found) return null;
     return result;
 }

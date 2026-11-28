@@ -87,10 +87,13 @@
   - ✅ `cassandra`
   - ✅ `couchbase`
   - ✅ `mongodb`
+  - ✅ `arangodb`
 - ✅ Time-series
   - ✅ `influxdb` (`ctx.Timeseries`, Flux + line protocol)
+  - ✅ `opentsdb`
 - ✅ Search
   - ✅ `solr` (`ctx.Search`)
+  - ✅ `MilliSearch` (`ctx.Search`)
 - ✅ KV Store
   - ✅ `redis`
   - ✅ `nats_kv`

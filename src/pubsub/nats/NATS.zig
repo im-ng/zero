@@ -99,21 +99,24 @@ pub fn create(container: *root.container, config: *const natsConfig) !*NATS {
     };
 
     container.log.info(msg);
+    container.allocator.free(msg);
 
     return c;
 }
 
 pub fn destroy(self: *Self) void {
+    // Stop the consumer loop, join it, then free the client it was using. The old
+    // order freed `client` while the thread was still reading it (use-after-free,
     self.signal.store(false, .release);
-    self.client.deinit();
     if (self.subscriber.items.len > 0) {
         self.thread.join();
     }
+    self.client.deinit();
 }
 
 pub fn Publish(self: *Self, subject: []const u8, payload: []const u8) !void {
-    // Serialize concurrent publishes from HTTP handlers / cron (audit #11).
-    self.mu.lock(self.container.io) catch {};
+    // Serialize concurrent publishes from HTTP handlers / cron.
+    self.mu.lockUncancelable(self.container.io);
     defer self.mu.unlock(self.container.io);
     return try self.client.publish(subject, payload);
 }
@@ -128,7 +131,7 @@ fn prepareChildAllocator(self: *Self) !*arena {
     return ca;
 }
 
-fn destroryChildAllocator(self: *Self, ca: *arena) void {
+fn destroyChildAllocator(self: *Self, ca: *arena) void {
     const caPtr: *arena = @ptrCast(@alignCast(ca.allocator().ptr));
     caPtr.deinit();
 
@@ -140,9 +143,9 @@ fn dispatch(self: *Self, subject: []const u8, payload: []const u8, hook: *const 
         self.container.log.Any(self.container.allocator, err);
         return;
     };
-    defer self.destroryChildAllocator(ca);
+    defer self.destroyChildAllocator(ca);
 
-    // A valid, non-socket response for the subscriber hook's Context (audit #15):
+    // A valid, non-socket response for the subscriber hook's Context:
     // `_res` is an undefined `*httpz.Response`.
     const res = root.context.makeSyntheticResponse(ca.allocator()) catch |err| {
         self.container.log.Any(self.container.allocator, err);
@@ -260,7 +263,7 @@ pub fn addSubscriber(self: *Self, topic: []const u8, hook: *const fn (*root.Cont
         .exec = hook,
     };
 
-    self.mu.lock(self.container.io) catch {};
+    self.mu.lockUncancelable(self.container.io);
     try self.subscriber.append(s);
     self.mu.unlock(self.container.io);
 
@@ -274,12 +277,13 @@ pub fn addSubscriber(self: *Self, topic: []const u8, hook: *const fn (*root.Cont
     };
 
     self.container.log.info(msg);
+    self.container.allocator.free(msg);
 }
 
 /// Type-erased VTable conforming to `pubsubInterface.Interface.VTable`.
 pub const vtable = root.pubsubInterface.Interface.VTable{
     .publish = struct {
-        fn call(ptr: *anyopaque, subject: []const u8, payload: []const u8) anyerror!void {
+        fn call(ptr: *anyopaque, subject: []const u8, payload: []const u8, _: ?[]const u8) anyerror!void {
             const self: *NATS = @ptrCast(@alignCast(ptr));
             try self.Publish(subject, payload);
         }

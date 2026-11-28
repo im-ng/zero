@@ -29,7 +29,6 @@ pub const UploadedFile = struct {
 
 /// Unified, type-erased file store handle. Mirrors `root.KVStore` so a caller
 /// can use `get`/`create`/`delete`/`list` without knowing the backend.
-///
 /// Returned slices from `get`/`list` are allocated with `ctx.allocator` and
 /// owned by the caller (free with `ctx.allocator.free`).
 pub const FileStore = struct {
@@ -92,7 +91,7 @@ pub const FileStore = struct {
     }
 
     // Bounded, sorted pagination over a prefix. Local does real offset/limit
-    // paging; S3/GCS page the fetched set (audit #31).
+    // paging; S3/GCS page the fetched set.
     pub fn listPaginated(
         self: *FileStore,
         ctx: *root.Context,

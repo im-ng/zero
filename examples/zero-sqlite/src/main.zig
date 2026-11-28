@@ -43,6 +43,8 @@ pub fn main(init: std.process.Init) !void {
     try migrations.all(app);
     try app.runMigrations();
 
+    app.onStartup(enableWalMode);
+
     try app.get("/", index);
     try app.post("/sqlite/users", createUser);
     try app.get("/sqlite/users", listUsers);
@@ -52,6 +54,19 @@ pub fn main(init: std.process.Init) !void {
     try app.get("/memory", memoryUsage);
 
     try app.run();
+}
+
+fn enableWalMode(ctx: *Context) !void {
+    // journal_mode returns a row ("wal"), so read it with queryRow. exec is for
+    // statements that produce no rows and rejects this pragma with
+    // ExecReturnedData.
+    const JournalMode = struct { journal_mode: []const u8 };
+    _ = try ctx.SQL.queryRow(ctx, JournalMode, "PRAGMA journal_mode=WAL", .{});
+    _ = try ctx.SQL.exec(ctx, "PRAGMA synchronous=NORMAL", .{});
+    // busy_timeout also returns a row (column "timeout").
+    const BusyTimeout = struct { timeout: i64 };
+    _ = try ctx.SQL.queryRow(ctx, BusyTimeout, "PRAGMA busy_timeout=5000", .{});
+    _ = try ctx.SQL.exec(ctx, "PRAGMA foreign_keys=ON", .{});
 }
 
 pub fn memoryUsage(ctx: *Context) !void {

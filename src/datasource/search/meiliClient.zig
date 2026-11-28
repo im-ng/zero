@@ -4,12 +4,10 @@ const zul = root.zul;
 const utils = root.utils;
 
 /// Self-contained Meilisearch REST client over `zul` (no external driver).
-///
 /// Covers the subset the unified `Search` interface needs: index (upsert),
 /// search, get, delete, plus index creation. Auth uses the
 /// `Authorization: Bearer <api_key>` header. The last upstream failure is kept
 /// in atomics so the health probe can read it without a lock.
-///
 /// This is the standalone client half of the Meilisearch backend, mirroring
 /// `cassandra.zig` / `cassandraClient.zig`. `meili.zig` wraps it into the
 /// `Search` interface.
@@ -59,12 +57,12 @@ pub const Client = struct {
 
     fn resetLast(self: *Client) void {
         self.last_status.store(0, .monotonic);
-        self.last_kind.store(@intFromEnum(root.Error.ErrorKind.none), .monotonic);
+        self.last_kind.store(@backingInt(root.Error.ErrorKind.none), .monotonic);
     }
 
     fn setLast(self: *Client, status: u16) void {
         self.last_status.store(status, .monotonic);
-        self.last_kind.store(@intFromEnum(root.Error.classifyHttpStatus(status)), .monotonic);
+        self.last_kind.store(@backingInt(root.Error.classifyHttpStatus(status)), .monotonic);
     }
 
     fn applyAuth(self: *Client, req: anytype) !void {
@@ -210,7 +208,7 @@ pub const Client = struct {
     /// Thread-safe last-failure accessor. Returns null when the most recent
     /// attempt succeeded (or none has been made).
     pub fn lastError(self: *Client) ?root.Error.DataSourceError {
-        const kind = @as(root.Error.ErrorKind, @enumFromInt(self.last_kind.load(.monotonic)));
+        const kind = @as(root.Error.ErrorKind, @fromBackingInt(@intCast(self.last_kind.load(.monotonic))));
         if (kind == .none) return null;
         return .{
             .status = self.last_status.load(.monotonic),

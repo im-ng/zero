@@ -28,11 +28,13 @@ pub const GCP = struct {
     token: ?[]const u8 = null,
     token_expires_at_ns: i128 = 0,
     // Serializes token refresh so concurrent publish/subscribe/poll threads can't
-    // free-and-replace `token` underneath each other (audit #9).
+    // free-and-replace `token` underneath each other.
     token_mutex: std.Io.Mutex = .init,
     subscription: []const u8,
     subscribers: std.array_list.Managed(Subscriber),
     running: std.atomic.Value(bool),
+    // Consumer thread handle; null until `subscribe` spawns it
+    thread: ?std.Thread = null,
 
     const Subscriber = struct {
         topic: []const u8,
@@ -94,6 +96,13 @@ pub const GCP = struct {
     }
 
     pub fn deinit(self: *GCP) void {
+        // Stop the polling loop and join its thread before freeing any state it
+        // touches
+        self.running.store(false, .release);
+        if (self.thread) |t| {
+            t.join();
+            self.thread = null;
+        }
         const a = self.allocator;
         a.free(self.project);
         a.free(self.endpoint);
@@ -115,7 +124,7 @@ pub const GCP = struct {
 
     fn ensureToken(self: *GCP) ![]const u8 {
         if (self.access_token_override.len > 0) return self.access_token_override;
-        self.token_mutex.lock(utils.io) catch {};
+        self.token_mutex.lockUncancelable(utils.io);
         defer self.token_mutex.unlock(utils.io);
         // Re-check after taking the lock: another thread may have refreshed.
         if (self.token) |t| {
@@ -135,7 +144,7 @@ pub const GCP = struct {
         if (self.token) |old| {
             self.allocator.free(old);
         }
-        // Refresh 30s before the real `expires_in` lapses (audit #9: previously a
+        // Refresh 30s before the real `expires_in` lapses (previously a
         // hardcoded 3600s with the actual `expires_in` ignored).
         self.token_expires_at_ns = utils.nowMonotonic().nanoseconds +
             @as(i128, tok.expires_in) * 1_000_000_000 - 30_000_000_000;
@@ -174,7 +183,7 @@ pub const GCP = struct {
         try self.subscribers.append(.{ .topic = try self.allocator.dupe(u8, subject), .hook = hook });
         if (!self.running.load(.acquire)) {
             self.running.store(true, .release);
-            _ = std.Thread.spawn(.{}, run, .{self}) catch {
+            self.thread = std.Thread.spawn(.{}, run, .{self}) catch {
                 self.running.store(false, .release);
                 return error.GcpSubscriberSpawnFailed;
             };
@@ -225,7 +234,7 @@ pub const GCP = struct {
                 const union_msg: root.pubsubInterface.Message = .{ .gcp = &m };
                 // Only ACK once every subscriber hook has handled the message.
                 // On failure we leave it so GCP redelivers / applies its native
-                // dead-letter subscription instead of dropping it (audit #14).
+                // dead-letter subscription instead of dropping it.
                 if (dispatch.runHook(self.container.?, sub.hook, union_msg) == .handled) {
                     self.acknowledge(token, rm.ackId) catch {};
                 }
@@ -265,7 +274,7 @@ pub const GCP = struct {
     };
 };
 
-fn publishWrap(ptr: *anyopaque, subject: []const u8, payload: []const u8) anyerror!void {
+fn publishWrap(ptr: *anyopaque, subject: []const u8, payload: []const u8, _: ?[]const u8) anyerror!void {
     const self = @as(*GCP, @ptrCast(@alignCast(ptr)));
     return self.publish(subject, payload);
 }

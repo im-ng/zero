@@ -50,7 +50,6 @@ fn dispatch(_: *zero.handler.Handler, _: Action, _: *httpz.Request, _: *httpz.Re
 
 /// Measure the cost of a large set of literal static routes in the real httpz
 /// router the framework uses. Two numbers are reported:
-///
 ///  1. Registration cost — bytes/allocs spent building the route tree for
 ///     `routes` literal GET routes. This is the one-time, startup-side cost of a
 ///     large static-route set, counted via a `CountingAllocator` backing the

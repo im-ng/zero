@@ -7,7 +7,6 @@ const tlso = root.tlso;
 // full-auth as cleartext over TLS, or RSA-OAEP over a plain socket via the
 // server's public key) so it works against MySQL 8.0+ defaults with and
 // without TLS. No native driver or C library is required.
-//
 // Two layers:
 //   * `Connection` — one TCP socket (optionally upgraded to TLS via the
 //     framework's OpenSSL layer `tlso`) speaking the COM_QUERY text protocol, with
@@ -23,18 +22,18 @@ const tlso = root.tlso;
 const capProtocol41: u32 = 0x200;
 const capSecureConnection: u32 = 0x8000;
 // Cap on how long `poolAcquire` blocks waiting for a free connection before
-// failing fast (audit #16). A saturated pool should not hang a request forever.
+// failing fast. A saturated pool should not hang a request forever.
 const pool_acquire_timeout_ms: u64 = 30_000;
 // Bounded reconnect loop for a fresh connection (the Postgres backend already
 // retries; MySQL had none — a transient blip failed the request instantly,
-// audit #30). Short backoff between attempts; the per-attempt connect timeout
+//). Short backoff between attempts; the per-attempt connect timeout
 // (10s) still bounds each try.
 const mysql_connect_retries: usize = 3;
 const mysql_connect_backoff_ms: u64 = 50;
 
 // Build an `Io.Timeout` from a millisecond budget. `Clock.Duration` carries a
 // clock tag, but for a relative timeout only the raw nanoseconds matter, so any
-// clock is valid (audit #16).
+// clock is valid.
 fn timeoutFromMs(ms: u64) std.Io.Timeout {
     return .{ .duration = .{ .raw = std.Io.Duration.fromMilliseconds(@intCast(ms)), .clock = .real } };
 }
@@ -58,7 +57,7 @@ pub const Config = struct {
     ssl_ca: ?[]const u8 = null,
     max: usize = 10,
     // Cap on the TCP connect + handshake; a dead/unreachable host must not hang a
-    // request thread or pin a pool slot forever (audit #16).
+    // request thread or pin a pool slot forever.
     connect_timeout_ms: u64 = 10_000,
 };
 
@@ -124,7 +123,7 @@ pub const Connection = struct {
         // and a blocked connect cannot be abandoned (cleanup blocks until the
         // syscall returns). A true connect timeout is therefore unavailable on
         // this backend; connect is bounded by the OS TCP timeout, and the pool
-        // acquire path is bounded by `pool_acquire_timeout_ms` (audit #16).
+        // acquire path is bounded by `pool_acquire_timeout_ms`.
         const stream = try addr.connect(io, .{ .mode = .stream });
 
         const recv_buf = try allocator.alloc(u8, 1 << 16);
@@ -158,6 +157,14 @@ pub const Connection = struct {
             return err;
         };
         self.connected = true;
+        // Harden every fresh session before any query runs: with backslash
+        // escapes active, quote-doubling alone is not a complete string
+        // escaping scheme (see appendLiteral). Fail the connection instead of
+        // handing out one whose escaping rules we cannot guarantee.
+        self.disableBackslashEscapes() catch |err| {
+            self.deinit();
+            return err;
+        };
         return self;
     }
 
@@ -211,7 +218,6 @@ pub const Connection = struct {
         // 0x01 traffic flows), or AuthMoreData (caching_sha2 fast-auth /
         // full-auth subcodes). Every non-terminal reply is followed by
         // another packet, so respond and loop until OK or ERR arrives.
-        //
         // `scramble_current` tracks which scramble the server considered when
         // evaluating every subsequent token: the greeting's until a switch
         // request replaces it, and the one a full-auth encrypt must XOR
@@ -269,6 +275,22 @@ pub const Connection = struct {
             return error.MySqlProtocol;
         }
         return error.MySqlProtocol; // auth loop exceeded its step budget
+    }
+
+    // Remove the server's backslash-escape behaviour for this session. MySQL's
+    // default SQL mode lets `\` escape the next byte inside a string literal,
+    // which defeats quote-doubling when a value ends in a backslash. CONCAT
+    // preserves any modes the DBA configured; a duplicate NO_BACKSLASH_ESCAPES
+    // is harmless to MySQL. This is applied on connect, before any user SQL.
+    fn disableBackslashEscapes(self: *Self) !void {
+        const res = try self.execInternal(
+            "SET SESSION sql_mode = CONCAT(@@sql_mode, ',NO_BACKSLASH_ESCAPES')",
+            false,
+        );
+        for (res.rows) |r| {
+            self.allocator.free(r);
+        }
+        self.allocator.free(res.rows);
     }
 
     // Answer an AuthSwitchRequest (0xFE packet body). Parses the plugin name
@@ -719,42 +741,50 @@ pub const Connection = struct {
         return try self.handleResult(self.allocator, col_count, drain);
     }
 
-    fn collectFields(comptime Type: type) []const std.builtin.Type.StructField {
-        comptime {
-            const ti = @typeInfo(Type);
-            if (ti != .@"struct") {
-                @compileError("MySQL row type must be a struct");
-            }
-            return ti.@"struct".fields;
+    const FieldSet = struct {
+        names: []const []const u8,
+        types: []const type,
+        attrs: []const std.builtin.Type.Struct.FieldAttributes,
+    };
+
+    fn collectFields(comptime Type: type) FieldSet {
+        const ti = @typeInfo(Type);
+        if (ti != .@"struct") {
+            @compileError("MySQL row type must be a struct");
         }
+        return .{
+            .names = ti.@"struct".field_names,
+            .types = ti.@"struct".field_types,
+            .attrs = ti.@"struct".field_attrs,
+        };
     }
 
     fn decodeRow(
         self: *Self,
         comptime Type: type,
         packet: []const u8,
-        comptime fields: []const std.builtin.Type.StructField,
+        comptime fields: FieldSet,
     ) !Type {
         var row: Type = undefined;
         var off: usize = 0;
-        inline for (fields) |field| {
+        inline for (fields.names, fields.types, fields.attrs) |field_name, field_type, _| {
             if (off < packet.len and packet[off] == 0xFB) {
                 off += 1;
-                if (@typeInfo(field.type) != .optional) {
+                if (@typeInfo(field_type) != .optional) {
                     // A NULL column landing in a non-optional field would
                     // otherwise leave the field holding undefined memory;
                     // fail instead of returning poison (same rule duckdb.zig
                     // applies via NonNullColumnIsNull).
                     return error.NonNullColumnIsNull;
                 }
-                @field(row, field.name) = null;
+                @field(row, field_name) = null;
             } else {
                 if (off >= packet.len) return error.MySqlProtocol;
                 const len = try self.readLenEncInt(packet, &off);
                 if (off + len > packet.len) return error.MySqlProtocol;
                 const value = packet[off .. off + len];
                 off += len;
-                try self.parseField(&@field(row, field.name), value, field.type);
+                try self.parseField(&@field(row, field_name), value, field_type);
             }
         }
         return row;
@@ -884,7 +914,7 @@ pub const MySQL = struct {
     mu: std.Io.Mutex = .init,
     // Signalling primitive for connection availability. An `Event` (rather than a
     // `Condition`) lets `poolAcquire` bound the wait with a deadline so a fully
-    // saturated pool fails fast instead of hanging a request forever (audit #16).
+    // saturated pool fails fast instead of hanging a request forever.
     event: std.Io.Event = .unset,
     free: std.ArrayList(*Connection) = .empty,
     total: usize = 0,
@@ -981,7 +1011,7 @@ pub const MySQL = struct {
 
     // On a failed query, only a transport/protocol failure (not a SQL error from
     // an ERR packet) means the connection is broken. Poisoning on `MySqlError`
-    // would discard a perfectly good connection and thrash the pool (audit #17).
+    // would discard a perfectly good connection and thrash the pool.
     // Releases the connection and returns the error to the caller, which then
     // propagates it with its own return type.
     fn failConn(self: *Self, conn: *Connection, err: anyerror) void {
@@ -1016,7 +1046,7 @@ pub const MySQL = struct {
                 self.total += 1;
                 self.mu.unlock(self.io);
                 // Retry transient connect failures a few times before giving up,
-                // so a brief network blip doesn't fail the request (audit #30).
+                // so a brief network blip doesn't fail the request.
                 var last_err: anyerror = error.MySqlConnectFailed;
                 var attempt: usize = 0;
                 while (attempt < mysql_connect_retries) : (attempt += 1) {
@@ -1274,9 +1304,11 @@ fn appendLiteral(allocator: std.mem.Allocator, buf: *std.ArrayList(u8), value: a
             if (is_u8_seq) {
                 const s: []const u8 = if (p.size == .slice) value else value[0..];
                 // String values are interpolated as SQL string literals; wrap in
-                // single quotes and double any embedded quote so values like
-                // statuses/timestamps (and user input) are valid, not bare
-                // identifiers that the server rejects as a syntax error.
+                // single quotes and double embedded quotes. Every connection sets
+                // NO_BACKSLASH_ESCAPES at connect time, so a backslash is an
+                // ordinary byte here: doubling it would corrupt stored data while
+                // adding no safety. Quote doubling alone keeps the literal closed
+                // for input like `a\'; DROP TABLE t`.
                 try buf.append(allocator, '\'');
                 for (s) |ch| {
                     if (ch == '\'') {
@@ -1303,19 +1335,83 @@ fn appendLiteral(allocator: std.mem.Allocator, buf: *std.ArrayList(u8), value: a
 }
 
 // ===================== Tests =====================
-// These tests breaks the kcov coverage, investigate further
-//
-// test "mysql: interpolateSql substitutes ? placeholders" {
-//     const alloc = std.testing.allocator;
-//     const q = try interpolateSql(alloc, "SELECT * FROM t WHERE id = ? AND name = ?", .{ 42, "zig" });
-//     defer alloc.free(q);
-//     try std.testing.expectEqualStrings("SELECT * FROM t WHERE id = 42 AND name = zig", q);
-// }
 
-// test "mysql: interpolateSql handles optional args" {
-//     const alloc = std.testing.allocator;
-//     const name: ?[]const u8 = null;
-//     const q = try interpolateSql(alloc, "WHERE name = ?", .{name});
-//     defer alloc.free(q);
-//     try std.testing.expectEqualStrings("WHERE name = ", q);
-// }
+// Simulate MySQL parsing with NO_BACKSLASH_ESCAPES, the mode every connection
+// sets at connect time. A backslash is an ordinary byte; only a doubled quote
+// is an escaped quote. If the scan ends exactly at the closing quote, no input
+// byte broke out of the string.
+fn literalStaysClosed(sql: []const u8) bool {
+    if (sql.len < 2 or sql[0] != '\'' or sql[sql.len - 1] != '\'') {
+        return false;
+    }
+    var i: usize = 1;
+    while (i < sql.len - 1) {
+        if (sql[i] == '\'') {
+            if (i + 1 >= sql.len - 1 or sql[i + 1] != '\'') {
+                return false;
+            }
+            i += 2;
+            continue;
+        }
+        i += 1;
+    }
+    return i == sql.len - 1;
+}
+
+test "mysql: interpolateSql substitutes ? placeholders" {
+    const alloc = std.testing.allocator;
+    const q = try interpolateSql(
+        alloc,
+        "SELECT * FROM t WHERE id = ? AND name = ?",
+        .{ 42, "zig" },
+    );
+    defer alloc.free(q);
+    try std.testing.expectEqualStrings("SELECT * FROM t WHERE id = 42 AND name = 'zig'", q);
+}
+
+test "mysql: interpolateSql handles optional args" {
+    const alloc = std.testing.allocator;
+    const name: ?[]const u8 = null;
+    const q = try interpolateSql(alloc, "WHERE name = ?", .{name});
+    defer alloc.free(q);
+    try std.testing.expectEqualStrings("WHERE name = ", q);
+
+    const present: ?[]const u8 = "zig";
+    const q2 = try interpolateSql(alloc, "WHERE name = ?", .{present});
+    defer alloc.free(q2);
+    try std.testing.expectEqualStrings("WHERE name = 'zig'", q2);
+}
+
+test "mysql: appendLiteral keeps a backslash before a quote inside the literal" {
+    const alloc = std.testing.allocator;
+    const q = try interpolateSql(alloc, "SELECT ?", .{"a\\'"});
+    defer alloc.free(q);
+    try std.testing.expectEqualStrings("SELECT 'a\\'''", q);
+    try std.testing.expect(literalStaysClosed(q["SELECT ".len..]));
+}
+
+test "mysql: appendLiteral keeps repeated backslashes unchanged" {
+    const alloc = std.testing.allocator;
+    const q = try interpolateSql(alloc, "SELECT ?", .{"a\\\\'x"});
+    defer alloc.free(q);
+    try std.testing.expectEqualStrings("SELECT 'a\\\\''x'", q);
+    try std.testing.expect(literalStaysClosed(q["SELECT ".len..]));
+}
+
+test "mysql: appendLiteral keeps a NUL byte inside the literal" {
+    const alloc = std.testing.allocator;
+    // The text protocol is length-prefixed, so an embedded NUL is data, not a
+    // terminator; it cannot end the literal or inject SQL.
+    const q = try interpolateSql(alloc, "SELECT ?", .{"a\x00b"});
+    defer alloc.free(q);
+    try std.testing.expectEqualStrings("SELECT 'a\x00b'", q);
+    try std.testing.expect(literalStaysClosed(q["SELECT ".len..]));
+}
+
+test "mysql: appendLiteral cannot break out with a trailing comment" {
+    const alloc = std.testing.allocator;
+    const q = try interpolateSql(alloc, "SELECT ?", .{"a\\'; DROP TABLE t; -- "});
+    defer alloc.free(q);
+    try std.testing.expectEqualStrings("SELECT 'a\\''; DROP TABLE t; -- '", q);
+    try std.testing.expect(literalStaysClosed(q["SELECT ".len..]));
+}

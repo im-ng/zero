@@ -3,6 +3,7 @@
 ## Communication style
 
 When presenting changes, summaries, or any explanation to the user, follow `writing-style-guide.md`.
+
 - Simplify the language, not the technical idea.
 - Use short, active, spoken-style sentences.
 - Show the concrete case before the general rule.
@@ -26,7 +27,7 @@ write. The hard rules that get missed most often:
   genuinely infallible site (exact-size `bufPrint`, comptime parse) may keep
   `catch unreachable` but must say why in a comment. Best-effort sites
   (`std.Thread.yield() catch {}`, response writes at error time) are OK.
-- **Comments explain *why*, as full sentences.** Show your workings.
+- **Comments explain _why_, as full sentences.** Show your workings.
 - **Handle every error.** Never swallow a failure.
 - **Cap every unbounded collection** and assert pre/postconditions; fail fast.
 
@@ -54,11 +55,11 @@ the affected example (`zig build` inside `examples/<name>`) must still pass.
 
 ## Toolchain
 
-- **Zig 0.16.0** minimum, pinned in `build.zig.zon`
+- **Zig 0.17.0** minimum, pinned in `build.zig.zon`
 - Requires `librdkafka-dev` (`apt install librdkafka-dev` / `brew install librdkafka`)
-- On macOS, `build.zig` hardcodes `/usr/local/Cellar/librdkafka/2.15.1` include/lib paths
+- On macOS, `build.zig` resolves the Homebrew librdkafka prefix at configure time and falls back to `pkg-config`; CI and release target Linux x86_64 + aarch64 only
 - **Always `rm -rf .zig-cache zig-out zig-pkg/` before switching Zig versions** — stale cache causes build failures and runtime corruption
-- This environment builds and tests with **Zig 0.16.0** (`/usr/local/zig-x86_64-linux-0.16.0/zig`); the deps vendored in `zig-pkg/` compile under it.
+- This environment builds and tests with **Zig 0.17.0** (`/usr/local/zig-x86_64-linux-0.17.0/zig`); the deps vendored in `zig-pkg/` compile under it.
 
 ## Commands
 
@@ -137,30 +138,30 @@ downstream with a circuit breaker.
 
 ### Source layout
 
-| Directory | Purpose |
-|---|---|
+| Directory         | Purpose                                                                                                                                                                                                                       |
+| ----------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `src/datasource/` | Datasources: SQL (`postgres`/`mysql`/`sqlite`/`duckdb`/`supabase`), NoSQL (`cassandra`/`mongodb`/`couchbase`/`arangodb`), time-series (`influxdb`/`opentsdb`), search (`solr`/`meilisearch`), graph (`dgraph`), Redis (`rdz`) |
-| `src/pubsub/` | Pub/Sub backends: MQTT, Kafka, NATS, Redis, **AWS SQS** (`sqs.zig`), **GCP Pub/Sub** (`gcppubsub.zig`) behind `interface.zig` |
-| `src/filestore/` | File stores: local, S3, Supabase, **GCS** (`gcs.zig`) |
-| `src/aws/` | AWS SigV4 request signing (`sigv4.zig`), reused by S3 + SQS |
-| `src/gcp/` | GCP OAuth2 client-credentials (`oauth.zig`), reused by GCS + Pub/Sub |
-| `src/cronz/` | Cron scheduler and jobs |
-| `src/migration/` | DB migrations and seeding |
-| `src/mw/` | Middleware: auth, tracing (tracz), websocket, **rate limiting** (`rateLimiter.zig`) |
-| `src/service/` | HTTP client for external services |
-| `src/http/` | Error types |
-| `src/zsutil/` | System utils: memory, cpu, process, host |
-| `src/static/` | Embedded swagger UI assets |
+| `src/pubsub/`     | Pub/Sub backends: MQTT, Kafka, NATS, Redis, **AWS SQS** (`sqs.zig`), **GCP Pub/Sub** (`gcppubsub.zig`) behind `interface.zig`                                                                                                 |
+| `src/filestore/`  | File stores: local, S3, Supabase, **GCS** (`gcs.zig`)                                                                                                                                                                         |
+| `src/aws/`        | AWS SigV4 request signing (`sigv4.zig`), reused by S3 + SQS                                                                                                                                                                   |
+| `src/gcp/`        | GCP OAuth2 client-credentials (`oauth.zig`), reused by GCS + Pub/Sub                                                                                                                                                          |
+| `src/cronz/`      | Cron scheduler and jobs                                                                                                                                                                                                       |
+| `src/migration/`  | DB migrations and seeding                                                                                                                                                                                                     |
+| `src/mw/`         | Middleware: auth, tracing (tracz), websocket, **rate limiting** (`rateLimiter.zig`)                                                                                                                                           |
+| `src/service/`    | HTTP client for external services                                                                                                                                                                                             |
+| `src/http/`       | Error types                                                                                                                                                                                                                   |
+| `src/zsutil/`     | System utils: memory, cpu, process, host                                                                                                                                                                                      |
+| `src/static/`     | Embedded swagger UI assets                                                                                                                                                                                                    |
 
 ## Dependency import names
 
 Three dependency imports have non-obvious module names in `build.zig`:
 
 | Dependency | Import name | Module name |
-|---|---|---|
-| `okredis` | `rediz` | `okredis` |
-| `regexp` | `regexp` | `regex` |
-| `jwt` | `jwt` | `zig-jwt` |
+| ---------- | ----------- | ----------- |
+| `okredis`  | `rediz`     | `okredis`   |
+| `regexp`   | `regexp`    | `regex`     |
+| `jwt`      | `jwt`       | `zig-jwt`   |
 
 ## Config
 
@@ -174,13 +175,9 @@ Three dependency imports have non-obvious module names in `build.zig`:
   - `DEFAULT_CASSANDRA_CONNECT_RETRIES` (20) / `DEFAULT_CASSANDRA_CONNECT_BACKOFF_MS` (1000) — Cassandra connect retry window.
   - `DB_DIALECT=mysql` + `MYSQL_*` — pure-Zig MySQL/MariaDB client. `MYSQL_SSL_MODE` (`disabled`/`preferred`/`required`; `required` encrypts, `MYSQL_SSL_CA` verifies server cert+host) and `MYSQL_POOL_SIZE` (default 10, connection pool + per-request sessions in `datasource/sql/mysql.zig`).
 
-## Deliberate typos in public API (do not "fix")
+## Public API identifier spelling
 
-These are used consistently across the codebase and must be referenced as-is:
-
-- `AuthProvder` (not `AuthProvider`) — in `zero.zig`, `context.zig`, `container.zig`, `httpServer.zig`, `authz.zig`
-- `container.Kakfa` (not `Kafka`) — in `container.zig`, `context.zig`, `app.zig`
-- `onStatup` (not `onStartup`) — in `app.zig`
+Standard spelling is used throughout: `AuthProvider`, `container.Kafka`, and `onStartup`. The earlier misspellings `AuthProvder`, `Kakfa`, and `onStatup` were corrected — do not reintroduce them.
 
 ## Examples
 
@@ -202,11 +199,11 @@ A large set of example apps in `examples/` — each has its own `build.zig.zon` 
 
 ## Zig version compatibility
 
-| Version | Compiles | Tests | Runtime | Notes |
-|---|---|---|---|---|
-| 0.15.1 | Yes | 52/52 (7 leaks) | Full | Production baseline |
-| 0.15.2 | Yes | 52/52 (7 leaks) | **Broken** | No log output, no HTTP server — `std.fs.File.stdout()` I/O change in logger.zig breaks httpz |
-| 0.16.0 | Yes | 52+21+3 | Yes | Works in this env with vendored deps; benchmark HTTP server binds and serves |
+| Version | Compiles | Tests           | Runtime    | Notes                                                                                        |
+| ------- | -------- | --------------- | ---------- | -------------------------------------------------------------------------------------------- |
+| 0.15.1  | Yes      | 52/52 (7 leaks) | Full       | Production baseline                                                                          |
+| 0.15.2  | Yes      | 52/52 (7 leaks) | **Broken** | No log output, no HTTP server — `std.fs.File.stdout()` I/O change in logger.zig breaks httpz |
+| 0.16.0  | Yes      | 52+21+3         | Yes        | Works in this env with vendored deps; benchmark HTTP server binds and serves                 |
 
 - See `ZIG_LEARNINGS.md` for the 0.16.0 migration plan and upgrade notes
 - **0.15.2 runtime issue**: `src/logger.zig` uses `std.fs.File.stdout().writer(&stdout_buffer)` pattern which silently fails under 0.15.2 — stdout fd becomes a socket, HTTP server never binds
